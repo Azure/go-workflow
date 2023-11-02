@@ -1,6 +1,0 @@
-; https://onebranch.visualstudio.com/OneBranch/_wiki/wikis/OneBranch.wiki/5654/Owners-(owners.txt)
-; * indicates "no spam" - this alias will not automatically be added as a reviewer to pull requests, to reduce notification noise
-; @ indicates "alert only" - this alias is not an owner (approval won't affect OE) but will be added to pull requests in order to be notified​
-
-aksdevfun
-xingfeixu
