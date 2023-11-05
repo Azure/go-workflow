@@ -20,7 +20,7 @@ import (
 
 // PassAfter keeps failing until the attempt reaches the given number.
 type PassAfter struct {
-	fl.BaseEmptyIO
+	fl.Base
 	Attempt int
 	count   int
 }

@@ -43,20 +43,20 @@ func ToSteps[S Steper](steps []S) []Steper {
 }
 
 // Step declares Steps ready for building dependencies to Workflow,
-// with the support of Input and InputDependsOn.
-func Step[I any](downs ...Downstream[I]) addStepsIO[I] {
-	return addStepsIO[I]{
+// with the support of Input and InputDepends(On(...)).
+func Step[S Steper](downs ...S) addStepsWithInput[S] {
+	return addStepsWithInput[S]{
 		addSteps: Steps(ToSteps(downs)...),
 		Downs:    downs,
 	}
 }
 
-type addStepsIO[I any] struct {
+type addStepsWithInput[S Steper] struct {
 	addSteps
-	Downs []Downstream[I]
+	Downs []S
 }
 
-type InputFunc[I any] func(context.Context, *I) error
+type InputFunc[S any] func(context.Context, S) error
 
 // Input adds Input func for the Step(s).
 // If the Input function returns error, Downstream Step will return a ErrFlow.
@@ -64,15 +64,15 @@ type InputFunc[I any] func(context.Context, *I) error
 //
 //	Step(down).
 //		Input(/* this Input will be feeded first */).
-//		InputDependsOn(Adapt(up, /* then receive Output from up */)).
+//		InputDepends(On(up, /* then receive Output from up */)).
 //		Input(/* this Input is after up's Output */),
-func (as addStepsIO[I]) Input(fns ...InputFunc[I]) addStepsIO[I] {
+func (as addStepsWithInput[S]) Input(fns ...InputFunc[S]) addStepsWithInput[S] {
 	for _, down := range as.Downs {
 		down := down // capture range variable
 		as.Dependency[down] = append(as.Dependency[down], Link{
 			Flow: func(ctx context.Context) error {
 				for _, fn := range fns {
-					if err := fn(ctx, down.Input()); err != nil {
+					if err := fn(ctx, down); err != nil {
 						return err
 					}
 				}
@@ -83,61 +83,48 @@ func (as addStepsIO[I]) Input(fns ...InputFunc[I]) addStepsIO[I] {
 	return as
 }
 
-// InputDependsOn declares dependency between Steps,
+// InputDepends declares dependency between Steps,
 // with sending Upstream's Output to Downstream's Input.
 //
-// Use Adapt function to convert the Upstream's Output to Downstream's Input if the types are different.
+// Use On function to convert the Upstream to Downstream
 //
-//	Step(down).InputDependsOn(
-//		up1, // up1's Output == down's Input
-//		Adapt(up2, func(_ context.Context, o O, i *I) error {
-//			// o: Output of up2
-//			// i: Input of down
-//			// fill i from o
+//	Step(down).InputDepends(
+//		On(up, func(_ context.Context, u *Up, d *Down) error {
+//			// fill Down from Up
 //		}),
 //	)
-func (as addStepsIO[I]) InputDependsOn(ups ...Upstream[I]) addStepsIO[I] {
+func (as addStepsWithInput[S]) InputDepends(adapts ...adapt[S]) addStepsWithInput[S] {
 	for _, down := range as.Downs {
 		down := down
-		for _, up := range ups {
-			up := up
-			var link Link
-			if adapt, ok := up.(*adapt[I]); ok {
-				link.Upstream = adapt.Steper
-				link.Flow = func(ctx context.Context) error {
-					return adapt.Flow(ctx, down.Input())
-				}
-			} else {
-				link.Upstream = up
-				link.Flow = func(ctx context.Context) error {
-					up.Output(down.Input())
-					return nil
-				}
-			}
-			as.Dependency[down] = append(as.Dependency[down], link)
+		for _, adapt := range adapts {
+			adapt := adapt
+			as.Dependency[down] = append(as.Dependency[down], Link{
+				Upstream: adapt.Upstream,
+				Flow: func(ctx context.Context) error {
+					return adapt.Flow(ctx, down)
+				},
+			})
 		}
 	}
 	return as
 }
 
-type AdaptFunc[I, O any] func(context.Context, O, *I) error
+type adapt[S Steper] struct {
+	Upstream Steper
+	Flow     func(context.Context, S) error
+}
 
-// Adapt bridges Upstream and Downstream with different I/O types.
-func Adapt[I, O any](up Upstream[O], fn AdaptFunc[I, O]) *adapt[I] {
-	return &adapt[I]{
-		Steper: up,
-		Flow: func(ctx context.Context, i *I) error {
-			return fn(ctx, GetOutput[O](up), i)
+type AdaptFunc[U, D Steper] func(context.Context, U, D) error
+
+// On bridges Upstream and Downstream with defining how to adapt different steps.
+func On[U, D Steper](up U, fn AdaptFunc[U, D]) adapt[D] {
+	return adapt[D]{
+		Upstream: up,
+		Flow: func(ctx context.Context, d D) error {
+			return fn(ctx, up, d)
 		},
 	}
 }
-
-type adapt[I any] struct {
-	Steper
-	Flow func(context.Context, *I) error
-}
-
-func (a *adapt[I]) Output(o *I) { /* only implements Upstream[I] interface */ }
 
 type addSteps struct {
 	Downs []Steper

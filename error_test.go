@@ -9,7 +9,7 @@ import (
 
 func newTestStep(name string, status StepStatus) *testStep {
 	s := new(testStep)
-	s.Name = name
+	s.StepName = name
 	s.setStatus(status)
 	return s
 }

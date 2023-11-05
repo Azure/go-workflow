@@ -10,36 +10,8 @@ type Steper interface {
 	Do(context.Context) error
 }
 
-// SteperIO[I, O any] is the basic unit of a Workflow,
-// with strong typed Input and Output.
-type SteperIO[I, O any] interface {
-	Steper
-	inputer[I]
-	outputer[O]
-}
-
-type inputer[I any] interface {
-	Input() *I
-}
-
-type outputer[O any] interface {
-	Output(*O)
-}
-
-// Downstream is a Steper that depends on Upstream(s).
-type Downstream[I any] interface {
-	Steper
-	inputer[I]
-}
-
-// Upstream is a Steper that is depended by Downstream(s).
-type Upstream[O any] interface {
-	Steper
-	outputer[O]
-}
-
 // Dependency is a relationship between Downstream(s) and Upstream(s).
-// We say "A depends on B", or "B happened-before A", or "B's output is A'input", then A is Downstream, B is Upstream.
+// We say "A depends on B", or "B happened-before A", then A is Downstream, B is Upstream.
 type Dependency map[Steper][]Link
 
 // Link represents one connection between a Downstream and a Upstream,

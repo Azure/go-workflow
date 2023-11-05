@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type testStep struct{ BaseEmptyIO }
+type testStep struct{ Base }
 
 func (t *testStep) Do(context.Context) error { return nil }
 

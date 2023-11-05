@@ -7,7 +7,7 @@ import (
 
 // ErrFlow indicates the error happens in passing Upstream's Output to Downstream's Input.
 //
-//	Input(func(ctx context.Context, i *I) error {
+//	Input(func(ctx context.Context, s *SomeStep) error {
 //		return err
 //	})
 type ErrFlow struct {

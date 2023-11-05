@@ -60,7 +60,7 @@ func ExampleSimple() {
 
 	// Connect the Steps into the Workflow
 	flow.Add(
-		workflow.Steps(foo).DependsOn(bar),
+		workflow.Step(foo).DependsOn(bar),
 	)
 
 	// As the code says, step `foo` depends on step `bar`, or `bar` happens-before `foo`.

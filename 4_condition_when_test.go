@@ -38,8 +38,8 @@ import (
 //   - StepStatusCanceled
 //
 // Only succeeded Upstreams will flow Output to Downstreams Input.
-type ArbitraryTask struct{ fl.BaseEmptyIO }
-type FailedStep struct{ fl.BaseEmptyIO }
+type ArbitraryTask struct{ fl.Base }
+type FailedStep struct{ fl.Base }
 
 func (a *ArbitraryTask) Do(context.Context) error { return nil }
 func (a *FailedStep) Do(context.Context) error    { return fmt.Errorf("failed!") }

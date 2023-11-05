@@ -39,7 +39,7 @@ func ExampleTimeout() {
 
 	flow.Add(
 		fl.Steps(&WaitDone{
-			Base:    fl.Base{Name: "WaitDone"},
+			Base:    fl.Base{StepName: "WaitDone"},
 			StartDo: started,
 		}).Retry(func(ro *fl.RetryOption) {
 			ro.Attempts = 5

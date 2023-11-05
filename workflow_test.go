@@ -129,10 +129,8 @@ func TestWorkflowWillRecover(t *testing.T) {
 	t.Run("panic in flow", func(t *testing.T) {
 		t.Parallel()
 		flow := new(Workflow)
-		answer := FuncO("answer", func(ctx context.Context) (func(*int), error) {
-			return func(s *int) {
-				*s = 42
-			}, nil
+		answer := FuncO("answer", func(ctx context.Context) (int, error) {
+			return 42, nil
 		})
 		print := FuncI("print", func(ctx context.Context, msg string) error {
 			fmt.Println(msg)
@@ -141,9 +139,11 @@ func TestWorkflowWillRecover(t *testing.T) {
 
 		flow.Add(
 			Step(print).
-				InputDependsOn(Adapt(answer, func(_ context.Context, o int, i *string) error {
-					panic("panic in flow")
-				})),
+				InputDepends(On(answer,
+					func(ctx context.Context, answer *Function[struct{}, int], print *Function[string, struct{}]) error {
+						panic("panic in flow")
+					}),
+				),
 		)
 
 		err := flow.Run(context.Background())

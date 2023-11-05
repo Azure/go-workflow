@@ -17,7 +17,7 @@ import (
 //
 // Most time, `Step` and `Steps` are mutually exchangeable.
 // The only difference is that:
-//   - Step is a generic builder accepting `Input` and `InputDependsOn`, check next session about I/O for more details.
+//   - Step is a generic builder accepting `Input` and `InputDepends`, check next session about I/O for more details.
 func ExampleDeclareDependency() {
 	flow := new(workflow.Workflow)
 
@@ -33,7 +33,7 @@ func ExampleDeclareDependency() {
 
 	flow.Add(
 		workflow.Step(a).DependsOn(b, c),
-		workflow.Step(b, c).DependsOn(d),
+		workflow.Steps(b, c).DependsOn(d),
 	)
 
 	dep := flow.Dep()

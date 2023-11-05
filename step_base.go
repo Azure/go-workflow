@@ -38,27 +38,20 @@ var _ stepBase = &Base{}
 //
 // Please implement the following methods to make your struct a valid Step:
 //
-//	func(*SomeTask) Input() *I					// accept input by returning a reference to it
-//	func(*SomeTask) Output(*O)					// send output by filling the result to the reference
 //	func(*SomeTask) Do(context.Context) error	// the main logic
 //	func(*SomeTask) String() string				// [optional] give this step a name
-//
-// Also check the whole family of Base types.
-//
-//   - BaseIO[I, O]: with default Input() *I and Output(*O) implement
-//   - BaseEmptyIO : BaseIO[strcut{}, struct{}], means empty Input or Output
 type Base struct {
-	Name    string
-	mutex   sync.RWMutex
-	status  StepStatus
-	cond    Condition
-	retry   *RetryOption
-	when    When
-	timeout time.Duration
+	StepName string
+	mutex    sync.RWMutex
+	status   StepStatus
+	cond     Condition
+	retry    *RetryOption
+	when     When
+	timeout  time.Duration
 }
 
 func (b *Base) String() string {
-	return b.Name
+	return b.StepName
 }
 
 func (b *Base) GetStatus() StepStatus {
@@ -103,26 +96,4 @@ func (b *Base) GetTimeout() time.Duration {
 
 func (b *Base) setTimeout(timeout time.Duration) {
 	b.timeout = timeout
-}
-
-// BaseIO[I, O] is to be embedded into your Step implement struct,
-// with default Input() *I and Output(*O) implement.
-type BaseIO[I, O any] struct {
-	Base
-	In  I
-	Out O
-}
-
-func (i *BaseIO[I, O]) Input() *I     { return &i.In }
-func (i *BaseIO[I, O]) Output(out *O) { *out = i.Out }
-
-// BaseEmptyIO is to be embedded into your Step implement struct,
-// indicates this Step has empty Input and Output.
-type BaseEmptyIO = BaseIO[struct{}, struct{}]
-
-// GetOutput gets the output from a Step.
-func GetOutput[A any](out outputer[A]) A {
-	var v A
-	out.Output(&v)
-	return v
 }
