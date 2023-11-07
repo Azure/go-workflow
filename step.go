@@ -43,7 +43,7 @@ func ToSteps[S Steper](steps []S) []Steper {
 }
 
 // Step declares Steps ready for building dependencies to Workflow,
-// with the support of Input and InputDepends(On(...)).
+// with the support of Input(...) and InputDependsOn(...).
 func Step[S Steper](downs ...S) addStepsWithInput[S] {
 	return addStepsWithInput[S]{
 		addSteps: Steps(ToSteps(downs)...),
@@ -64,7 +64,7 @@ type InputFunc[S any] func(context.Context, S) error
 //
 //	Step(down).
 //		Input(/* this Input will be feeded first */).
-//		InputDepends(On(up, /* then receive Output from up */)).
+//		InputDependsOn(Adapt(up, /* then receive Output from up */)).
 //		Input(/* this Input is after up's Output */),
 func (as addStepsWithInput[S]) Input(fns ...InputFunc[S]) addStepsWithInput[S] {
 	for _, down := range as.Downs {
@@ -83,17 +83,17 @@ func (as addStepsWithInput[S]) Input(fns ...InputFunc[S]) addStepsWithInput[S] {
 	return as
 }
 
-// InputDepends declares dependency between Steps,
+// InputDependsOn declares dependency between Steps,
 // with sending Upstream's Output to Downstream's Input.
 //
-// Use On function to convert the Upstream to Downstream
+// Use Adapt function to convert the Upstream to Downstream
 //
-//	Step(down).InputDepends(
-//		On(up, func(_ context.Context, u *Up, d *Down) error {
+//	Step(down).InputDependsOn(
+//		Adapt(up, func(_ context.Context, u *Up, d *Down) error {
 //			// fill Down from Up
 //		}),
 //	)
-func (as addStepsWithInput[S]) InputDepends(adapts ...adapt[S]) addStepsWithInput[S] {
+func (as addStepsWithInput[S]) InputDependsOn(adapts ...Adapter[S]) addStepsWithInput[S] {
 	for _, down := range as.Downs {
 		down := down
 		for _, adapt := range adapts {
@@ -109,16 +109,16 @@ func (as addStepsWithInput[S]) InputDepends(adapts ...adapt[S]) addStepsWithInpu
 	return as
 }
 
-type adapt[S Steper] struct {
+type Adapter[S Steper] struct {
 	Upstream Steper
 	Flow     func(context.Context, S) error
 }
 
 type AdaptFunc[U, D Steper] func(context.Context, U, D) error
 
-// On bridges Upstream and Downstream with defining how to adapt different steps.
-func On[U, D Steper](up U, fn AdaptFunc[U, D]) adapt[D] {
-	return adapt[D]{
+// Adapt bridges Upstream and Downstream with defining how to adapt different steps.
+func Adapt[U, D Steper](up U, fn AdaptFunc[U, D]) Adapter[D] {
+	return Adapter[D]{
 		Upstream: up,
 		Flow: func(ctx context.Context, d D) error {
 			return fn(ctx, up, d)

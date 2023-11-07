@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	fl "go.goms.io/aks/rp/test/v3/workflow"
+	"go.goms.io/aks/rp/test/v3/workflow"
 )
 
 // After connected Steps into Workflow via dependencies,
@@ -17,12 +17,12 @@ import (
 //
 //	Step(someTask).
 //		Input(func(_ context.Context, i *SomeTask) error { ... }).
-//		InputDepends(
-//			On(upstream, func(_ context.Context, o *Upstream, i *SomeTask) error { ... }),
+//		InputDependsOn(
+//			Adapt(upstream, func(_ context.Context, o *Upstream, i *SomeTask) error { ... }),
 //		)
 
 type SayHello struct {
-	fl.Base
+	workflow.Base
 	Who    string
 	Output string
 }
@@ -34,7 +34,7 @@ func (s *SayHello) Do(context.Context) error {
 }
 
 type ImBob struct {
-	fl.Base
+	workflow.Base
 	Output string
 }
 
@@ -44,7 +44,7 @@ func (i *ImBob) Do(context.Context) error {
 }
 
 type ReverseOrder struct {
-	fl.Base
+	workflow.Base
 	Slice []string
 }
 
@@ -55,28 +55,34 @@ func (r *ReverseOrder) Do(context.Context) error {
 
 func ExampleInOut() {
 	// Now, let's connect the Steps into a Workflow!
-	flow := new(fl.Workflow)
+	flow := new(workflow.Workflow)
 
 	// create Steps
 	imBob := new(ImBob)
 	sayHello := &SayHello{
-		Who: "Alice", // this declaration is one time, use Input() if need to ensure the values per-retry.
+		// initialize fields in variable declaration is not encouraged, please use Input() or InputDependsOn() callback.
+		// workflow will respect the callbacks in Input() and InputDependsOn() before each retry,
+		// such you can guarantee the fields you care are always initialized before each retry.
+		Who: "do not set value here",
 	}
 
 	flow.Add(
-		// use InputDepends() and On() to connect the Steps with I/O.
-		fl.Step(sayHello).
-			InputDepends(
-				fl.On(imBob, func(_ context.Context, imBob *ImBob, sayHello *SayHello) error {
+		// use InputDependsOn() with Adapt() to connect the Steps with I/O.
+		workflow.Step(sayHello).
+			InputDependsOn(
+				workflow.Adapt(imBob, func(_ context.Context, imBob *ImBob, sayHello *SayHello) error {
+					// This callback will be executed at runtime and per-retry.
 					sayHello.Who = imBob.Output // imBob's Output will be passed to sayHello's Input
 					return nil
 				}),
 			).
 			// use Input() to modify the Input of the Step at runtime.
 			Input(func(ctx context.Context, sayHello *SayHello) error {
-				// This InputFunc will be executed at runtime and per-retry.
-				// And the order of declaration is respected, which means
-				// sayHello is already filled by imBob in the above InputDependsOn.
+				// This callback will be executed at runtime and per-retry.
+				// And the order of execution is respected to the order of declaration,
+				// means here,
+				// sayHello.Who = imBob.Output is already executed
+				// then
 				sayHello.Who += " and Alice"
 				return nil
 			}),
@@ -86,14 +92,14 @@ func ExampleInOut() {
 	// In this case, we need to use an Adapter to connect them.
 	reverseOrder := new(ReverseOrder)
 	flow.Add(
-		fl.Step(reverseOrder).InputDepends(
-			fl.On(sayHello, func(_ context.Context, sayHello *SayHello, reverseOrder *ReverseOrder) error {
+		workflow.Step(reverseOrder).InputDependsOn(
+			workflow.Adapt(sayHello, func(_ context.Context, sayHello *SayHello, reverseOrder *ReverseOrder) error {
 				// In this adapt function, you can transform the Upstream as Output to Downstream's Input
 				// "Hello Bob and Alice" => []string{"Hello", "Bob", "and", "Alice"}
 				reverseOrder.Slice = strings.Split(sayHello.Output, " ")
 				return nil
-			},
-			)),
+			}),
+		),
 	)
 
 	_ = flow.Run(context.TODO())

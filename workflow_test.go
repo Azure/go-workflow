@@ -139,7 +139,7 @@ func TestWorkflowWillRecover(t *testing.T) {
 
 		flow.Add(
 			Step(print).
-				InputDepends(On(answer,
+				InputDependsOn(Adapt(answer,
 					func(ctx context.Context, answer *Function[struct{}, int], print *Function[string, struct{}]) error {
 						panic("panic in flow")
 					}),
