@@ -1,10 +1,11 @@
-module go.goms.io/aks/rp/test/v3/workflow
+module github.com/Azure/go-workflow
 
 go 1.21
 
 require (
 	github.com/benbjohnson/clock v1.3.5
 	github.com/cenkalti/backoff/v4 v4.2.1
+	github.com/neilotoole/slogt v1.1.0
 	github.com/stretchr/testify v1.8.4
 )
 

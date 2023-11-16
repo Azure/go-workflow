@@ -1,10 +1,10 @@
-package workflow_test
+package flow_test
 
 import (
 	"context"
 	"fmt"
 
-	fl "go.goms.io/aks/rp/test/v3/workflow"
+	flow "github.com/Azure/go-workflow"
 )
 
 // Step dependency builders also supports adding retry for Step.
@@ -20,7 +20,7 @@ import (
 
 // PassAfter keeps failing until the attempt reaches the given number.
 type PassAfter struct {
-	fl.Base
+	flow.Base
 	Attempt int
 	count   int
 }
@@ -37,18 +37,18 @@ func (p *PassAfter) Do(ctx context.Context) error {
 }
 
 func ExampleRetry() {
-	flow := new(fl.Workflow)
+	workflow := new(flow.Workflow)
 
-	flow.Add(
-		fl.Step(&PassAfter{
+	workflow.Add(
+		flow.Step(&PassAfter{
 			Attempt: 2,
-		}).Retry(func(ro *fl.RetryOption) {
+		}).Retry(func(ro *flow.RetryOption) {
 			ro.Attempts = 5 // retry 5 times
 			ro.Timer = new(testTimer)
 		}),
 	)
 
-	_ = flow.Run(context.TODO())
+	_ = workflow.Run(context.TODO())
 	// Output:
 	// failed at attempt 0
 	// failed at attempt 1

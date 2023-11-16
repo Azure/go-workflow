@@ -1,10 +1,10 @@
-package workflow_test
+package flow_test
 
 import (
 	"context"
 	"fmt"
 
-	fl "go.goms.io/aks/rp/test/v3/workflow"
+	flow "github.com/Azure/go-workflow"
 )
 
 // Workflow tracks each Step's status, and decides whether should queue Step based on When and Condition.
@@ -38,14 +38,14 @@ import (
 //   - StepStatusCanceled
 //
 // Only succeeded Upstreams will flow Output to Downstreams Input.
-type ArbitraryTask struct{ fl.Base }
-type FailedStep struct{ fl.Base }
+type ArbitraryTask struct{ flow.Base }
+type FailedStep struct{ flow.Base }
 
 func (a *ArbitraryTask) Do(context.Context) error { return nil }
 func (a *FailedStep) Do(context.Context) error    { return fmt.Errorf("failed!") }
 
 func ExampleConditionWhen() {
-	flow := new(fl.Workflow)
+	workflow := new(flow.Workflow)
 
 	var (
 		skipMe          = new(ArbitraryTask)
@@ -56,20 +56,20 @@ func ExampleConditionWhen() {
 		failed          = new(FailedStep)
 	)
 
-	flow.Add(
-		fl.Step(skipMe).When(fl.Skip),
-		fl.Step(skipMeToo).DependsOn(skipMe),
-		fl.Step(cancelMe).Condition(func(ups []fl.Steper) bool {
+	workflow.Add(
+		flow.Step(skipMe).When(flow.Skip),
+		flow.Step(skipMeToo).DependsOn(skipMe),
+		flow.Step(cancelMe).Condition(func(ups []flow.Steper) bool {
 			return false // always cancel
 		}),
-		fl.Step(runWhenCanceled).
+		flow.Step(runWhenCanceled).
 			DependsOn(cancelMe).
-			Condition(fl.Canceled),
-		fl.Step(then).
+			Condition(flow.Canceled),
+		flow.Step(then).
 			DependsOn(failed).
-			Condition(fl.SucceededOrFailed),
+			Condition(flow.SucceededOrFailed),
 	)
-	_ = flow.Run(context.Background())
+	_ = workflow.Run(context.Background())
 	fmt.Println(skipMe.GetStatus())
 	fmt.Println(cancelMe.GetStatus())
 	fmt.Println(runWhenCanceled.GetStatus())

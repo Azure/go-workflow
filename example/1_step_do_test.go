@@ -1,10 +1,10 @@
-package workflow_test
+package flow_test
 
 import (
 	"context"
 	"fmt"
 
-	"go.goms.io/aks/rp/test/v3/workflow"
+	flow "github.com/Azure/go-workflow"
 )
 
 // `workflow` has two core concepts:
@@ -28,7 +28,7 @@ import (
 type Foo struct {
 	// Base inherits methods that required by a Step interface.
 	// Read the document of Base for more details.
-	workflow.Base
+	flow.Base
 }
 
 // Besides the Base struct, user also needs to implement the Do() method.
@@ -43,7 +43,7 @@ func (f *Foo) Do(ctx context.Context) error {
 	return nil
 }
 
-type Bar struct{ workflow.Base }
+type Bar struct{ flow.Base }
 
 func (b *Bar) Do(context.Context) error {
 	fmt.Println("Bar")
@@ -52,22 +52,22 @@ func (b *Bar) Do(context.Context) error {
 
 func ExampleSimple() {
 	// Create a Workflow
-	flow := new(workflow.Workflow)
+	workflow := new(flow.Workflow)
 
 	// Create Steps
 	foo := new(Foo)
 	bar := new(Bar)
 
 	// Connect the Steps into the Workflow
-	flow.Add(
-		workflow.Step(foo).DependsOn(bar),
+	workflow.Add(
+		flow.Step(foo).DependsOn(bar),
 	)
 
 	// As the code says, step `foo` depends on step `bar`, or `bar` happens-before `foo`.
 	// In `fl` terms, we call `foo` as Downstream, `bar` as Upstream, since the flow is from Up to Down.
 	// We'll cover dependency in next session.
 
-	_ = flow.Run(context.TODO())
+	_ = workflow.Run(context.TODO())
 	// Output:
 	// Bar
 	// Foo

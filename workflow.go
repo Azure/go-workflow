@@ -1,4 +1,4 @@
-package workflow
+package flow
 
 import (
 	"context"
@@ -61,7 +61,7 @@ func (s *Workflow) DepPhased() (Dependency, Dependency, Dependency) {
 // Modify the returned Dependency will not affect the graph in Workflow,
 // Iterate all Steps and its Upstreams:
 //
-//	for step, ups := range workflow.Dep() {
+//	for step, ups := range flow.Dep() {
 //		// do something with step
 //		for _, link := range ups {
 //			link.Upstream // do something with step's Upstream

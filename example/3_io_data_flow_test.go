@@ -1,4 +1,4 @@
-package workflow_test
+package flow_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"go.goms.io/aks/rp/test/v3/workflow"
+	flow "github.com/Azure/go-workflow"
 )
 
 // After connected Steps into Workflow via dependencies,
@@ -22,7 +22,7 @@ import (
 //		)
 
 type SayHello struct {
-	workflow.Base
+	flow.Base
 	Who    string
 	Output string
 }
@@ -34,7 +34,7 @@ func (s *SayHello) Do(context.Context) error {
 }
 
 type ImBob struct {
-	workflow.Base
+	flow.Base
 	Output string
 }
 
@@ -44,7 +44,7 @@ func (i *ImBob) Do(context.Context) error {
 }
 
 type ReverseOrder struct {
-	workflow.Base
+	flow.Base
 	Slice []string
 }
 
@@ -55,7 +55,7 @@ func (r *ReverseOrder) Do(context.Context) error {
 
 func ExampleInOut() {
 	// Now, let's connect the Steps into a Workflow!
-	flow := new(workflow.Workflow)
+	workflow := new(flow.Workflow)
 
 	// create Steps
 	imBob := new(ImBob)
@@ -66,11 +66,11 @@ func ExampleInOut() {
 		Who: "do not set value here",
 	}
 
-	flow.Add(
+	workflow.Add(
 		// use InputDependsOn() with Adapt() to connect the Steps with I/O.
-		workflow.Step(sayHello).
+		flow.Step(sayHello).
 			InputDependsOn(
-				workflow.Adapt(imBob, func(_ context.Context, imBob *ImBob, sayHello *SayHello) error {
+				flow.Adapt(imBob, func(_ context.Context, imBob *ImBob, sayHello *SayHello) error {
 					// This callback will be executed at runtime and per-retry.
 					sayHello.Who = imBob.Output // imBob's Output will be passed to sayHello's Input
 					return nil
@@ -91,9 +91,9 @@ func ExampleInOut() {
 	// However, in most real world scenarios, the Upstream's Output and Downstream's Input are not the same type.
 	// In this case, we need to use an Adapter to connect them.
 	reverseOrder := new(ReverseOrder)
-	flow.Add(
-		workflow.Step(reverseOrder).InputDependsOn(
-			workflow.Adapt(sayHello, func(_ context.Context, sayHello *SayHello, reverseOrder *ReverseOrder) error {
+	workflow.Add(
+		flow.Step(reverseOrder).InputDependsOn(
+			flow.Adapt(sayHello, func(_ context.Context, sayHello *SayHello, reverseOrder *ReverseOrder) error {
 				// In this adapt function, you can transform the Upstream as Output to Downstream's Input
 				// "Hello Bob and Alice" => []string{"Hello", "Bob", "and", "Alice"}
 				reverseOrder.Slice = strings.Split(sayHello.Output, " ")
@@ -102,7 +102,7 @@ func ExampleInOut() {
 		),
 	)
 
-	_ = flow.Run(context.TODO())
+	_ = workflow.Run(context.TODO())
 
 	// After the Workflow is finished, you can get the result from the Output of the last Step.
 	fmt.Println(reverseOrder.Slice)

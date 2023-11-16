@@ -1,10 +1,10 @@
-package workflow_test
+package flow_test
 
 import (
 	"context"
 	"fmt"
 
-	"go.goms.io/aks/rp/test/v3/workflow"
+	flow "github.com/Azure/go-workflow"
 )
 
 // Steps are connected with dependencies to form a Workflow.
@@ -19,24 +19,24 @@ import (
 // The only difference is that:
 //   - Step is a generic builder accepting `Input` and `InputDependsOn`, check next session about I/O for more details.
 func ExampleDeclareDependency() {
-	flow := new(workflow.Workflow)
+	workflow := new(flow.Workflow)
 
 	// Besides, `workflow` also provides a convenient way to create a Step implementation without declaring type.
 	// Use `Func` to wrap any arbitrary function into a Step.
 	doNothing := func(context.Context) error { return nil }
 	var (
-		a = workflow.Func("a", doNothing)
-		b = workflow.Func("b", doNothing)
-		c = workflow.Func("c", doNothing)
-		d = workflow.Func("d", doNothing)
+		a = flow.Func("a", doNothing)
+		b = flow.Func("b", doNothing)
+		c = flow.Func("c", doNothing)
+		d = flow.Func("d", doNothing)
 	)
 
-	flow.Add(
-		workflow.Step(a).DependsOn(b, c),
-		workflow.Steps(b, c).DependsOn(d),
+	workflow.Add(
+		flow.Step(a).DependsOn(b, c),
+		flow.Steps(b, c).DependsOn(d),
 	)
 
-	dep := flow.Dep()
+	dep := workflow.Dep()
 	fmt.Println(getUpstreamNames(dep[a]))
 	fmt.Println(getUpstreamNames(dep[b]))
 	fmt.Println(getUpstreamNames(dep[c]))
@@ -48,7 +48,7 @@ func ExampleDeclareDependency() {
 	// []
 }
 
-func getUpstreamNames(ups []workflow.Link) []string {
+func getUpstreamNames(ups []flow.Link) []string {
 	rv := []string{}
 	for _, up := range ups {
 		rv = append(rv, up.Upstream.String())

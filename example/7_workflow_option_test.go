@@ -1,4 +1,4 @@
-package workflow_test
+package flow_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"go.goms.io/aks/rp/test/v3/workflow"
+	flow "github.com/Azure/go-workflow"
 )
 
 // `workflow` provides Workflow Options that configures the Workflow behavior.
@@ -17,7 +17,7 @@ import (
 // WorkflowOption can be passed to Workflow via `(*Workflow).Options()`
 
 func ExampleWorkflowWithMaxConcurrency() {
-	flow := workflow.New()
+	workflow := flow.New()
 
 	start := make(chan struct{})
 	counter := new(atomic.Int32)
@@ -31,22 +31,22 @@ func ExampleWorkflowWithMaxConcurrency() {
 	}
 
 	var (
-		a = workflow.Func("a", countOneThenWaitDone)
-		b = workflow.Func("b", countOneThenWaitDone)
-		c = workflow.Func("c", countOneThenWaitDone)
+		a = flow.Func("a", countOneThenWaitDone)
+		b = flow.Func("b", countOneThenWaitDone)
+		c = flow.Func("c", countOneThenWaitDone)
 	)
 
-	flow.Add(
-		workflow.Steps(a, b, c),
+	workflow.Add(
+		flow.Steps(a, b, c),
 	).Options(
-		workflow.WithMaxConcurrency(2), // only 2 Steps can run concurrently
+		flow.WithMaxConcurrency(2), // only 2 Steps can run concurrently
 	)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = flow.Run(context.TODO())
+		_ = workflow.Run(context.TODO())
 	}()
 
 	// should only two Steps are running concurrently
@@ -72,18 +72,18 @@ func ExampleWorkflowWithMaxConcurrency() {
 }
 
 func ExampleWorkflowWithWhen() {
-	flow := workflow.New()
+	workflow := flow.New()
 
 	a := new(ArbitraryTask)
 
-	flow.Add(
-		workflow.Step(a),
+	workflow.Add(
+		flow.Step(a),
 	)
 
 	ctx := context.WithValue(context.Background(), "key", "value")
 
-	flow.Options(
-		workflow.WithWhen(func(ctx context.Context) bool {
+	workflow.Options(
+		flow.WithWhen(func(ctx context.Context) bool {
 			// you can access the context here
 			value := ctx.Value("key").(string)
 			fmt.Println(value)
@@ -93,7 +93,7 @@ func ExampleWorkflowWithWhen() {
 		}),
 	)
 
-	_ = flow.Run(ctx)
+	_ = workflow.Run(ctx)
 	fmt.Println(a.GetStatus())
 	// Output:
 	// value

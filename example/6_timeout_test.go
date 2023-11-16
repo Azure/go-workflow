@@ -1,4 +1,4 @@
-package workflow_test
+package flow_test
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
+	flow "github.com/Azure/go-workflow"
 	"github.com/benbjohnson/clock"
-	fl "go.goms.io/aks/rp/test/v3/workflow"
 )
 
 // `workflow` provides different levels of timeout:
@@ -17,7 +17,7 @@ import (
 
 // WaitDone will be pending until the context is done.
 type WaitDone struct {
-	fl.Base
+	flow.Base
 	StartDo chan<- struct{} // signal it everytime start Do()
 }
 
@@ -32,16 +32,16 @@ func ExampleTimeout() {
 	// use mock clock
 	mock := clock.NewMock()
 
-	flow := new(fl.Workflow).
-		Options(fl.WithClock(mock))
+	workflow := new(flow.Workflow).
+		Options(flow.WithClock(mock))
 
 	started := make(chan struct{})
 
-	flow.Add(
-		fl.Steps(&WaitDone{
-			Base:    fl.Base{StepName: "WaitDone"},
+	workflow.Add(
+		flow.Steps(&WaitDone{
+			Base:    flow.Base{StepName: "WaitDone"},
 			StartDo: started,
-		}).Retry(func(ro *fl.RetryOption) {
+		}).Retry(func(ro *flow.RetryOption) {
 			ro.Attempts = 5
 			ro.Timer = new(testTimer)
 			ro.Timeout = 1000 * time.Millisecond // Retry level timeout
@@ -58,7 +58,7 @@ func ExampleTimeout() {
 	wg.Add(1)
 	go func() {
 		// you can, actually, pass a context with timeout to set a Workflow level timeout
-		err = flow.Run(context.Background())
+		err = workflow.Run(context.Background())
 		wg.Done()
 	}()
 	go func() {
