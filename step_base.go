@@ -6,20 +6,15 @@ import (
 	"time"
 )
 
-// StepReader allows you to read the status of a Step.
-type StepReader interface {
+// stepBase is the base interface for a Step.
+// Embed `StepBase` to inherit the implementation for `stepBase`.
+type stepBase interface {
 	fmt.Stringer
 	GetStatus() StepStatus
 	GetCondition() Condition
 	GetRetry() *RetryOption
 	GetWhen() When
 	GetTimeout() time.Duration
-}
-
-// stepBase is the base interface for a Step.
-// Embed `StepBase` to inherit the implementation for `stepBase`.
-type stepBase interface {
-	StepReader
 	setStatus(StepStatus)
 	setCondition(Condition)
 	setRetry(*RetryOption)
@@ -50,10 +45,6 @@ type Base struct {
 	timeout  time.Duration
 }
 
-func (b *Base) String() string {
-	return b.StepName
-}
-
 func (b *Base) GetStatus() StepStatus {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
@@ -66,34 +57,12 @@ func (b *Base) setStatus(status StepStatus) {
 	b.status = status
 }
 
-func (b *Base) GetCondition() Condition {
-	return b.cond
-}
-
-func (b *Base) setCondition(cond Condition) {
-	b.cond = cond
-}
-
-func (b *Base) GetRetry() *RetryOption {
-	return b.retry
-}
-
-func (b *Base) setRetry(opt *RetryOption) {
-	b.retry = opt
-}
-
-func (b *Base) GetWhen() When {
-	return b.when
-}
-
-func (b *Base) setWhen(when When) {
-	b.when = when
-}
-
-func (b *Base) GetTimeout() time.Duration {
-	return b.timeout
-}
-
-func (b *Base) setTimeout(timeout time.Duration) {
-	b.timeout = timeout
-}
+func (b *Base) String() string                   { return b.StepName }
+func (b *Base) GetCondition() Condition          { return b.cond }
+func (b *Base) GetRetry() *RetryOption           { return b.retry }
+func (b *Base) GetWhen() When                    { return b.when }
+func (b *Base) GetTimeout() time.Duration        { return b.timeout }
+func (b *Base) setCondition(cond Condition)      { b.cond = cond }
+func (b *Base) setRetry(opt *RetryOption)        { b.retry = opt }
+func (b *Base) setWhen(when When)                { b.when = when }
+func (b *Base) setTimeout(timeout time.Duration) { b.timeout = timeout }

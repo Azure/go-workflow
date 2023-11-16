@@ -23,38 +23,38 @@ func TestCondition(t *testing.T) {
 		canceled  = newTestStatus(StepStatusCanceled)
 	)
 	t.Run("Always", func(t *testing.T) {
-		assert.Equal(t, true, Always([]StepReader{
+		assert.Equal(t, true, Always([]Steper{
 			pending, running, succeeded, failed, canceled,
 		}))
 	})
 	t.Run("Succeeded", func(t *testing.T) {
 		for _, c := range []struct {
 			Name      string
-			Upstreams []StepReader
+			Upstreams []Steper
 			Expect    bool
 		}{
 			{
 				Name:      "Empty => true",
-				Upstreams: []StepReader{},
+				Upstreams: []Steper{},
 				Expect:    true,
 			},
 			{
 				Name: "Succeeded => true",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					succeeded,
 				},
 				Expect: true,
 			},
 			{
 				Name: "Any Failed => false",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					succeeded, failed,
 				},
 				Expect: false,
 			},
 			{
 				Name: "Any Canceled => false",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					succeeded, canceled,
 				},
 				Expect: false,
@@ -69,31 +69,31 @@ func TestCondition(t *testing.T) {
 	t.Run("Failed", func(t *testing.T) {
 		for _, c := range []struct {
 			Name      string
-			Upstreams []StepReader
+			Upstreams []Steper
 			Expect    bool
 		}{
 			{
 				Name:      "Empty => false",
-				Upstreams: []StepReader{},
+				Upstreams: []Steper{},
 				Expect:    false,
 			},
 			{
 				Name: "Succeeded => false",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					succeeded,
 				},
 				Expect: false,
 			},
 			{
 				Name: "Any Failed => true",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					succeeded, failed,
 				},
 				Expect: true,
 			},
 			{
 				Name: "Any Canceled => false",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					failed, canceled,
 				},
 				Expect: false,
@@ -108,31 +108,31 @@ func TestCondition(t *testing.T) {
 	t.Run("SucceededOrFailed", func(t *testing.T) {
 		for _, c := range []struct {
 			Name      string
-			Upstreams []StepReader
+			Upstreams []Steper
 			Expect    bool
 		}{
 			{
 				Name:      "Empty => true",
-				Upstreams: []StepReader{},
+				Upstreams: []Steper{},
 				Expect:    true,
 			},
 			{
 				Name: "Succeeded => true",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					succeeded,
 				},
 				Expect: true,
 			},
 			{
 				Name: "Any Failed => true",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					succeeded, failed,
 				},
 				Expect: true,
 			},
 			{
 				Name: "Any Canceled => false",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					failed, canceled,
 				},
 				Expect: false,
@@ -147,31 +147,31 @@ func TestCondition(t *testing.T) {
 	t.Run("Canceled", func(t *testing.T) {
 		for _, c := range []struct {
 			Name      string
-			Upstreams []StepReader
+			Upstreams []Steper
 			Expect    bool
 		}{
 			{
 				Name:      "Empty => false",
-				Upstreams: []StepReader{},
+				Upstreams: []Steper{},
 				Expect:    false,
 			},
 			{
 				Name: "Succeeded => false",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					succeeded,
 				},
 				Expect: false,
 			},
 			{
 				Name: "Any Failed => false",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					succeeded, failed,
 				},
 				Expect: false,
 			},
 			{
 				Name: "Any Canceled => true",
-				Upstreams: []StepReader{
+				Upstreams: []Steper{
 					failed, canceled,
 				},
 				Expect: true,

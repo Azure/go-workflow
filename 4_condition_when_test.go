@@ -59,7 +59,7 @@ func ExampleConditionWhen() {
 	flow.Add(
 		fl.Step(skipMe).When(fl.Skip),
 		fl.Step(skipMeToo).DependsOn(skipMe),
-		fl.Step(cancelMe).Condition(func(ups []fl.StepReader) bool {
+		fl.Step(cancelMe).Condition(func(ups []fl.Steper) bool {
 			return false // always cancel
 		}),
 		fl.Step(runWhenCanceled).

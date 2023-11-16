@@ -12,7 +12,7 @@ import (
 //	})
 type ErrFlow struct {
 	Err  error
-	From StepReader
+	From Steper
 }
 
 func (e *ErrFlow) Error() string {
@@ -20,7 +20,7 @@ func (e *ErrFlow) Error() string {
 }
 
 // ErrWorkflow contains all errors of Steps in a Workflow.
-type ErrWorkflow map[StepReader]error
+type ErrWorkflow map[Steper]error
 
 func (e ErrWorkflow) Error() string {
 	builder := new(strings.Builder)
@@ -48,7 +48,7 @@ var ErrWorkflowIsRunning = fmt.Errorf("Workflow is running, please wait for it t
 var ErrWorkflowHasRun = fmt.Errorf("Workflow has run, check result error via .Err()")
 
 // Only when the Step status is not StepStautsPending when Workflow starts to run.
-type ErrUnexpectStepInitStatus []StepReader
+type ErrUnexpectStepInitStatus []Steper
 
 func (e ErrUnexpectStepInitStatus) Error() string {
 	builder := new(strings.Builder)
@@ -64,7 +64,7 @@ func (e ErrUnexpectStepInitStatus) Error() string {
 }
 
 // There is a cycle-dependency in your Workflow!!!
-type ErrCycleDependency map[StepReader][]StepReader
+type ErrCycleDependency map[Steper][]Steper
 
 func (e ErrCycleDependency) Error() string {
 	builder := new(strings.Builder)

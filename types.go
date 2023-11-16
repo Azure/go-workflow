@@ -61,3 +61,12 @@ func (d Dependency) Merge(other Dependency) {
 		}
 	}
 }
+
+// Phase indicates the phase to run of a Step in Workflow.
+type Phase int
+
+const (
+	PhaseRun Phase = iota
+	PhaseInit
+	PhaseDefer
+)

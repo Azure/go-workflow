@@ -17,12 +17,12 @@ type WorkflowStep interface {
 //	Steps(a, b, c).DependsOn(d, e) // d, e will be executed in parallel, then a, b, c in parallel
 //
 // Steps are weak-typed, use Step if you need add Input or InputDependsOn
-func Steps(downs ...Steper) addSteps {
+func Steps(downs ...Steper) AddSteps {
 	dep := make(Dependency)
 	for _, down := range downs {
 		dep[down] = nil
 	}
-	return addSteps{
+	return AddSteps{
 		Downs:      downs,
 		Dependency: dep,
 	}
@@ -44,15 +44,15 @@ func ToSteps[S Steper](steps []S) []Steper {
 
 // Step declares Steps ready for building dependencies to Workflow,
 // with the support of Input(...) and InputDependsOn(...).
-func Step[S Steper](downs ...S) addStepsWithInput[S] {
-	return addStepsWithInput[S]{
-		addSteps: Steps(ToSteps(downs)...),
+func Step[S Steper](downs ...S) AddStep[S] {
+	return AddStep[S]{
+		AddSteps: Steps(ToSteps(downs)...),
 		Downs:    downs,
 	}
 }
 
-type addStepsWithInput[S Steper] struct {
-	addSteps
+type AddStep[S Steper] struct {
+	AddSteps
 	Downs []S
 }
 
@@ -66,7 +66,7 @@ type InputFunc[S any] func(context.Context, S) error
 //		Input(/* this Input will be feeded first */).
 //		InputDependsOn(Adapt(up, /* then receive Output from up */)).
 //		Input(/* this Input is after up's Output */),
-func (as addStepsWithInput[S]) Input(fns ...InputFunc[S]) addStepsWithInput[S] {
+func (as AddStep[S]) Input(fns ...InputFunc[S]) AddStep[S] {
 	for _, down := range as.Downs {
 		down := down // capture range variable
 		as.Dependency[down] = append(as.Dependency[down], Link{
@@ -93,7 +93,7 @@ func (as addStepsWithInput[S]) Input(fns ...InputFunc[S]) addStepsWithInput[S] {
 //			// fill Down from Up
 //		}),
 //	)
-func (as addStepsWithInput[S]) InputDependsOn(adapts ...Adapter[S]) addStepsWithInput[S] {
+func (as AddStep[S]) InputDependsOn(adapts ...Adapter[S]) AddStep[S] {
 	for _, down := range as.Downs {
 		down := down
 		for _, adapt := range adapts {
@@ -126,7 +126,7 @@ func Adapt[U, D Steper](up U, fn AdaptFunc[U, D]) Adapter[D] {
 	}
 }
 
-type addSteps struct {
+type AddSteps struct {
 	Downs []Steper
 	Dependency
 }
@@ -135,7 +135,7 @@ type addSteps struct {
 //
 // "Upstreams happen before Downstream" is guaranteed.
 // Upstream's Output will not be sent to Downstream's Input.
-func (as addSteps) DependsOn(ups ...Steper) addSteps {
+func (as AddSteps) DependsOn(ups ...Steper) AddSteps {
 	links := []Link{}
 	for _, up := range ups {
 		links = append(links, Link{Upstream: up})
@@ -147,7 +147,7 @@ func (as addSteps) DependsOn(ups ...Steper) addSteps {
 }
 
 // Timeout sets the Step level timeout.
-func (as addSteps) Timeout(timeout time.Duration) addSteps {
+func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
 	for _, step := range as.Downs {
 		step.setTimeout(timeout)
 	}
@@ -155,7 +155,7 @@ func (as addSteps) Timeout(timeout time.Duration) addSteps {
 }
 
 // Condition decides whether the Step should be Canceled.
-func (as addSteps) Condition(cond Condition) addSteps {
+func (as AddSteps) Condition(cond Condition) AddSteps {
 	for _, step := range as.Downs {
 		step.setCondition(cond)
 	}
@@ -163,7 +163,7 @@ func (as addSteps) Condition(cond Condition) addSteps {
 }
 
 // When decides whether the Step should be Skipped.
-func (as addSteps) When(when When) addSteps {
+func (as AddSteps) When(when When) AddSteps {
 	for _, step := range as.Downs {
 		step.setWhen(when)
 	}
@@ -182,13 +182,11 @@ func addRetry(opt *RetryOption, fns ...func(*RetryOption)) *RetryOption {
 }
 
 // Retry sets the RetryOption for the Step.
-func (as addSteps) Retry(fns ...func(*RetryOption)) addSteps {
+func (as AddSteps) Retry(fns ...func(*RetryOption)) AddSteps {
 	for _, step := range as.Downs {
 		step.setRetry(addRetry(step.GetRetry(), fns...))
 	}
 	return as
 }
 
-func (as addSteps) done() Dependency {
-	return as.Dependency
-}
+func (as AddSteps) done() Dependency { return as.Dependency }

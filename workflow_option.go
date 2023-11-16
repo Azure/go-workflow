@@ -34,3 +34,9 @@ func WithClock(clock clock.Clock) WorkflowOption {
 		s.clock = clock
 	}
 }
+
+func WithNotify(notify Notify) WorkflowOption {
+	return func(w *Workflow) {
+		w.notify = append(w.notify, notify)
+	}
+}

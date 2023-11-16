@@ -40,17 +40,17 @@ func (s StepStatus) String() string {
 // Condition is a function to determine whether the Step should be Canceled, false -> Canceled.
 // Condition makes the decision based on the status of all the Upstream Steps.
 // Condition is only called when all Upstreams are terminated.
-type Condition func(ups []StepReader) bool
+type Condition func(ups []Steper) bool
 
 var DefaultCondition Condition = Succeeded
 
 // Always: as long as all Upstreams are terminated
-func Always(deps []StepReader) bool {
+func Always(deps []Steper) bool {
 	return true
 }
 
 // Succeeded: all Upstreams are Succeeded
-func Succeeded(ups []StepReader) bool {
+func Succeeded(ups []Steper) bool {
 	for _, e := range ups {
 		switch e.GetStatus() {
 		case StepStatusFailed, StepStatusCanceled:
@@ -61,7 +61,7 @@ func Succeeded(ups []StepReader) bool {
 }
 
 // Failed: any Upstream is Failed
-func Failed(ups []StepReader) bool {
+func Failed(ups []Steper) bool {
 	hasFailed := false
 	for _, e := range ups {
 		switch e.GetStatus() {
@@ -75,7 +75,7 @@ func Failed(ups []StepReader) bool {
 }
 
 // SucceededOrFailed: all Upstreams are Succeeded or Failed (or Skipped)
-func SucceededOrFailed(deps []StepReader) bool {
+func SucceededOrFailed(deps []Steper) bool {
 	for _, dep := range deps {
 		switch dep.GetStatus() {
 		case StepStatusCanceled:
@@ -86,7 +86,7 @@ func SucceededOrFailed(deps []StepReader) bool {
 }
 
 // Canceled: any one Upstream is Canceled
-func Canceled(ups []StepReader) bool {
+func Canceled(ups []Steper) bool {
 	for _, up := range ups {
 		switch up.GetStatus() {
 		case StepStatusCanceled:

@@ -109,7 +109,7 @@ func TestPreflight(t *testing.T) {
 		a.setStatus(StepStatusRunning)
 		var err ErrUnexpectStepInitStatus
 		assert.ErrorAs(t, flow.Run(context.Background()), &err)
-		assert.ElementsMatch(t, []StepReader{a}, err)
+		assert.ElementsMatch(t, []Steper{a}, err)
 	})
 }
 
@@ -209,4 +209,57 @@ func TestWorkflowContextCancel(t *testing.T) {
 	var werr ErrWorkflow
 	assert.ErrorAs(t, err, &werr)
 	assert.ErrorIs(t, werr[pend], context.Canceled)
+}
+
+func ExampleNotify() {
+	workflow := new(Workflow)
+	workflow.Add(
+		Step(Func("dummy step", func(ctx context.Context) error {
+			fmt.Println("inside step")
+			return fmt.Errorf("step error")
+		})),
+	).Options(
+		WithNotify(Notify{
+			BeforeStep: func(ctx context.Context, step Steper) context.Context {
+				fmt.Printf("before step: %s\n", step)
+				return ctx
+			},
+			AfterStep: func(ctx context.Context, step Steper, err error) {
+				fmt.Printf("after step: %s error: %s\n", step, err)
+			},
+		}),
+	)
+	_ = workflow.Run(context.Background())
+	// Output:
+	// before step: dummy step
+	// inside step
+	// after step: dummy step error: step error
+}
+
+func ExampleInitDefer() {
+	workflow := new(Workflow)
+	workflow.Init(
+		Step(Func("init", func(ctx context.Context) error {
+			fmt.Println("run in init")
+			return nil
+		})),
+	).Add(
+		Step(Func("step", func(ctx context.Context) error {
+			fmt.Println("run in step")
+			return nil
+		})),
+	).Defer(
+		Step(Func("defer", func(ctx context.Context) error {
+			fmt.Println("run in defer")
+			return nil
+		})),
+	)
+	init, run, deferred := workflow.DepPhased()
+	fmt.Println(init, run, deferred)
+	_ = workflow.Run(context.Background())
+	// Output:
+	// map[init:[]] map[step:[]] map[defer:[]]
+	// run in init
+	// run in step
+	// run in defer
 }
