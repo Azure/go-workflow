@@ -16,3 +16,13 @@ func FromContext[T Logger](ctx context.Context) T {
 func NewContext(parent context.Context, logger Logger) context.Context {
 	return context.WithValue(parent, ctxKey{}, logger)
 }
+
+type RedactedString string
+
+func (r RedactedString) String() string {
+	return "[REDACTED]"
+}
+
+func (r RedactedString) RealString() string {
+	return string(r)
+}
