@@ -15,43 +15,43 @@ func TestDep(t *testing.T) {
 	c := Func("C", func(ctx context.Context) error { return nil })
 	d := Func("D", func(ctx context.Context) error { return nil })
 	t.Run("(a -> b, c) (c -> d)", func(t *testing.T) {
-		flow := new(Workflow)
-		flow.Add(
+		workflow := new(Workflow)
+		workflow.Add(
 			Step(a).DependsOn(b, c),
 			Step(c).DependsOn(d),
 		)
 		t.Run("list all steps from dependency", func(t *testing.T) {
 			t.Parallel()
 			var dep []Steper
-			for s := range flow.Dep() {
+			for s := range workflow.Steps {
 				dep = append(dep, s)
 			}
 			assert.ElementsMatch(t, []Steper{a, b, c, d}, dep)
 		})
 		t.Run("list all upstream of some step", func(t *testing.T) {
 			t.Parallel()
-			assert.ElementsMatch(t, []Steper{b, c}, flow.Dep().UpstreamOf(a))
-			assert.ElementsMatch(t, []Steper{}, flow.Dep().UpstreamOf(b))
-			assert.ElementsMatch(t, []Steper{d}, flow.Dep().UpstreamOf(c))
-			assert.ElementsMatch(t, []Steper{}, flow.Dep().UpstreamOf(d))
+			assert.ElementsMatch(t, []Steper{b, c}, keys(workflow.UpstreamOf(a)))
+			assert.ElementsMatch(t, []Steper{}, keys(workflow.UpstreamOf(b)))
+			assert.ElementsMatch(t, []Steper{d}, keys(workflow.UpstreamOf(c)))
+			assert.ElementsMatch(t, []Steper{}, keys(workflow.UpstreamOf(d)))
 		})
 		t.Run("list all downstrem of some step", func(t *testing.T) {
 			t.Parallel()
-			assert.ElementsMatch(t, []Steper{}, flow.Dep().DownstreamOf(a))
-			assert.ElementsMatch(t, []Steper{a}, flow.Dep().DownstreamOf(b))
-			assert.ElementsMatch(t, []Steper{a}, flow.Dep().DownstreamOf(c))
-			assert.ElementsMatch(t, []Steper{c}, flow.Dep().DownstreamOf(d))
+			assert.ElementsMatch(t, []Steper{}, keys(workflow.DownstreamOf(a)))
+			assert.ElementsMatch(t, []Steper{a}, keys(workflow.DownstreamOf(b)))
+			assert.ElementsMatch(t, []Steper{a}, keys(workflow.DownstreamOf(c)))
+			assert.ElementsMatch(t, []Steper{c}, keys(workflow.DownstreamOf(d)))
 		})
 	})
 	t.Run("cycle dependency", func(t *testing.T) {
-		flow := new(Workflow)
-		flow.Add(
+		workflow := new(Workflow)
+		workflow.Add(
 			Step(a).DependsOn(b),
 			Step(b).DependsOn(c),
 			Step(c).DependsOn(a),
 		)
 		var err ErrCycleDependency
-		assert.ErrorAs(t, flow.Run(context.Background()), &err)
+		assert.ErrorAs(t, workflow.Do(context.Background()), &err)
 		assert.Len(t, err, 3)
 	})
 }
@@ -66,8 +66,8 @@ func TestPreflight(t *testing.T) {
 			<-done
 			return nil
 		})
-		flow := new(Workflow)
-		flow.Add(
+		workflow := new(Workflow)
+		workflow.Add(
 			Step(blockUntilDone),
 		)
 
@@ -75,12 +75,12 @@ func TestPreflight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			flow.Run(context.Background())
+			workflow.Do(context.Background())
 		}()
 
 		// ensure step is running
 		<-start
-		assert.ErrorIs(t, flow.Run(context.Background()), ErrWorkflowIsRunning)
+		assert.ErrorIs(t, workflow.Do(context.Background()), ErrWorkflowIsRunning)
 
 		// unblock step
 		close(done)
@@ -90,45 +90,35 @@ func TestPreflight(t *testing.T) {
 	})
 	t.Run("empty Workflow will just return nil", func(t *testing.T) {
 		t.Parallel()
-		flow := new(Workflow)
-		assert.NoError(t, flow.Run(context.Background()))
-		assert.NoError(t, flow.Run(context.Background()))
+		workflow := new(Workflow)
+		assert.NoError(t, workflow.Do(context.Background()))
+		assert.NoError(t, workflow.Do(context.Background()))
 	})
 	t.Run("Workflow has run", func(t *testing.T) {
 		t.Parallel()
-		flow := new(Workflow)
-		flow.Add(Step(Func("A", func(ctx context.Context) error { return nil })))
-		assert.NoError(t, flow.Run(context.Background()))
-		assert.ErrorIs(t, flow.Run(context.Background()), ErrWorkflowHasRun)
-	})
-	t.Run("all steps must initialized with Pending", func(t *testing.T) {
-		t.Parallel()
-		a := Func("A", func(ctx context.Context) error { return nil })
-		flow := new(Workflow)
-		flow.Add(Step(a))
-		a.setStatus(StepStatusRunning)
-		var err ErrUnexpectStepInitStatus
-		assert.ErrorAs(t, flow.Run(context.Background()), &err)
-		assert.ElementsMatch(t, []Steper{a}, err)
+		workflow := new(Workflow)
+		workflow.Add(Step(Func("A", func(ctx context.Context) error { return nil })))
+		assert.NoError(t, workflow.Do(context.Background()))
+		assert.ErrorIs(t, workflow.Do(context.Background()), ErrWorkflowHasRun)
 	})
 }
 
 func TestWorkflowWillRecover(t *testing.T) {
 	t.Run("panic in step", func(t *testing.T) {
 		t.Parallel()
-		flow := new(Workflow)
+		workflow := new(Workflow)
 		panicStep := Func("panic", func(ctx context.Context) error {
 			panic("panic in step")
 		})
-		flow.Add(
+		workflow.Add(
 			Step(panicStep),
 		)
-		err := flow.Run(context.Background())
+		err := workflow.Do(context.Background())
 		assert.ErrorContains(t, err, "panic in step")
 	})
 	t.Run("panic in flow", func(t *testing.T) {
 		t.Parallel()
-		flow := new(Workflow)
+		workflow := new(Workflow)
 		answer := FuncO("answer", func(ctx context.Context) (int, error) {
 			return 42, nil
 		})
@@ -137,7 +127,7 @@ func TestWorkflowWillRecover(t *testing.T) {
 			return nil
 		})
 
-		flow.Add(
+		workflow.Add(
 			Step(print).
 				InputDependsOn(Adapt(answer,
 					func(ctx context.Context, answer *Function[struct{}, int], print *Function[string, struct{}]) error {
@@ -146,7 +136,7 @@ func TestWorkflowWillRecover(t *testing.T) {
 				),
 		)
 
-		err := flow.Run(context.Background())
+		err := workflow.Do(context.Background())
 		assert.ErrorContains(t, err, "panic in flow")
 	})
 }
@@ -154,24 +144,24 @@ func TestWorkflowWillRecover(t *testing.T) {
 func TestWorkflowErr(t *testing.T) {
 	t.Run("Workflow without error, Err() should also return nil", func(t *testing.T) {
 		t.Parallel()
-		flow := new(Workflow)
-		flow.Add(
+		workflow := new(Workflow)
+		workflow.Add(
 			Step(Func("A", func(ctx context.Context) error { return nil })),
 		)
-		err := flow.Run(context.Background())
+		err := workflow.Do(context.Background())
 		assert.NoError(t, err)
 	})
 	t.Run("Workflow with error, iterate Err() to access all errors", func(t *testing.T) {
 		t.Parallel()
-		flow := new(Workflow)
-		flow.Add(
+		workflow := new(Workflow)
+		workflow.Add(
 			Step(Func("A", func(ctx context.Context) error { return nil })),
 			Step(Func("B", func(ctx context.Context) error { return fmt.Errorf("B") })),
 		)
-		err := flow.Run(context.Background())
+		err := workflow.Do(context.Background())
 		assert.Error(t, err)
-		for step, stepErr := range flow.Err() {
-			switch step.String() {
+		for step, stepErr := range workflow.err {
+			switch fmt.Sprint(step) {
 			case "A":
 				assert.NoError(t, stepErr)
 			case "B":
@@ -179,36 +169,6 @@ func TestWorkflowErr(t *testing.T) {
 			}
 		}
 	})
-}
-
-func TestWorkflowContextCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	pend := Func("pend", func(ctx context.Context) error {
-		<-ctx.Done()
-		return ctx.Err()
-	})
-
-	flow := new(Workflow)
-	flow.Add(
-		Step(pend),
-	)
-
-	var err error
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err = flow.Run(ctx)
-	}()
-
-	cancel()
-	wg.Wait()
-
-	var werr ErrWorkflow
-	assert.ErrorAs(t, err, &werr)
-	assert.ErrorIs(t, werr[pend], context.Canceled)
 }
 
 func ExampleNotify() {
@@ -229,7 +189,7 @@ func ExampleNotify() {
 			},
 		}),
 	)
-	_ = workflow.Run(context.Background())
+	_ = workflow.Do(context.Background())
 	// Output:
 	// before step: dummy step
 	// inside step
@@ -254,12 +214,17 @@ func ExampleInitDefer() {
 			return nil
 		})),
 	)
-	init, run, deferred := workflow.DepPhased()
-	fmt.Println(init, run, deferred)
-	_ = workflow.Run(context.Background())
+	_ = workflow.Do(context.Background())
 	// Output:
-	// map[init:[]] map[step:[]] map[defer:[]]
 	// run in init
 	// run in step
 	// run in defer
+}
+
+func keys[K comparable, V any](m map[K]V) []K {
+	var keys []K
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

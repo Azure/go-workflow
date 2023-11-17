@@ -5,9 +5,11 @@ import (
 	"time"
 )
 
-// implement this interface to be used in Workflow.Add()
+// implement this interface to be added into Workflow
 type WorkflowStep interface {
-	done() Dependency
+	Dependencies() Dependency
+	States() map[Steper][]func(*StepState)
+	Inputs() map[Steper][]func(context.Context) error
 }
 
 // Steps declares a series of Steps.
@@ -17,43 +19,35 @@ type WorkflowStep interface {
 //	Steps(a, b, c).DependsOn(d, e) // d, e will be executed in parallel, then a, b, c in parallel
 //
 // Steps are weak-typed, use Step if you need add Input or InputDependsOn
-func Steps(downs ...Steper) AddSteps {
+func Steps(steps ...Steper) AddSteps {
 	dep := make(Dependency)
-	for _, down := range downs {
-		dep[down] = nil
+	state := make(map[Steper][]func(*StepState))
+	input := make(map[Steper][]func(context.Context) error)
+	for _, step := range steps {
+		dep[step] = make(Set[Steper])
+		state[step] = nil
+		input[step] = nil
 	}
 	return AddSteps{
-		Downs:      downs,
+		Steps:      steps,
 		Dependency: dep,
+		State:      state,
+		Input:      input,
 	}
-}
-
-// ToSteps converts []<StepDoer implemention> to []StepDoer.
-//
-//	steps := []someStepImpl{ ... }
-//	flow.Add(
-//		Steps(ToSteps(steps)...),
-//	)
-func ToSteps[S Steper](steps []S) []Steper {
-	rv := []Steper{}
-	for _, s := range steps {
-		rv = append(rv, s)
-	}
-	return rv
 }
 
 // Step declares Steps ready for building dependencies to Workflow,
 // with the support of Input(...) and InputDependsOn(...).
-func Step[S Steper](downs ...S) AddStep[S] {
+func Step[S Steper](steps ...S) AddStep[S] {
 	return AddStep[S]{
-		AddSteps: Steps(ToSteps(downs)...),
-		Downs:    downs,
+		AddSteps: Steps(ToSteps(steps)...),
+		Steps:    steps,
 	}
 }
 
 type AddStep[S Steper] struct {
 	AddSteps
-	Downs []S
+	Steps []S
 }
 
 type InputFunc[S any] func(context.Context, S) error
@@ -67,17 +61,15 @@ type InputFunc[S any] func(context.Context, S) error
 //		InputDependsOn(Adapt(up, /* then receive Output from up */)).
 //		Input(/* this Input is after up's Output */),
 func (as AddStep[S]) Input(fns ...InputFunc[S]) AddStep[S] {
-	for _, down := range as.Downs {
-		down := down // capture range variable
-		as.Dependency[down] = append(as.Dependency[down], Link{
-			Flow: func(ctx context.Context) error {
-				for _, fn := range fns {
-					if err := fn(ctx, down); err != nil {
-						return err
-					}
+	for _, step := range as.Steps {
+		step := step // capture range variable
+		as.AddSteps.Input[step] = append(as.AddSteps.Input[step], func(ctx context.Context) error {
+			for _, fn := range fns {
+				if err := fn(ctx, step); err != nil {
+					return err
 				}
-				return nil
-			},
+			}
+			return nil
 		})
 	}
 	return as
@@ -94,15 +86,13 @@ func (as AddStep[S]) Input(fns ...InputFunc[S]) AddStep[S] {
 //		}),
 //	)
 func (as AddStep[S]) InputDependsOn(adapts ...Adapter[S]) AddStep[S] {
-	for _, down := range as.Downs {
-		down := down
+	for _, step := range as.Steps {
+		step := step
 		for _, adapt := range adapts {
 			adapt := adapt
-			as.Dependency[down] = append(as.Dependency[down], Link{
-				Upstream: adapt.Upstream,
-				Flow: func(ctx context.Context) error {
-					return adapt.Flow(ctx, down)
-				},
+			as.AddSteps.Dependency[step][adapt.Upstream] = struct{}{}
+			as.AddSteps.Input[step] = append(as.AddSteps.Input[step], func(ctx context.Context) error {
+				return adapt.Flow(ctx, step)
 			})
 		}
 	}
@@ -127,8 +117,10 @@ func Adapt[U, D Steper](up U, fn AdaptFunc[U, D]) Adapter[D] {
 }
 
 type AddSteps struct {
-	Downs []Steper
-	Dependency
+	Steps      []Steper
+	Dependency Dependency
+	State      map[Steper][]func(*StepState)
+	Input      map[Steper][]func(context.Context) error
 }
 
 // DependsOn declares dependency between Steps.
@@ -136,41 +128,35 @@ type AddSteps struct {
 // "Upstreams happen before Downstream" is guaranteed.
 // Upstream's Output will not be sent to Downstream's Input.
 func (as AddSteps) DependsOn(ups ...Steper) AddSteps {
-	links := []Link{}
-	for _, up := range ups {
-		links = append(links, Link{Upstream: up})
-	}
-	for down := range as.Dependency {
-		as.Dependency[down] = append(as.Dependency[down], links...)
+	for _, down := range as.Steps {
+		for _, up := range ups {
+			as.Dependency[down][up] = struct{}{}
+		}
 	}
 	return as
 }
 
 // Timeout sets the Step level timeout.
 func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
-	for _, step := range as.Downs {
-		step.setTimeout(timeout)
-	}
-	return as
-}
-
-// Condition decides whether the Step should be Canceled.
-func (as AddSteps) Condition(cond Condition) AddSteps {
-	for _, step := range as.Downs {
-		step.setCondition(cond)
+	for _, step := range as.Steps {
+		as.State[step] = append(as.State[step], func(s *StepState) {
+			s.Timeout = timeout
+		})
 	}
 	return as
 }
 
 // When decides whether the Step should be Skipped.
 func (as AddSteps) When(when When) AddSteps {
-	for _, step := range as.Downs {
-		step.setWhen(when)
+	for _, step := range as.Steps {
+		as.State[step] = append(as.State[step], func(s *StepState) {
+			s.When = when
+		})
 	}
 	return as
 }
 
-func addRetry(opt *RetryOption, fns ...func(*RetryOption)) *RetryOption {
+func appendRetry(opt *RetryOption, fns ...func(*RetryOption)) *RetryOption {
 	if opt == nil {
 		opt = new(RetryOption)
 		*opt = DefaultRetryOption
@@ -182,11 +168,42 @@ func addRetry(opt *RetryOption, fns ...func(*RetryOption)) *RetryOption {
 }
 
 // Retry sets the RetryOption for the Step.
-func (as AddSteps) Retry(fns ...func(*RetryOption)) AddSteps {
-	for _, step := range as.Downs {
-		step.setRetry(addRetry(step.GetRetry(), fns...))
+func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
+	for _, step := range as.Steps {
+		as.State[step] = append(as.State[step], func(s *StepState) {
+			s.RetryOption = appendRetry(s.RetryOption, opts...)
+		})
 	}
 	return as
 }
 
-func (as AddSteps) done() Dependency { return as.Dependency }
+func (as AddSteps) Inputs() map[Steper][]func(context.Context) error { return as.Input }
+func (as AddSteps) Dependencies() Dependency                         { return as.Dependency }
+func (as AddSteps) States() map[Steper][]func(*StepState)            { return as.State }
+
+func (as AddStep[S]) Timeout(timeout time.Duration) AddStep[S] {
+	as.AddSteps = as.AddSteps.Timeout(timeout)
+	return as
+}
+func (as AddStep[S]) When(when When) AddStep[S] {
+	as.AddSteps = as.AddSteps.When(when)
+	return as
+}
+func (as AddStep[S]) Retry(fns ...func(*RetryOption)) AddStep[S] {
+	as.AddSteps = as.AddSteps.Retry(fns...)
+	return as
+}
+
+// ToSteps converts []<StepDoer implemention> to []StepDoer.
+//
+//	steps := []someStepImpl{ ... }
+//	flow.Add(
+//		Steps(ToSteps(steps)...),
+//	)
+func ToSteps[S Steper](steps []S) []Steper {
+	rv := []Steper{}
+	for _, s := range steps {
+		rv = append(rv, s)
+	}
+	return rv
+}

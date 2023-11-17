@@ -22,13 +22,6 @@ func WithMaxConcurrency(n int) WorkflowOption {
 	}
 }
 
-// WithWhen sets the Workflow-level When condition.
-func WithWhen(when When) WorkflowOption {
-	return func(s *Workflow) {
-		s.when = when
-	}
-}
-
 func WithClock(clock clock.Clock) WorkflowOption {
 	return func(s *Workflow) {
 		s.clock = clock

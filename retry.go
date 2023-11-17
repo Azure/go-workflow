@@ -21,7 +21,7 @@ type RetryOption struct {
 	Timer    backoff.Timer
 }
 
-func (s *Workflow) retry(opt *RetryOption) func(
+func (w *Workflow) retry(opt *RetryOption) func(
 	ctx context.Context,
 	fn func(context.Context) error,
 	notAfter time.Time, // the Step level timeout ddl
@@ -32,20 +32,20 @@ func (s *Workflow) retry(opt *RetryOption) func(
 		}
 		opt.Backoff = backoff.WithContext(opt.Backoff, ctx)
 		attempt := uint64(0)
-		start := s.clock.Now()
+		start := w.clock.Now()
 		return backoff.RetryNotifyWithTimer(
 			func() error {
 				defer func() { attempt++ }()
-				ctx, cancel := s.clock.WithTimeout(ctx, opt.Timeout)
+				ctx, cancel := w.clock.WithTimeout(ctx, opt.Timeout)
 				defer cancel()
 				err := fn(ctx)
 				if err == nil {
 					return nil
 				}
-				if !notAfter.IsZero() && s.clock.Now().After(notAfter) { // Step level timeouted
+				if !notAfter.IsZero() && w.clock.Now().After(notAfter) { // Step level timeouted
 					err = backoff.Permanent(err)
 				}
-				if opt.StopIf != nil && opt.StopIf(ctx, attempt, s.clock.Since(start), err) {
+				if opt.StopIf != nil && opt.StopIf(ctx, attempt, w.clock.Since(start), err) {
 					err = backoff.Permanent(err)
 				}
 				return err

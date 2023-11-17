@@ -10,14 +10,13 @@ import (
 	"github.com/benbjohnson/clock"
 )
 
-// `workflow` provides different levels of timeout:
+// `flow` provides different levels of timeout:
 //
 //   - Retry level timeout
 //   - Step level timeout
 
 // WaitDone will be pending until the context is done.
 type WaitDone struct {
-	flow.Base
 	StartDo chan<- struct{} // signal it everytime start Do()
 }
 
@@ -27,6 +26,8 @@ func (p *WaitDone) Do(ctx context.Context) error {
 	fmt.Println("done")
 	return ctx.Err()
 }
+
+func (p *WaitDone) String() string { return "WaitDone" }
 
 func ExampleTimeout() {
 	// use mock clock
@@ -39,7 +40,6 @@ func ExampleTimeout() {
 
 	workflow.Add(
 		flow.Steps(&WaitDone{
-			Base:    flow.Base{StepName: "WaitDone"},
 			StartDo: started,
 		}).Retry(func(ro *flow.RetryOption) {
 			ro.Attempts = 5
@@ -58,7 +58,7 @@ func ExampleTimeout() {
 	wg.Add(1)
 	go func() {
 		// you can, actually, pass a context with timeout to set a Workflow level timeout
-		err = workflow.Run(context.Background())
+		err = workflow.Do(context.Background())
 		wg.Done()
 	}()
 	go func() {
@@ -72,7 +72,7 @@ func ExampleTimeout() {
 	// Output:
 	// done
 	// done
-	// WaitDone [Failed]: context deadline exceeded
+	// WaitDone [Canceled]: context deadline exceeded
 }
 
 // testTimer is a Timer that all retry intervals are immediate (0).

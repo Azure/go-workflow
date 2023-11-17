@@ -17,7 +17,7 @@ import (
 // WorkflowOption can be passed to Workflow via `(*Workflow).Options()`
 
 func ExampleWorkflowWithMaxConcurrency() {
-	workflow := flow.New()
+	workflow := &flow.Workflow{}
 
 	start := make(chan struct{})
 	counter := new(atomic.Int32)
@@ -46,7 +46,7 @@ func ExampleWorkflowWithMaxConcurrency() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = workflow.Run(context.TODO())
+		_ = workflow.Do(context.TODO())
 	}()
 
 	// should only two Steps are running concurrently
@@ -69,33 +69,4 @@ func ExampleWorkflowWithMaxConcurrency() {
 	// Output:
 	// 2
 	// 3
-}
-
-func ExampleWorkflowWithWhen() {
-	workflow := flow.New()
-
-	a := new(ArbitraryTask)
-
-	workflow.Add(
-		flow.Step(a),
-	)
-
-	ctx := context.WithValue(context.Background(), "key", "value")
-
-	workflow.Options(
-		flow.WithWhen(func(ctx context.Context) bool {
-			// you can access the context here
-			value := ctx.Value("key").(string)
-			fmt.Println(value)
-			// true  -> run the Workflow
-			// false -> skip the Workflow
-			return value != "value"
-		}),
-	)
-
-	_ = workflow.Run(ctx)
-	fmt.Println(a.GetStatus())
-	// Output:
-	// value
-	// Skipped
 }

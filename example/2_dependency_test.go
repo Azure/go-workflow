@@ -9,7 +9,7 @@ import (
 
 // Steps are connected with dependencies to form a Workflow.
 //
-// `workflow` provides rich featured Step dependency builders,
+// `flow` provides rich featured Step dependency builders,
 // and the syntax is pretty close to plain English:
 //
 //	Step(someTask).DependsOn(upstreamTask)
@@ -17,11 +17,13 @@ import (
 //
 // Most time, `Step` and `Steps` are mutually exchangeable.
 // The only difference is that:
-//   - Step is a generic builder accepting `Input` and `InputDependsOn`, check next session about I/O for more details.
+//
+//	Step is a generic builder accepting method `Input` and `InputDependsOn`, check next session about I/O for more details.
 func ExampleDeclareDependency() {
 	workflow := new(flow.Workflow)
 
-	// Besides, `workflow` also provides a convenient way to create a Step implementation without declaring type.
+	// Besides, `flow` also provides a convenient way to create a Step implementation without declaring type,
+	// (since you need a type to implement interface `Steper`).
 	// Use `Func` to wrap any arbitrary function into a Step.
 	doNothing := func(context.Context) error { return nil }
 	var (
@@ -36,22 +38,13 @@ func ExampleDeclareDependency() {
 		flow.Steps(b, c).DependsOn(d),
 	)
 
-	dep := workflow.Dep()
-	fmt.Println(getUpstreamNames(dep[a]))
-	fmt.Println(getUpstreamNames(dep[b]))
-	fmt.Println(getUpstreamNames(dep[c]))
-	fmt.Println(getUpstreamNames(dep[d]))
+	fmt.Println(workflow.UpstreamOf(a))
+	fmt.Println(workflow.UpstreamOf(b))
+	fmt.Println(workflow.UpstreamOf(c))
+	fmt.Println(workflow.UpstreamOf(d))
 	// Output:
-	// [b c]
-	// [d]
-	// [d]
-	// []
-}
-
-func getUpstreamNames(ups []flow.Link) []string {
-	rv := []string{}
-	for _, up := range ups {
-		rv = append(rv, up.Upstream.String())
-	}
-	return rv
+	// map[b:{Pending <nil>} c:{Pending <nil>}]
+	// map[d:{Pending <nil>}]
+	// map[d:{Pending <nil>}]
+	// map[]
 }

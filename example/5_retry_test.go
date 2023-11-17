@@ -20,7 +20,6 @@ import (
 
 // PassAfter keeps failing until the attempt reaches the given number.
 type PassAfter struct {
-	flow.Base
 	Attempt int
 	count   int
 }
@@ -48,7 +47,7 @@ func ExampleRetry() {
 		}),
 	)
 
-	_ = workflow.Run(context.TODO())
+	_ = workflow.Do(context.TODO())
 	// Output:
 	// failed at attempt 0
 	// failed at attempt 1

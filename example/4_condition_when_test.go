@@ -7,78 +7,103 @@ import (
 	flow "github.com/Azure/go-workflow"
 )
 
-// Workflow tracks each Step's status, and decides whether should queue Step based on When and Condition.
+// Workflow tracks and updates each Step's status according to the result and When
+// `flow` designs the status check function respecting to https://docs.github.com/en/actions/learn-github-actions/expressions#status-check-functions
 //
-// The relations between StepStatus, When and Condition are:
+// StepStatus are:
+//   - Pending
+//   - Running
+//   - Failed
+//   - Succeeded
+//   - Canceled
+//   - Skipped
 //
-//													  /--false-> StepStatusCanceled
-//	StepStatusPending -> [When] ---true--> [Condition] --true--> StepStatusRunning --err == nil--> StepStatusSucceeded
-//								\--false-> StepStatusSkipped					   \--err != nil--> StepStatusFailed
+// Only Pending Step can be queued to be executed.
 //
-// In a word,
-//   - When:      decides whether the Step should be **Skipped**
-//   - Condition: decides whether the Step should be **Canceled**
+// Before kicking the Step off, Workflow will check current Step's When setting
 //
-// Canceled vs Skipped
-//   - When: will be propagated through dependency to Downstream(s),
-//     i.e. A depends on B, if B is Skipped, A will be Skipped.
-//   - Condition: will still be evaulated by Downstream's Condition,
-//     i.e. A depends on B, if B is Canceled, and A's Condition is 'Canceled', the A will still Run.
+//	// When is a function to determine what's the next status of Step.
+//	// When makes the decision based on the status and result of all the Upstream Steps.
+//	// When is only called when all Upstreams are terminated.
+//	type When func(context.Context, map[Steper]StatusErr) StepStatus
 //
-// Conditions have these predefined ones:
-//   - Always:            all Upstreams are *terminated*
-//   - Succeeded:         all Upstreams are Succeeded
-//   - Failed:            any Upstream is Failed
-//   - SucceededOrFailed: all Upstreams are Succeeded or Failed
-//   - Canceled:          any Upstream is Canceled
+// After When makes the decision of next status, Workflow will update Step's status accordingly.
 //
-// Terminated StepStaus are:
-//   - StepStatusFailed
-//   - StepStatusSucceeded
-//   - StepStatusCanceled
-//
-// Only succeeded Upstreams will flow Output to Downstreams Input.
-type ArbitraryTask struct{ flow.Base }
-type FailedStep struct{ flow.Base }
+// If the decision is to run the Step, Workflow starts a goroutine to run the Step and set the status to Running.
+type SucceededStep struct{}
+type FailedStep struct{}
+type CanceledStep struct{}
+type SkippedStep struct{}
 
-func (a *ArbitraryTask) Do(context.Context) error { return nil }
-func (a *FailedStep) Do(context.Context) error    { return fmt.Errorf("failed!") }
+func (s *SucceededStep) Do(context.Context) error { return nil }
+func (s *FailedStep) Do(context.Context) error    { return fmt.Errorf("failed!") }
+func (s *CanceledStep) Do(context.Context) error  { return flow.Cancel(fmt.Errorf("cancel")) }
+func (s *SkippedStep) Do(context.Context) error   { return flow.Skip(fmt.Errorf("skip")) }
 
 func ExampleConditionWhen() {
-	workflow := new(flow.Workflow)
-
 	var (
-		skipMe          = new(ArbitraryTask)
-		skipMeToo       = new(ArbitraryTask)
-		cancelMe        = new(ArbitraryTask)
-		runWhenCanceled = new(ArbitraryTask)
-		then            = new(ArbitraryTask)
-		failed          = new(FailedStep)
+		succeeded = new(SucceededStep)
+		failed    = new(FailedStep)
+		canceled  = new(CanceledStep)
+		skipped   = new(SkippedStep)
+
+		allSucceeded = flow.Func("allSucceeded", func(context.Context) error {
+			fmt.Println("AllSucceeded")
+			return nil
+		})
+		always = flow.Func("always", func(context.Context) error {
+			fmt.Println("Always")
+			return nil
+		})
+		anyFailed = flow.Func("anyFailed", func(ctx context.Context) error {
+			fmt.Println("AnyFailed")
+			return nil
+		})
+		beCanceled = flow.Func("beCanceled", func(ctx context.Context) error {
+			fmt.Println("BeCanceled")
+			return nil
+		})
 	)
 
+	workflow := new(flow.Workflow)
 	workflow.Add(
-		flow.Step(skipMe).When(flow.Skip),
-		flow.Step(skipMeToo).DependsOn(skipMe),
-		flow.Step(cancelMe).Condition(func(ups []flow.Steper) bool {
-			return false // always cancel
-		}),
-		flow.Step(runWhenCanceled).
-			DependsOn(cancelMe).
-			Condition(flow.Canceled),
-		flow.Step(then).
-			DependsOn(failed).
-			Condition(flow.SucceededOrFailed),
+		// AllSucceeded will run when all Upstreams are Succeeded
+		flow.Step(allSucceeded).DependsOn(succeeded, failed, canceled, skipped).
+			When(flow.AllSucceeded),
+		flow.Step(anyFailed).DependsOn(succeeded, failed, canceled, skipped).
+			When(flow.AnyFailed),
 	)
-	_ = workflow.Run(context.Background())
-	fmt.Println(skipMe.GetStatus())
-	fmt.Println(cancelMe.GetStatus())
-	fmt.Println(runWhenCanceled.GetStatus())
-	fmt.Println(failed.GetStatus())
-	fmt.Println(then.GetStatus())
-	// Output:
+	_ = workflow.Do(context.Background())
+	// AnyFailed
+	fmt.Println(workflow.StatusOf(allSucceeded))
 	// Skipped
+
+	workflow = new(flow.Workflow)
+	workflow.Add(
+		// Always will run the Step regardlessly
+		flow.Step(always).DependsOn(succeeded, failed, canceled, skipped).
+			When(flow.Always),
+		// BeCanceled will run when the workflow is canceled
+		flow.Step(beCanceled).When(flow.BeCanceled),
+		// will be canceled
+		flow.Step(succeeded).When(flow.AllSucceeded),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // just cancel this ctx
+	_ = workflow.Do(ctx)
+	// Always
+	// BeCanceled
+	fmt.Println(workflow.StatusOf(succeeded))
 	// Canceled
-	// Succeeded
-	// Failed
-	// Succeeded
+
+	workflow = new(flow.Workflow)
+	workflow.Add(
+		flow.Step(succeeded).DependsOn(canceled),
+	)
+	// Output:
+	// AnyFailed
+	// Skipped
+	// Always
+	// BeCanceled
+	// Canceled
 }

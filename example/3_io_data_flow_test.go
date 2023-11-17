@@ -12,17 +12,23 @@ import (
 // After connected Steps into Workflow via dependencies,
 // there is a very common scenarios that passing value / data through dependency.
 //
-// `workflow` is designed with the support of flowing data between Steps.
-// In order to connect the Steps with I/O, use generic function Step() instead of Steps()
+// `flow` is designed with the support of flowing data between Steps.
+// In order to connect the Steps with data flow among them, use InputDependsOn().
+// In order to add callbacks to modify the Input of the Step at runtime, use Input().
 //
 //	Step(someTask).
 //		Input(func(_ context.Context, i *SomeTask) error { ... }).
 //		InputDependsOn(
 //			Adapt(upstream, func(_ context.Context, o *Upstream, i *SomeTask) error { ... }),
 //		)
+//
+// Notice the callbacks declares in Input() and InputDependsOn() are executed at runtime and per-retry.
+//
+// Q: why not just pass the values outside, but rather use Input callbacks?
+// A: if the values are assigned to Step outside of Input callbacks, the values are assigned only once at the beginning,
+// and moreover, at the building workflow stage, the values could be not available yet.
 
 type SayHello struct {
-	flow.Base
 	Who    string
 	Output string
 }
@@ -34,7 +40,6 @@ func (s *SayHello) Do(context.Context) error {
 }
 
 type ImBob struct {
-	flow.Base
 	Output string
 }
 
@@ -44,7 +49,6 @@ func (i *ImBob) Do(context.Context) error {
 }
 
 type ReverseOrder struct {
-	flow.Base
 	Slice []string
 }
 
@@ -53,11 +57,10 @@ func (r *ReverseOrder) Do(context.Context) error {
 	return nil
 }
 
-func ExampleInOut() {
-	// Now, let's connect the Steps into a Workflow!
+func ExampleDataFlow() {
+	// Now, let's connect the Steps into Workflow with data flow.
 	workflow := new(flow.Workflow)
 
-	// create Steps
 	imBob := new(ImBob)
 	sayHello := &SayHello{
 		// initialize fields in variable declaration is not encouraged, please use Input() or InputDependsOn() callback.
@@ -67,11 +70,10 @@ func ExampleInOut() {
 	}
 
 	workflow.Add(
-		// use InputDependsOn() with Adapt() to connect the Steps with I/O.
+		// use InputDependsOn() with Adapt() to connect the Steps
 		flow.Step(sayHello).
 			InputDependsOn(
 				flow.Adapt(imBob, func(_ context.Context, imBob *ImBob, sayHello *SayHello) error {
-					// This callback will be executed at runtime and per-retry.
 					sayHello.Who = imBob.Output // imBob's Output will be passed to sayHello's Input
 					return nil
 				}),
@@ -80,7 +82,7 @@ func ExampleInOut() {
 			Input(func(ctx context.Context, sayHello *SayHello) error {
 				// This callback will be executed at runtime and per-retry.
 				// And the order of execution is respected to the order of declaration,
-				// means here,
+				// means that,
 				// sayHello.Who = imBob.Output is already executed
 				// then
 				sayHello.Who += " and Alice"
@@ -88,13 +90,11 @@ func ExampleInOut() {
 			}),
 	)
 
-	// However, in most real world scenarios, the Upstream's Output and Downstream's Input are not the same type.
-	// In this case, we need to use an Adapter to connect them.
 	reverseOrder := new(ReverseOrder)
 	workflow.Add(
 		flow.Step(reverseOrder).InputDependsOn(
 			flow.Adapt(sayHello, func(_ context.Context, sayHello *SayHello, reverseOrder *ReverseOrder) error {
-				// In this adapt function, you can transform the Upstream as Output to Downstream's Input
+				// In this adapt function, you can transform the Upstream to Downstream's Input
 				// "Hello Bob and Alice" => []string{"Hello", "Bob", "and", "Alice"}
 				reverseOrder.Slice = strings.Split(sayHello.Output, " ")
 				return nil
@@ -102,7 +102,7 @@ func ExampleInOut() {
 		),
 	)
 
-	_ = workflow.Run(context.TODO())
+	_ = workflow.Do(context.TODO())
 
 	// After the Workflow is finished, you can get the result from the Output of the last Step.
 	fmt.Println(reverseOrder.Slice)

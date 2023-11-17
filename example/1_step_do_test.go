@@ -17,33 +17,23 @@ import (
 //
 // They cooperate to provide features:
 //
-//   - Steps are easy to implement
+//   - Steps are easy to implement, just implement interface `Steper`
 //   - Declare dependencies between Steps to form a Workflow
 //   - Workflow executes Steps in a topological order
 //
 // Let's start with implementing a Step:
 //
-// To satisfy the interface of Steper,
-// it's required to embed Base struct into your Step implement struct.
-type Foo struct {
-	// Base inherits methods that required by a Step interface.
-	// Read the document of Base for more details.
-	flow.Base
-}
-
-// Besides the Base struct, user also needs to implement the Do() method.
+// To satisfy the interface of Steper, just implement method
 //
-//	type Steper interface {
-//		Do(context.Context) error	// the main logic
-//		String() string				// [optional] give this step a name
-//		...
-//	}
+//	Do(context.Context) error
+type Foo struct{}
+
 func (f *Foo) Do(ctx context.Context) error {
 	fmt.Println("Foo")
 	return nil
 }
 
-type Bar struct{ flow.Base }
+type Bar struct{}
 
 func (b *Bar) Do(context.Context) error {
 	fmt.Println("Bar")
@@ -64,10 +54,10 @@ func ExampleSimple() {
 	)
 
 	// As the code says, step `foo` depends on step `bar`, or `bar` happens-before `foo`.
-	// In `fl` terms, we call `foo` as Downstream, `bar` as Upstream, since the flow is from Up to Down.
-	// We'll cover dependency in next session.
+	// In `flow` terms, we call `foo` as Downstream, `bar` as Upstream, since the flow is from Up to Down.
+	// We'll cover dependency detail in next session.
 
-	_ = workflow.Run(context.TODO())
+	_ = workflow.Do(context.TODO())
 	// Output:
 	// Bar
 	// Foo
