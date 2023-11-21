@@ -124,10 +124,16 @@ func (w *Workflow) PhaseOf(step Steper) Phase {
 	return PhaseUnknown
 }
 func (w *Workflow) UpstreamOf(step Steper) map[Steper]StatusErr {
-	return w.listStatusErr(step, func(d Dependency) func(Steper) Set[Steper] { return d.UpstreamOf })
+	if w.chain == nil {
+		return nil
+	}
+	return w.listStatusErr(w.chain[step], func(d Dependency) func(Steper) Set[Steper] { return d.UpstreamOf })
 }
 func (w *Workflow) DownstreamOf(step Steper) map[Steper]StatusErr {
-	return w.listStatusErr(step, func(d Dependency) func(Steper) Set[Steper] { return d.DownstreamOf })
+	if w.chain == nil {
+		return nil
+	}
+	return w.listStatusErr(w.chain[step], func(d Dependency) func(Steper) Set[Steper] { return d.DownstreamOf })
 }
 
 // IsTerminated returns true if all Steps terminated.
@@ -141,7 +147,7 @@ func (w *Workflow) IsTerminated() bool {
 }
 func (w *Workflow) IsPhaseTerminated(phase Phase) bool {
 	for step := range w.dep[phase] {
-		if !w.states[step].Status.IsTerminated() {
+		if w.states != nil && w.states[step] != nil && !w.states[step].Status.IsTerminated() {
 			return false
 		}
 	}
@@ -185,7 +191,7 @@ func (w *Workflow) Do(ctx context.Context) error {
 	// return the error
 	wErr := make(ErrWorkflow)
 	for step, err := range w.err {
-		wErr[step] = StatusErr{w.states[step].Status, err}
+		wErr[step] = &StatusErr{w.states[step].Status, err}
 	}
 	if wErr.IsNil() {
 		return nil

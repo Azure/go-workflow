@@ -43,18 +43,20 @@ func (e *StatusErr) Error() string { return fmt.Sprintf("[%s] %s", e.Status, e.E
 func (e *StatusErr) Unwrap() error { return e.Err }
 
 // ErrWorkflow contains all errors of Steps in a Workflow.
-type ErrWorkflow map[Steper]StatusErr
+type ErrWorkflow map[Steper]*StatusErr
 
 func (e ErrWorkflow) Error() string {
 	builder := new(strings.Builder)
 	for step, serr := range e {
-		builder.WriteString(fmt.Sprintf("%s [%s]: %s\n", step, serr.Status, serr.Err))
+		if serr != nil {
+			builder.WriteString(fmt.Sprintf("%s [%s]: %s\n", step, serr.Status, serr.Err))
+		}
 	}
 	return builder.String()
 }
 func (e ErrWorkflow) IsNil() bool {
 	for _, sErr := range e {
-		if sErr.Err != nil {
+		if sErr != nil && sErr.Err != nil {
 			return false
 		}
 	}

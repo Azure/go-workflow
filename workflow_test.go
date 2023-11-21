@@ -9,6 +9,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestNil(t *testing.T) {
+	workflow := new(Workflow)
+	t.Run("nil step", func(t *testing.T) {
+		assert.Nil(t, workflow.Steps())
+		assert.Nil(t, workflow.StateOf(nil))
+		assert.Equal(t, PhaseUnknown, workflow.PhaseOf(nil))
+		assert.Nil(t, workflow.DownstreamOf(nil))
+		assert.Nil(t, workflow.UpstreamOf(nil))
+		assert.True(t, workflow.IsTerminated())
+	})
+	t.Run("step not in workflow", func(t *testing.T) {
+		step := Func("step", func(ctx context.Context) error { return nil })
+		assert.Nil(t, workflow.Steps())
+		assert.Nil(t, workflow.StateOf(step))
+		assert.Equal(t, PhaseUnknown, workflow.PhaseOf(step))
+		assert.Nil(t, workflow.DownstreamOf(step))
+		assert.Nil(t, workflow.UpstreamOf(step))
+	})
+}
+
 func TestDep(t *testing.T) {
 	a := Func("A", func(ctx context.Context) error { return nil })
 	b := Func("B", func(ctx context.Context) error { return nil })
@@ -142,7 +162,7 @@ func TestWorkflowWillRecover(t *testing.T) {
 }
 
 func TestWorkflowErr(t *testing.T) {
-	t.Run("Workflow without error, Err() should also return nil", func(t *testing.T) {
+	t.Run("Workflow without error, should also return nil", func(t *testing.T) {
 		t.Parallel()
 		workflow := new(Workflow)
 		workflow.Add(
@@ -151,7 +171,7 @@ func TestWorkflowErr(t *testing.T) {
 		err := workflow.Do(context.Background())
 		assert.NoError(t, err)
 	})
-	t.Run("Workflow with error, iterate Err() to access all errors", func(t *testing.T) {
+	t.Run("Workflow with error, return ErrWorkflow", func(t *testing.T) {
 		t.Parallel()
 		workflow := new(Workflow)
 		workflow.Add(
@@ -159,11 +179,12 @@ func TestWorkflowErr(t *testing.T) {
 			Step(Func("B", func(ctx context.Context) error { return fmt.Errorf("B") })),
 		)
 		err := workflow.Do(context.Background())
-		assert.Error(t, err)
-		for step, stepErr := range workflow.err {
+		var errWorkflow ErrWorkflow
+		assert.ErrorAs(t, err, &errWorkflow)
+		for step, stepErr := range errWorkflow {
 			switch fmt.Sprint(step) {
 			case "A":
-				assert.NoError(t, stepErr)
+				assert.NoError(t, stepErr.Err)
 			case "B":
 				assert.ErrorContains(t, stepErr, "B")
 			}
