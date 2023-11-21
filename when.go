@@ -19,7 +19,11 @@ const (
 )
 
 func (s StepStatus) IsTerminated() bool {
-	return s == Failed || s == Succeeded || s == Canceled || s == Skipped
+	switch s {
+	case Failed, Succeeded, Canceled, Skipped:
+		return true
+	}
+	return false
 }
 
 func (s StepStatus) String() string {

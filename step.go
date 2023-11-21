@@ -12,7 +12,7 @@ type WorkflowAdd interface {
 type WorkflowAddOption struct {
 	Upstream Steper
 	Input    func(context.Context) error
-	State    func(*StepState)
+	Option   func(*StepOption)
 }
 
 // Steps declares a series of Steps.
@@ -129,7 +129,7 @@ func (as AddSteps) DependsOn(ups ...Steper) AddSteps {
 func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
 	for step := range as {
 		as[step] = append(as[step], WorkflowAddOption{
-			State: func(ss *StepState) {
+			Option: func(ss *StepOption) {
 				ss.Timeout = timeout
 			},
 		})
@@ -141,7 +141,7 @@ func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
 func (as AddSteps) When(when When) AddSteps {
 	for step := range as {
 		as[step] = append(as[step], WorkflowAddOption{
-			State: func(ss *StepState) {
+			Option: func(ss *StepOption) {
 				ss.When = when
 			},
 		})
@@ -164,7 +164,7 @@ func appendRetry(opt *RetryOption, fns ...func(*RetryOption)) *RetryOption {
 func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 	for step := range as {
 		as[step] = append(as[step], WorkflowAddOption{
-			State: func(ss *StepState) {
+			Option: func(ss *StepOption) {
 				ss.RetryOption = appendRetry(ss.RetryOption, opts...)
 			},
 		})

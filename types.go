@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"time"
 )
 
 // Steper is basic unit of a Workflow.
@@ -11,6 +12,14 @@ import (
 // Please do not expect the type of Steper, use Is() or As() if you need to check / get the typed step from the step tree.
 type Steper interface {
 	Do(context.Context) error
+}
+
+// StepOption saves the option for a Step in Workflow,
+// including its timeout, retry options, etc.
+type StepOption struct {
+	RetryOption *RetryOption
+	When        When
+	Timeout     time.Duration
 }
 
 type set[T comparable] map[T]struct{}
