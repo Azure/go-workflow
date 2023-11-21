@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // StepStatus describes the status of a Step.
@@ -28,18 +29,19 @@ func (s StepStatus) String() string {
 	case Running, Failed, Succeeded, Canceled, Skipped:
 		return string(s)
 	default:
-		return "Unknown"
+		return fmt.Sprintf("Unknown(%s)", string(s))
 	}
 }
 
 // When is a function to determine what's the next status of Step.
 // When makes the decision based on the status and result of all the Upstream Steps.
 // When is only called when all Upstreams are terminated.
-type When func(ctx context.Context, ups map[Steper]StatusErr) StepStatus
+type When func(ctx context.Context, ups map[Steper]StatusError) StepStatus
 
 var (
-	DefaultWhen       When = AllSucceeded
-	DefaultIsCanceled      = func(err error) bool {
+	DefaultWhen When = AllSucceeded
+	// DefaultIsCanceled is used to determine whether an error is being regarded as canceled.
+	DefaultIsCanceled = func(err error) bool {
 		switch {
 		case errors.Is(err, context.Canceled),
 			errors.Is(err, context.DeadlineExceeded),
@@ -51,12 +53,12 @@ var (
 )
 
 // Always: as long as all Upstreams are terminated
-func Always(context.Context, map[Steper]StatusErr) StepStatus {
+func Always(context.Context, map[Steper]StatusError) StepStatus {
 	return Running
 }
 
 // AllSucceeded: all Upstreams are Succeeded
-func AllSucceeded(ctx context.Context, ups map[Steper]StatusErr) StepStatus {
+func AllSucceeded(ctx context.Context, ups map[Steper]StatusError) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Canceled
 	}
@@ -69,7 +71,7 @@ func AllSucceeded(ctx context.Context, ups map[Steper]StatusErr) StepStatus {
 }
 
 // BeCanceled: only run when the workflow is canceled
-func BeCanceled(ctx context.Context, ups map[Steper]StatusErr) StepStatus {
+func BeCanceled(ctx context.Context, ups map[Steper]StatusError) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Running
 	}
@@ -77,7 +79,7 @@ func BeCanceled(ctx context.Context, ups map[Steper]StatusErr) StepStatus {
 }
 
 // AnyFailed: any Upstream is Failed
-func AnyFailed(ctx context.Context, ups map[Steper]StatusErr) StepStatus {
+func AnyFailed(ctx context.Context, ups map[Steper]StatusError) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Canceled
 	}

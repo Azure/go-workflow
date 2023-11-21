@@ -9,11 +9,12 @@ import (
 
 var DefaultRetryOption = RetryOption{
 	Backoff:  backoff.NewExponentialBackOff(),
-	Attempts: 10,
+	Attempts: 3,
 }
 
+// RetryOption customizes retry behavior of a Step in Workflow.
 type RetryOption struct {
-	Timeout  time.Duration // 0 means no timeout, it's per-Retry timeout
+	Timeout  time.Duration // 0 means no timeout, it's per-retry timeout
 	Attempts uint64        // 0 means no limit
 	StopIf   func(ctx context.Context, attempt uint64, since time.Duration, err error) bool
 	Backoff  backoff.BackOff
@@ -21,16 +22,23 @@ type RetryOption struct {
 	Timer    backoff.Timer
 }
 
+// retry constructs a do function with retry enabled according to the option.
 func (w *Workflow) retry(opt *RetryOption) func(
 	ctx context.Context,
 	fn func(context.Context) error,
 	notAfter time.Time, // the Step level timeout ddl
 ) error {
-	return func(ctx context.Context, fn func(context.Context) error, notAfter time.Time) error {
-		if opt.Attempts > 0 {
-			opt.Backoff = backoff.WithMaxRetries(opt.Backoff, opt.Attempts)
+	if opt == nil {
+		return func(ctx context.Context, fn func(context.Context) error, notAfter time.Time) error {
+			return fn(ctx)
 		}
-		opt.Backoff = backoff.WithContext(opt.Backoff, ctx)
+	}
+	return func(ctx context.Context, fn func(context.Context) error, notAfter time.Time) error {
+		backOff := opt.Backoff
+		backOff = backoff.WithContext(backOff, ctx)
+		if opt.Attempts > 0 {
+			backOff = backoff.WithMaxRetries(backOff, opt.Attempts)
+		}
 		attempt := uint64(0)
 		start := w.clock.Now()
 		return backoff.RetryNotifyWithTimer(
@@ -50,7 +58,7 @@ func (w *Workflow) retry(opt *RetryOption) func(
 				}
 				return err
 			},
-			opt.Backoff,
+			backOff,
 			opt.Notify,
 			opt.Timer,
 		)

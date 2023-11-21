@@ -5,10 +5,10 @@ import (
 	"strings"
 )
 
-// Cancel will mark the current step Canceled.
+// Cancel will mark the current step `Canceled`.
 func Cancel(err error) ErrCancel { return ErrCancel{Err: err} }
 
-// Skip will mark the current step Skipped.
+// Skip will mark the current step `Skipped`.
 func Skip(err error) ErrSkip { return ErrSkip{Err: err} }
 
 type ErrCancel struct{ Err error }
@@ -19,38 +19,42 @@ func (e ErrCancel) Unwrap() error { return e.Err }
 func (e ErrSkip) Error() string   { return e.Err.Error() }
 func (e ErrSkip) Unwrap() error   { return e.Err }
 
-// ErrInput indicates the error happens in passing Upstream's Output to Downstream's Input.
+// ErrInput indicates the error happens in feeding input to a Step.
 //
 //	Input(func(ctx context.Context, s *SomeStep) error {
 //		return err
+//	})
+//
+// or
+//
+//	Input(func(_ context.Context, _ *SomeStep) error {
+//		panic(err)
 //	})
 type ErrInput struct {
 	Err error
 	To  Steper
 }
 
-func (e *ErrInput) Error() string {
-	return fmt.Sprintf("ErrInput(%s): %s", e.To, e.Err)
-}
+func (e *ErrInput) Error() string { return fmt.Sprintf("ErrInput(%s): %s", e.To, e.Err) }
 func (e *ErrInput) Unwrap() error { return e.Err }
 
-type StatusErr struct {
+// StatusError tracks the status and error of a Step.
+type StatusError struct {
 	Status StepStatus
 	Err    error
 }
 
-func (e *StatusErr) Error() string { return fmt.Sprintf("[%s] %s", e.Status, e.Err) }
-func (e *StatusErr) Unwrap() error { return e.Err }
+func (e *StatusError) Error() string { return fmt.Sprintf("[%s] %s", e.Status, e.Err) }
+func (e *StatusError) Unwrap() error { return e.Err }
 
-// ErrWorkflow contains all errors of Steps in a Workflow.
-type ErrWorkflow map[Steper]*StatusErr
+// ErrWorkflow contains all errors reported from terminated Steps.
+type ErrWorkflow map[Steper]*StatusError
 
 func (e ErrWorkflow) Error() string {
 	builder := new(strings.Builder)
 	for step, serr := range e {
-		if serr != nil {
-			builder.WriteString(fmt.Sprintf("%s [%s]: %s\n", step, serr.Status, serr.Err))
-		}
+		builder.WriteString(fmt.Sprintf("%s: ", step))
+		builder.WriteString(fmt.Sprintln(serr))
 	}
 	return builder.String()
 }
@@ -66,7 +70,7 @@ func (e ErrWorkflow) IsNil() bool {
 var ErrWorkflowIsRunning = fmt.Errorf("Workflow is running, please wait for it terminated")
 var ErrWorkflowHasRun = fmt.Errorf("Workflow has run, check result error via .Err()")
 
-// Only when the Step status is not StepStautsPending when Workflow starts to run.
+// Step status is not Pending when Workflow starts to run.
 type ErrUnexpectStepInitStatus map[Steper]StepStatus
 
 func (e ErrUnexpectStepInitStatus) Error() string {

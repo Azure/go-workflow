@@ -140,8 +140,8 @@ func (sc StepTree) Add(step Steper) (root Steper) {
 }
 
 // Roots returns all root steps in the tree.
-func (sc StepTree) Roots() Set[Steper] {
-	rv := make(Set[Steper])
+func (sc StepTree) Roots() set[Steper] {
+	rv := make(set[Steper])
 	for _, v := range sc {
 		rv.Add(v)
 	}

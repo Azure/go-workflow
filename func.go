@@ -4,7 +4,12 @@ import (
 	"context"
 )
 
-// FuncIO constructs a Step from an arbitrary function
+// Func constructs a Step from an arbitrary function
+func Func(name string, do func(context.Context) error) *Function[struct{}, struct{}] {
+	return FuncIO[struct{}, struct{}](name, func(ctx context.Context, _ struct{}) (struct{}, error) {
+		return struct{}{}, do(ctx)
+	})
+}
 func FuncIO[I, O any](name string, do func(context.Context, I) (O, error)) *Function[I, O] {
 	f := &Function[I, O]{Name: name, do: do}
 	return f
@@ -19,12 +24,8 @@ func FuncO[O any](name string, do func(context.Context) (O, error)) *Function[st
 		return do(ctx)
 	})
 }
-func Func(name string, do func(context.Context) error) *Function[struct{}, struct{}] {
-	return FuncIO[struct{}, struct{}](name, func(ctx context.Context, _ struct{}) (struct{}, error) {
-		return struct{}{}, do(ctx)
-	})
-}
 
+// Function wraps an arbitrary function as a Step.
 type Function[I, O any] struct {
 	Name   string
 	Input  I
