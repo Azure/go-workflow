@@ -1,7 +1,32 @@
 package flow
 
 // Is reports whether the any step in step's chain matches target type.
-func Is[T Steper](s Steper) bool { return len(As[T](s)) > 0 }
+func Is[T Steper](s Steper) bool {
+	if s == nil {
+		return false
+	}
+	for {
+		if _, ok := s.(T); ok {
+			return true
+		}
+		switch u := s.(type) {
+		case interface{ Unwrap() Steper }:
+			s = u.Unwrap()
+			if s == nil {
+				return false
+			}
+		case interface{ Unwrap() []Steper }:
+			for _, s := range u.Unwrap() {
+				if Is[T](s) {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
+}
 
 // As finds all steps in the tree of step that matches target type, and returns them.
 func As[T Steper](s Steper) []T {
@@ -41,6 +66,7 @@ func (ns *NamedStep) Unwrap() Steper { return ns.Steper }
 
 // StepTree records trees of steps, steps are chained with Unwrap() method.
 //
+// StepTree is actually a disjoint-set, where keys are each step in the chain, and values are the root step.
 // i.e.
 //
 //	StepA -- StepA.Unwrap() --> StepB -- StepB.Unwrap() --> StepC, StepD
@@ -60,22 +86,23 @@ type StepTree map[Steper]Steper
 // RootOf returns the root step of step in the tree.
 func (st StepTree) RootOf(step Steper) Steper { return st[step] }
 
-// Add step to tree, returns the new and old roots of the branch(s).
-func (sc StepTree) Add(step Steper) (new Steper, olds []Steper) {
+func (sc StepTree) Add(step Steper) (newRoot Steper, oldRoots set[Steper]) {
 	if step == nil {
 		return nil, nil
 	}
-	root, exist := sc[step]
-	if exist {
-		return root, []Steper{root}
+	oldRoots = make(set[Steper])
+	if root, ok := sc[step]; ok {
+		newRoot = root
+		oldRoots.Add(root)
+		return
 	}
-	// current step now becomes new root!
-	new = step
+	// now current step becomes new root!
+	newRoot = step
 	for {
-		if root, ok := sc[step]; ok {
-			olds = append(olds, root)
+		if pRoot, ok := sc[step]; ok {
+			oldRoots.Add(pRoot)
 		}
-		sc[step] = new
+		sc[step] = newRoot
 		switch u := step.(type) {
 		case interface{ Unwrap() Steper }:
 			step = u.Unwrap()
@@ -85,13 +112,9 @@ func (sc StepTree) Add(step Steper) (new Steper, olds []Steper) {
 		case interface{ Unwrap() []Steper }:
 			for _, step := range u.Unwrap() {
 				if step != nil {
-					_, sOlds := sc.Add(step)
-					sc[step] = new
-					for _, old := range sOlds {
-						if old != nil {
-							olds = append(olds, old)
-						}
-					}
+					_, olds := sc.Add(step)
+					sc[step] = newRoot
+					oldRoots.Union(olds)
 				}
 			}
 			return

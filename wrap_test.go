@@ -84,39 +84,6 @@ func TestStepTree(t *testing.T) {
 	wStep1 := &wrappedStep{Steper: step1}
 	mStep := &multiStep{steps: []Steper{step1, step2}}
 
-	t.Run("nil", func(t *testing.T) {
-		t.Run("add nil", func(t *testing.T) {
-			tree := make(StepTree)
-			new, olds := tree.Add(nil)
-			assert.Nil(t, new)
-			assert.Nil(t, olds)
-		})
-		t.Run("single wrap", func(t *testing.T) {
-			tree := make(StepTree)
-			wStepNil := &wrappedStep{nil}
-			new, olds := tree.Add(wStepNil)
-			assert.True(t, new == wStepNil)
-			assert.Nil(t, olds)
-			assert.Len(t, tree, 1)
-		})
-		t.Run("multi wrap", func(t *testing.T) {
-			tree := make(StepTree)
-			mStepNil := &multiStep{nil}
-			new, olds := tree.Add(mStepNil)
-			assert.True(t, new == mStepNil)
-			assert.Nil(t, olds)
-			assert.Len(t, tree, 1)
-		})
-		t.Run("multi wrap with nil", func(t *testing.T) {
-			tree := make(StepTree)
-			mStepNil := &multiStep{steps: []Steper{nil, step1}}
-			new, olds := tree.Add(mStepNil)
-			assert.True(t, new == mStepNil)
-			assert.Nil(t, olds)
-			assert.Len(t, tree, 2)
-			assert.True(t, tree.RootOf(step1) == mStepNil)
-		})
-	})
 	t.Run("single wrap", func(t *testing.T) {
 		tree := make(StepTree)
 		tree.Add(wStep1)
@@ -153,17 +120,50 @@ func TestStepTree(t *testing.T) {
 		assert.Equal(t, wStep1, tree.RootOf(step1))
 		assert.Equal(t, wStep1, tree.RootOf(wStep1))
 	})
+	t.Run("nil", func(t *testing.T) {
+		t.Run("add nil", func(t *testing.T) {
+			tree := make(StepTree)
+			new, olds := tree.Add(nil)
+			assert.Nil(t, new)
+			assert.Nil(t, olds)
+		})
+		t.Run("single wrap", func(t *testing.T) {
+			tree := make(StepTree)
+			wStepNil := &wrappedStep{nil}
+			new, olds := tree.Add(wStepNil)
+			assert.True(t, new == wStepNil)
+			assert.Empty(t, olds)
+			assert.Len(t, tree, 1)
+		})
+		t.Run("multi wrap", func(t *testing.T) {
+			tree := make(StepTree)
+			mStepNil := &multiStep{nil}
+			new, olds := tree.Add(mStepNil)
+			assert.True(t, new == mStepNil)
+			assert.Empty(t, olds)
+			assert.Len(t, tree, 1)
+		})
+		t.Run("multi wrap with nil", func(t *testing.T) {
+			tree := make(StepTree)
+			mStepNil := &multiStep{steps: []Steper{nil, step1}}
+			new, olds := tree.Add(mStepNil)
+			assert.True(t, new == mStepNil)
+			assert.Empty(t, olds)
+			assert.Len(t, tree, 2)
+			assert.True(t, tree.RootOf(step1) == mStepNil)
+		})
+	})
 	t.Run("escalate", func(t *testing.T) {
 		t.Run("single wrap", func(t *testing.T) {
 			tree := make(StepTree)
 			new, olds := tree.Add(step1)
 			assert.Len(t, tree, 1)
 			assert.True(t, new == step1)
-			assert.Nil(t, olds)
+			assert.Empty(t, olds)
 			new, olds = tree.Add(wStep1)
 			assert.Len(t, tree, 2)
 			assert.True(t, new == wStep1)
-			assert.ElementsMatch(t, []Steper{step1}, olds)
+			assert.Contains(t, olds, step1)
 		})
 		t.Run("multi wrap", func(t *testing.T) {
 			tree := make(StepTree)
@@ -171,19 +171,20 @@ func TestStepTree(t *testing.T) {
 			assert.Len(t, tree, 1)
 			assert.Equal(t, step1, tree.RootOf(step1))
 			assert.True(t, new == step1)
-			assert.Nil(t, olds)
+			assert.Empty(t, olds)
 			new, olds = tree.Add(step2)
 			assert.Len(t, tree, 2)
 			assert.Equal(t, step2, tree.RootOf(step2))
 			assert.True(t, new == step2)
-			assert.Nil(t, olds)
+			assert.Empty(t, olds)
 			new, olds = tree.Add(mStep)
 			assert.Len(t, tree, 3)
 			assert.Equal(t, mStep, tree.RootOf(step1))
 			assert.Equal(t, mStep, tree.RootOf(step2))
 			assert.True(t, new == mStep)
 			assert.Len(t, olds, 2)
-			assert.ElementsMatch(t, []Steper{step1, step2}, olds)
+			assert.Contains(t, olds, step1)
+			assert.Contains(t, olds, step2)
 		})
 	})
 }

@@ -105,7 +105,7 @@ func (w *Workflow) add(phase Phase, was ...WorkflowAdd) *Workflow {
 	return w
 }
 func (w *Workflow) addStep(phase Phase, step Steper) (root Steper) {
-	var olds []Steper
+	var olds set[Steper]
 	root, olds = w.tree.Add(step)
 	if _, ok := w.dep[phase][root]; !ok {
 		w.dep[phase][root] = make(set[Steper])
@@ -113,7 +113,7 @@ func (w *Workflow) addStep(phase Phase, step Steper) (root Steper) {
 	if _, ok := w.status[root]; !ok {
 		w.status[root] = Pending
 	}
-	for _, old := range olds {
+	for old := range olds {
 		if old != root {
 			w.dep[phase][root].Union(w.dep[phase][old])
 			delete(w.dep[phase], old)
