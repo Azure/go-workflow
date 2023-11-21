@@ -1,29 +1,32 @@
 package flow
 
 import (
-	"fmt"
 	"reflect"
 )
 
-type unwrapper interface {
-	Unwrap() Steper
-}
-
 // Is reports whether the any step in step's chain matches target type.
 func Is[T Steper](s Steper) bool {
-	if _, ok := s.(T); ok {
-		return true
+	if s == nil {
+		return false
 	}
 	for {
-		if u, ok := s.(unwrapper); ok {
+		if _, ok := s.(T); ok {
+			return true
+		}
+		switch u := s.(type) {
+		case interface{ Unwrap() Steper }:
 			s = u.Unwrap()
 			if s == nil {
 				return false
 			}
-			if _, ok := s.(T); ok {
-				return true
+		case interface{ Unwrap() []Steper }:
+			for _, s := range u.Unwrap() {
+				if Is[T](s) {
+					return true
+				}
 			}
-		} else {
+			return false
+		default:
 			return false
 		}
 	}
@@ -52,12 +55,20 @@ func As(s Steper, target any) bool {
 			val.Elem().Set(reflect.ValueOf(s))
 			return true
 		}
-		if u, ok := s.(unwrapper); ok {
+		switch u := s.(type) {
+		case interface{ Unwrap() Steper }:
 			s = u.Unwrap()
 			if s == nil {
 				return false
 			}
-		} else {
+		case interface{ Unwrap() []Steper }:
+			for _, s := range u.Unwrap() {
+				if As(s, target) {
+					return true
+				}
+			}
+			return false
+		default:
 			return false
 		}
 	}
@@ -74,36 +85,29 @@ type NamedStep struct {
 func (ns *NamedStep) String() string { return ns.Name }
 func (ns *NamedStep) Unwrap() Steper { return ns.Steper }
 
-// StepChain records chains of steps, steps are chained with Unwrap() method.
+// StepTree records trees of steps, steps are chained with Unwrap() method.
 //
 // i.e.
 //
-//	StepA -- StepA.Unwrap() --> StepB -- StepB.Unwrap() --> StepC
+//	StepA -- StepA.Unwrap() --> StepB -- StepB.Unwrap() --> StepC, StepD
 //
 // Then
 //
-//	StepChain = map[Steper]Steper{
+//	StepTree = map[Steper]Steper{
 //		StepA: StepA,
 //		StepB: StepA,
 //		StepC: StepA,
+//		StepD: StepA,
 //	}
 //
 // StepA is so-call "root" Step.
-type StepChain map[Steper]Steper
+type StepTree map[Steper]Steper
 
-// RootOf returns the root step of step in the chain.
-func (sc StepChain) RootOf(step Steper) Steper { return sc[step] }
+// RootOf returns the root step of step in the tree.
+func (st StepTree) RootOf(step Steper) Steper { return st[step] }
 
-// Add adds step to StepChain, and returns the root step of this step in the chain.
-//
-// Add will panic if some step in the chain has different root.
-// i.e.
-//
-//	StepA -- StepA.Unwrap() --> StepC
-//	StepB -- StepB.Unwrap() --> StepC
-//
-// Then add StepA and StepB will panic.
-func (sc StepChain) Add(step Steper) (root Steper) {
+// Add adds step to StepTree, and returns the root step of this step in the tree.
+func (sc StepTree) Add(step Steper) (root Steper) {
 	if step == nil {
 		return nil
 	}
@@ -113,23 +117,30 @@ func (sc StepChain) Add(step Steper) (root Steper) {
 	}
 	root = step
 	for {
-		pRoot, exist := sc[step]
-		if exist {
-			panic(fmt.Errorf("flow: step chain has different root for %T, root: %T, previous: %T", step, root, pRoot))
-		}
 		sc[step] = root
-		u, ok := step.(unwrapper)
-		if ok {
+		switch u := step.(type) {
+		case interface{ Unwrap() Steper }:
 			step = u.Unwrap()
-		} else {
-			break
+			if step == nil {
+				return root
+			}
+		case interface{ Unwrap() []Steper }:
+			for _, step := range u.Unwrap() {
+				switch sc.Add(step) {
+				case nil, root: // do nothing:
+				case step:
+					sc[step] = root
+				}
+			}
+			return root
+		default:
+			return root
 		}
 	}
-	return root
 }
 
-// AllRoots returns all root steps in the chain.
-func (sc StepChain) AllRoots() Set[Steper] {
+// Roots returns all root steps in the tree.
+func (sc StepTree) Roots() Set[Steper] {
 	rv := make(Set[Steper])
 	for _, v := range sc {
 		rv.Add(v)

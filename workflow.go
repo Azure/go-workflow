@@ -17,7 +17,7 @@ type Workflow struct {
 	dep    map[Phase]Dependency                     // Dependency is the graph of connected Steps
 	states map[Steper]*StepState                    // States saves the internal state(s) of Step(s)
 	inputs map[Steper][]func(context.Context) error // Inputs callbacks that will be executed before Step.Do per retry
-	chain  StepChain                                // chain of Steps, Step(s) are chained with Unwrap() method
+	tree   StepTree                                 // tree of Steps, Step(s) are chained with Unwrap() method
 
 	err               map[Steper]error // errors reported from all Steps
 	errsMu            sync.RWMutex     // need this because errs are written from each Step's goroutine
@@ -68,8 +68,8 @@ func (w *Workflow) add(phase Phase, was ...WorkflowAdder) *Workflow {
 	if w.dep[phase] == nil {
 		w.dep[phase] = make(Dependency)
 	}
-	if w.chain == nil {
-		w.chain = make(StepChain)
+	if w.tree == nil {
+		w.tree = make(StepTree)
 	}
 	for _, wa := range was {
 		for step, records := range wa.Done() {
@@ -91,7 +91,7 @@ func (w *Workflow) add(phase Phase, was ...WorkflowAdder) *Workflow {
 	return w
 }
 func (w *Workflow) addStep(phase Phase, step Steper) (root Steper) {
-	root = w.chain.Add(step)
+	root = w.tree.Add(step)
 	if _, ok := w.states[root]; !ok {
 		w.states[root] = &StepState{}
 	}
@@ -102,21 +102,31 @@ func (w *Workflow) addStep(phase Phase, step Steper) (root Steper) {
 }
 
 func (w *Workflow) Steps() Set[Steper] {
-	if w.chain == nil {
+	if w.tree == nil {
 		return nil
 	}
-	return w.chain.AllRoots()
+	return w.tree.Roots()
+}
+func (w *Workflow) Unwrap() []Steper {
+	if w.tree == nil {
+		return nil
+	}
+	rv := []Steper{}
+	for step := range w.tree.Roots() {
+		rv = append(rv, step)
+	}
+	return rv
 }
 func (w *Workflow) StateOf(step Steper) *StepState {
-	if w.states == nil || w.chain == nil {
+	if w.states == nil || w.tree == nil {
 		return nil
 	}
-	return w.states[w.chain[step]]
+	return w.states[w.tree.RootOf(step)]
 }
 func (w *Workflow) PhaseOf(step Steper) Phase {
 	for _, phase := range w.getPhases() {
-		if w.dep != nil && w.dep[phase] != nil && w.chain != nil {
-			if _, ok := w.dep[phase][w.chain[step]]; ok {
+		if w.dep != nil && w.dep[phase] != nil && w.tree != nil {
+			if _, ok := w.dep[phase][w.tree.RootOf(step)]; ok {
 				return phase
 			}
 		}
@@ -124,16 +134,16 @@ func (w *Workflow) PhaseOf(step Steper) Phase {
 	return PhaseUnknown
 }
 func (w *Workflow) UpstreamOf(step Steper) map[Steper]StatusErr {
-	if w.chain == nil {
+	if w.tree == nil {
 		return nil
 	}
-	return w.listStatusErr(w.chain[step], func(d Dependency) func(Steper) Set[Steper] { return d.UpstreamOf })
+	return w.listStatusErr(w.tree.RootOf(step), func(d Dependency) func(Steper) Set[Steper] { return d.UpstreamOf })
 }
 func (w *Workflow) DownstreamOf(step Steper) map[Steper]StatusErr {
-	if w.chain == nil {
+	if w.tree == nil {
 		return nil
 	}
-	return w.listStatusErr(w.chain[step], func(d Dependency) func(Steper) Set[Steper] { return d.DownstreamOf })
+	return w.listStatusErr(w.tree.RootOf(step), func(d Dependency) func(Steper) Set[Steper] { return d.DownstreamOf })
 }
 
 // IsTerminated returns true if all Steps terminated.

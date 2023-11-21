@@ -249,3 +249,38 @@ func keys[K comparable, V any](m map[K]V) []K {
 	}
 	return keys
 }
+
+// func TestWorkflowChainedStep(t *testing.T) {
+// 	step := &NamedStep{
+// 		Name: "I have a name",
+// 		Steper: &someStep{
+// 			value: "I have a value",
+// 		},
+// 	}
+// 	root := &rootStep{step}
+// 	t.Run("should add all steps in Unwrap() chain", func(t *testing.T) {
+// 		workflow := new(Workflow)
+// 		workflow.Add(Step(root))
+// 		assert.Len(t, workflow.dep[PhaseRun], 1)
+// 		assert.Contains(t, workflow.dep[PhaseRun], root)
+// 		assert.Len(t, workflow.states, 1)
+// 		assert.Contains(t, workflow.states, root)
+// 		assert.Len(t, workflow.chain, 3)
+// 		assert.Contains(t, workflow.chain, root)
+// 		assert.Contains(t, workflow.chain, step)
+// 		assert.Contains(t, workflow.chain, step.Steper)
+// 	})
+// 	anotherRoot := &rootStep{root}
+// 	t.Run("should panic if add different root step", func(t *testing.T) {
+// 		workflow := new(Workflow)
+// 		assert.Panics(t, func() {
+// 			workflow.Add(Step(root, anotherRoot))
+// 		})
+// 	})
+// 	t.Run("should escalate if add a root", func(t *testing.T) {
+// 		workflow := new(Workflow)
+// 		workflow.Add(Step(step))
+// 		workflow.Add(Step(root))
+
+// 	})
+// }
