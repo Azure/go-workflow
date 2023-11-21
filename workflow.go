@@ -13,12 +13,11 @@ import (
 // Workflow represents a collection of connected Steps that form a directed acyclic graph (DAG).
 //
 // Workflow executes Steps in a topological order, and flow the data from Upstream(s) to Downstream(s).
-// Only use Add() to add Steps into Workflow, DO NOT modify Workflow directly.
 type Workflow struct {
-	Dep    map[Phase]Dependency                     // [READ ONLY] Dependency is the graph of connected Steps
-	States map[Steper]*StepState                    // [READ ONLY] States saves the internal state(s) of Step(s)
-	Inputs map[Steper][]func(context.Context) error // [READ ONLY] Inputs callbacks that will be executed before Step.Do per retry
-	Steps  Set[Steper]                              // [READ ONLY] all Steps in Workflow
+	dep    map[Phase]Dependency                     // Dependency is the graph of connected Steps
+	states map[Steper]*StepState                    // States saves the internal state(s) of Step(s)
+	inputs map[Steper][]func(context.Context) error // Inputs callbacks that will be executed before Step.Do per retry
+	chain  StepChain                                // chain of Steps, Step(s) are chained with Unwrap() method
 
 	err               map[Steper]error // errors reported from all Steps
 	errsMu            sync.RWMutex     // need this because errs are written from each Step's goroutine
@@ -53,69 +52,73 @@ const (
 func (w *Workflow) getPhases() []Phase { return []Phase{PhaseInit, PhaseRun, PhaseDefer} }
 
 // Add appends Steps into Workflow.
-func (w *Workflow) Add(wss ...WorkflowStep) *Workflow   { return w.add(PhaseRun, wss...) }
-func (w *Workflow) Init(wss ...WorkflowStep) *Workflow  { return w.add(PhaseInit, wss...) }
-func (w *Workflow) Defer(wss ...WorkflowStep) *Workflow { return w.add(PhaseDefer, wss...) }
-func (w *Workflow) add(phase Phase, wss ...WorkflowStep) *Workflow {
-	if w.Dep == nil {
-		w.Dep = map[Phase]Dependency{}
+func (w *Workflow) Add(was ...WorkflowAdder) *Workflow   { return w.add(PhaseRun, was...) }
+func (w *Workflow) Init(was ...WorkflowAdder) *Workflow  { return w.add(PhaseInit, was...) }
+func (w *Workflow) Defer(was ...WorkflowAdder) *Workflow { return w.add(PhaseDefer, was...) }
+func (w *Workflow) add(phase Phase, was ...WorkflowAdder) *Workflow {
+	if w.dep == nil {
+		w.dep = map[Phase]Dependency{}
 	}
-	if w.States == nil {
-		w.States = make(map[Steper]*StepState)
+	if w.states == nil {
+		w.states = make(map[Steper]*StepState)
 	}
-	if w.Inputs == nil {
-		w.Inputs = make(map[Steper][]func(context.Context) error)
+	if w.inputs == nil {
+		w.inputs = make(map[Steper][]func(context.Context) error)
 	}
-	if w.Dep[phase] == nil {
-		w.Dep[phase] = make(Dependency)
+	if w.dep[phase] == nil {
+		w.dep[phase] = make(Dependency)
 	}
-	for _, ws := range wss {
-		w.Dep[phase].Merge(ws.Dependencies())
-		for step, fns := range ws.States() {
-			state, ok := w.States[step]
-			if !ok {
-				state = &StepState{}
-				w.States[step] = state
-			}
-			for _, fn := range fns {
-				fn(state)
-			}
-		}
-		for step, inputs := range ws.Inputs() {
-			w.Inputs[step] = append(w.Inputs[step], inputs...)
-		}
+	if w.chain == nil {
+		w.chain = make(StepChain)
 	}
-	return w.Reconcile()
-}
-
-// Reconcile the internal states / dependencies / inputs of Workflow.
-func (w *Workflow) Reconcile() *Workflow {
-	steps := make(Set[Steper])
-	for _, phase := range w.getPhases() {
-		for down, ups := range w.Dep[phase] {
-			steps.Add(down)
-			steps.Union(ups)
-			for up := range ups {
-				if _, ok := w.Dep[phase][up]; !ok {
-					w.Dep[phase][up] = make(Set[Steper])
+	for _, wa := range was {
+		for step, records := range wa.Done() {
+			root := w.addStep(phase, step)
+			for _, r := range records {
+				if r.Upstream != nil {
+					w.addStep(phase, r.Upstream)
+					w.dep[phase][root].Add(r.Upstream)
+				}
+				if r.State != nil {
+					r.State(w.states[root])
+				}
+				if r.Input != nil {
+					w.inputs[root] = append(w.inputs[root], r.Input)
 				}
 			}
 		}
 	}
-	for step := range steps {
-		if _, ok := w.States[step]; !ok {
-			w.States[step] = &StepState{}
-		}
-	}
-	w.Steps = steps
 	return w
 }
+func (w *Workflow) addStep(phase Phase, step Steper) (root Steper) {
+	root = w.chain.Add(step)
+	if _, ok := w.states[root]; !ok {
+		w.states[root] = &StepState{}
+	}
+	if _, ok := w.dep[phase][root]; !ok {
+		w.dep[phase][root] = make(Set[Steper])
+	}
+	return root
+}
 
-func (w *Workflow) StatusOf(step Steper) StepStatus { return w.States[step].Status }
+func (w *Workflow) Steps() Set[Steper] {
+	if w.chain == nil {
+		return nil
+	}
+	return w.chain.AllRoots()
+}
+func (w *Workflow) StateOf(step Steper) *StepState {
+	if w.states == nil || w.chain == nil {
+		return nil
+	}
+	return w.states[w.chain[step]]
+}
 func (w *Workflow) PhaseOf(step Steper) Phase {
 	for _, phase := range w.getPhases() {
-		if _, ok := w.Dep[phase][step]; ok {
-			return phase
+		if w.dep != nil && w.dep[phase] != nil && w.chain != nil {
+			if _, ok := w.dep[phase][w.chain[step]]; ok {
+				return phase
+			}
 		}
 	}
 	return PhaseUnknown
@@ -137,8 +140,8 @@ func (w *Workflow) IsTerminated() bool {
 	return true
 }
 func (w *Workflow) IsPhaseTerminated(phase Phase) bool {
-	for step := range w.Dep[phase] {
-		if !w.States[step].Status.IsTerminated() {
+	for step := range w.dep[phase] {
+		if !w.states[step].Status.IsTerminated() {
 			return false
 		}
 	}
@@ -155,10 +158,8 @@ func (w *Workflow) Do(ctx context.Context) error {
 		return ErrWorkflowIsRunning
 	}
 	defer w.isRunning.Unlock()
-	// reconcile the states respecting to dependency
-	w = w.Reconcile()
 	// if no steps to run
-	if len(w.Steps) == 0 {
+	if len(w.states) == 0 {
 		return nil
 	}
 	// preflight check
@@ -170,7 +171,7 @@ func (w *Workflow) Do(ctx context.Context) error {
 		w.clock = clock.New()
 	}
 	w.err = make(map[Steper]error)
-	w.oneStepTerminated = make(chan struct{}, len(w.Steps)+1) // need one more for the first tick
+	w.oneStepTerminated = make(chan struct{}, len(w.states)+1) // need one more for the first tick
 	// signal for the first tick
 	w.signalTick()
 	// each time one Step terminated, tick forward
@@ -184,12 +185,23 @@ func (w *Workflow) Do(ctx context.Context) error {
 	// return the error
 	wErr := make(ErrWorkflow)
 	for step, err := range w.err {
-		wErr[step] = StatusErr{w.StatusOf(step), err}
+		wErr[step] = StatusErr{w.states[step].Status, err}
 	}
 	if wErr.IsNil() {
 		return nil
 	}
 	return wErr
+}
+
+func (w *Workflow) Reset() {
+	w.isRunning.Lock()
+	defer w.isRunning.Unlock()
+	w.err = nil
+	close(w.oneStepTerminated)
+	w.oneStepTerminated = nil
+	for _, state := range w.states {
+		state.Status = Pending
+	}
 }
 
 const scanned StepStatus = "scanned" // a private status for preflight
@@ -219,7 +231,7 @@ func (w *Workflow) preflight() error {
 	}
 	// assert all Steps' status start with Pending
 	unexpectStatusSteps := make(ErrUnexpectStepInitStatus)
-	for step, state := range w.States {
+	for step, state := range w.states {
 		if state.Status != Pending {
 			unexpectStatusSteps[step] = state.Status
 		}
@@ -231,7 +243,7 @@ func (w *Workflow) preflight() error {
 	// start scanning, mark Step as Scanned only when its all depdencies are Scanned
 	for {
 		hasNewScanned := false // whether a new Step being marked as Scanned this turn
-		for step, state := range w.States {
+		for step, state := range w.states {
 			if state.Status == scanned {
 				continue
 			}
@@ -247,10 +259,10 @@ func (w *Workflow) preflight() error {
 	// check whether still have Steps not Scanned,
 	// not Scanned Steps are in a cycle.
 	stepsInCycle := make(ErrCycleDependency)
-	for step, state := range w.States {
+	for step, state := range w.states {
 		if state.Status != scanned {
 			for up := range w.UpstreamOf(step) {
-				if w.States[up].Status != scanned {
+				if w.states[up].Status != scanned {
 					stepsInCycle[step] = append(stepsInCycle[step], up)
 				}
 			}
@@ -260,7 +272,7 @@ func (w *Workflow) preflight() error {
 		return stepsInCycle
 	}
 	// reset all Steps' status to Pending
-	for _, state := range w.States {
+	for _, state := range w.states {
 		state.Status = Pending
 	}
 	return nil
@@ -274,7 +286,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 	var dep Dependency
 	for _, phase := range w.getPhases() {
 		if !w.IsPhaseTerminated(phase) {
-			dep = w.Dep[phase]
+			dep = w.dep[phase]
 			break
 		}
 	}
@@ -282,7 +294,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 		return true
 	}
 	for step := range dep {
-		state := w.States[step]
+		state := w.states[step]
 		// continue if the Step is not Pending
 		if state.Status != Pending {
 			continue
@@ -333,7 +345,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 func (w *Workflow) runStep(ctx context.Context, step Steper) error {
 	// set Step-level timeout for the Step
 	var notAfter time.Time
-	timeout := w.States[step].Timeout
+	timeout := w.states[step].Timeout
 	if timeout > 0 {
 		notAfter = w.clock.Now().Add(timeout)
 		var cancel func()
@@ -342,7 +354,7 @@ func (w *Workflow) runStep(ctx context.Context, step Steper) error {
 	}
 	// run the Step with or without retry
 	do := w.makeDoForStep(step)
-	if retryOpt := w.States[step].RetryOption; retryOpt != nil {
+	if retryOpt := w.states[step].RetryOption; retryOpt != nil {
 		return w.retry(retryOpt)(ctx, do, notAfter)
 	}
 	return do(ctx)
@@ -358,7 +370,7 @@ func (w *Workflow) makeDoForStep(step Steper) func(ctx context.Context) error {
 				afterStep(ctx, step, err)
 			}()
 			// apply up's output to current Step's input
-			for _, input := range w.Inputs[step] {
+			for _, input := range w.inputs[step] {
 				if input == nil {
 					continue
 				}
@@ -395,9 +407,9 @@ func (w *Workflow) listStatusErr(step Steper, of func(Dependency) func(Steper) S
 	defer w.errsMu.RUnlock()
 	rv := make(map[Steper]StatusErr)
 	for _, phase := range w.getPhases() {
-		for other := range of(w.Dep[phase])(step) {
+		for other := range of(w.dep[phase])(step) {
 			rv[other] = StatusErr{
-				Status: w.States[other].Status,
+				Status: w.states[other].Status,
 				Err:    w.err[other],
 			}
 		}

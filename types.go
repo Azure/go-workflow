@@ -27,6 +27,10 @@ func (s Set[T]) Union(sets ...Set[T]) {
 // Dependency tracks the dependencies between Step(s).
 // We say "A depends on B", or "B happened-before A", then A is Downstream, B is Upstream.
 //
+//	Dependency{
+//		"A": {"B"},
+//	}
+//
 // The keys are Downstream(s), the values are Upstream(s).
 type Dependency map[Steper]Set[Steper]
 

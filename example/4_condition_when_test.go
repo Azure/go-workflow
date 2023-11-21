@@ -75,7 +75,7 @@ func ExampleConditionWhen() {
 	)
 	_ = workflow.Do(context.Background())
 	// AnyFailed
-	fmt.Println(workflow.StatusOf(allSucceeded))
+	fmt.Println(workflow.StateOf(allSucceeded).Status)
 	// Skipped
 
 	workflow = new(flow.Workflow)
@@ -93,7 +93,7 @@ func ExampleConditionWhen() {
 	_ = workflow.Do(ctx)
 	// Always
 	// BeCanceled
-	fmt.Println(workflow.StatusOf(succeeded))
+	fmt.Println(workflow.StateOf(succeeded).Status)
 	// Canceled
 
 	workflow = new(flow.Workflow)

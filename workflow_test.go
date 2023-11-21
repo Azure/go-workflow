@@ -23,7 +23,7 @@ func TestDep(t *testing.T) {
 		t.Run("list all steps from dependency", func(t *testing.T) {
 			t.Parallel()
 			var dep []Steper
-			for s := range workflow.Steps {
+			for s := range workflow.Steps() {
 				dep = append(dep, s)
 			}
 			assert.ElementsMatch(t, []Steper{a, b, c, d}, dep)
