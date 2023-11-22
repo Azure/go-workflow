@@ -13,7 +13,7 @@ func TestNil(t *testing.T) {
 	workflow := new(Workflow)
 	t.Run("nil step", func(t *testing.T) {
 		assert.Nil(t, workflow.Steps())
-		// assert.Nil(t, workflow.(nil))
+		assert.Equal(t, Pending, workflow.StatusOf(nil))
 		assert.Equal(t, PhaseUnknown, workflow.PhaseOf(nil))
 		assert.Nil(t, workflow.DownstreamOf(nil))
 		assert.Nil(t, workflow.UpstreamOf(nil))
@@ -22,7 +22,7 @@ func TestNil(t *testing.T) {
 	t.Run("step not in workflow", func(t *testing.T) {
 		step := Func("step", func(ctx context.Context) error { return nil })
 		assert.Nil(t, workflow.Steps())
-		// assert.Nil(t, workflow.StateOf(step))
+		assert.Equal(t, Pending, workflow.StatusOf(step))
 		assert.Equal(t, PhaseUnknown, workflow.PhaseOf(step))
 		assert.Nil(t, workflow.DownstreamOf(step))
 		assert.Nil(t, workflow.UpstreamOf(step))
