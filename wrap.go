@@ -1,6 +1,9 @@
 package flow
 
-import "fmt"
+import (
+	"fmt"
+	"log/slog"
+)
 
 // Is reports whether the any step in step's chain matches target type.
 func Is[T Steper](s Steper) bool {
@@ -88,6 +91,38 @@ type StepTree map[Steper]Steper
 // RootOf returns the root step of step in the tree.
 func (st StepTree) RootOf(step Steper) Steper { return st[step] }
 func (st StepTree) IsRoot(step Steper) bool   { return st[step] == step }
+
+// String unwraps step and returns a proper string representation.
+func String(step Steper) string {
+	if step == nil {
+		return "<nil>"
+	}
+	switch u := step.(type) {
+	case interface{ String() string }:
+		return u.String()
+	case interface{ Unwrap() Steper }:
+		return String(u.Unwrap())
+	case interface{ Unwrap() []Steper }:
+		rv := "[ "
+		for _, step := range u.Unwrap() {
+			rv += String(step) + " "
+		}
+		return rv + "]"
+	default:
+		return fmt.Sprintf("%T(%v)", step, step)
+	}
+}
+
+// LogValue is used with log/slog, you can use it like:
+//
+//	logger.With("step", LogValue{step})
+//
+// To prevent expensive String() calls,
+//
+//	logger.With("step", String(step))
+type LogValue struct{ Steper }
+
+func (lv LogValue) LogValue() slog.Value { return slog.StringValue(String(lv.Steper)) }
 
 // Add a step into the tree:
 //   - if step is already in the tree, no-op.

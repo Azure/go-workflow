@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -187,4 +188,19 @@ func TestStepTree(t *testing.T) {
 			assert.Contains(t, olds, step2)
 		})
 	})
+}
+
+func ExampleNamedStep() {
+	step := &NamedStep{
+		Name:   "hello",
+		Steper: &someStep{value: "1"},
+	}
+	wStep := &wrappedStep{step}
+	fmt.Println(String(nil))
+	fmt.Println(String(wStep))
+	fmt.Println(String(step))
+	// Output:
+	// <nil>
+	// hello
+	// hello
 }

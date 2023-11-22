@@ -35,7 +35,7 @@ type ErrInput struct {
 	To  Steper
 }
 
-func (e *ErrInput) Error() string { return fmt.Sprintf("ErrInput(%s): %s", e.To, e.Err) }
+func (e *ErrInput) Error() string { return fmt.Sprintf("ErrInput(%s): %s", String(e.To), e.Err) }
 func (e *ErrInput) Unwrap() error { return e.Err }
 
 // StatusError tracks the status and error of a Step.
@@ -53,7 +53,7 @@ type ErrWorkflow map[Steper]*StatusError
 func (e ErrWorkflow) Error() string {
 	builder := new(strings.Builder)
 	for step, serr := range e {
-		builder.WriteString(fmt.Sprintf("%s: ", step))
+		builder.WriteString(fmt.Sprintf("%s: ", String(step)))
 		builder.WriteString(fmt.Sprintln(serr))
 	}
 	return builder.String()
@@ -80,7 +80,7 @@ func (e ErrUnexpectStepInitStatus) Error() string {
 		builder.WriteRune('\n')
 		builder.WriteString(fmt.Sprintf(
 			"%s [%s]",
-			step, status,
+			String(step), status,
 		))
 	}
 	return builder.String()
@@ -95,12 +95,12 @@ func (e ErrCycleDependency) Error() string {
 	for step, ups := range e {
 		depsStr := []string{}
 		for _, up := range ups {
-			depsStr = append(depsStr, fmt.Sprintf("%s", up))
+			depsStr = append(depsStr, String(up))
 		}
 		builder.WriteRune('\n')
 		builder.WriteString(fmt.Sprintf(
 			"%s: [%s]",
-			step, strings.Join(depsStr, ", "),
+			String(step), strings.Join(depsStr, ", "),
 		))
 	}
 	return builder.String()
