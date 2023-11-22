@@ -32,16 +32,6 @@ type Workflow struct {
 	notify            []Notify         // notify before and after Step
 }
 
-func New() *Workflow {
-	return &Workflow{
-		tree:   make(StepTree),
-		dep:    make(map[Phase]dependency),
-		status: make(map[Steper]StepStatus),
-		option: make(map[Steper][]func(*StepOption)),
-		input:  make(map[Steper][]func(context.Context) error),
-	}
-}
-
 // Phase indicates the phase to run of a Step in Workflow.
 type Phase string
 

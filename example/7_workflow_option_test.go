@@ -12,7 +12,6 @@ import (
 // `workflow` provides Workflow Options that configures the Workflow behavior.
 //
 //   - WithMaxConcurrency: set the maximum concurrency of the Workflow
-//   - WithWhen:           set the When condition of the Workflow level
 //
 // WorkflowOption can be passed to Workflow via `(*Workflow).Options()`
 
@@ -53,12 +52,12 @@ func ExampleWorkflowWithMaxConcurrency() {
 	<-start
 	<-start
 	// <-start // this will block
-	fmt.Println(counter.Load())
+	fmt.Println(counter.Load()) // 2
 
 	// unblock one Step
 	done <- struct{}{}
 	<-start
-	fmt.Println(counter.Load())
+	fmt.Println(counter.Load()) // 3
 
 	// unblock all Step
 	close(done)

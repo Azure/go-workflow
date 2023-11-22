@@ -39,6 +39,20 @@ func Step[S Steper](steps ...S) AddStep[S] {
 	}
 }
 
+// Pipe creates a pipeline in Workflow, the order would be steps[0] -> steps[1] -> steps[2] -> ...
+func Pipe(steps ...Steper) AddSteps {
+	if len(steps) == 0 {
+		return Steps()
+	}
+	as := Steps(steps[0])
+	for i := 0; i < len(steps)-1; i++ {
+		for k, v := range Steps(steps[i+1]).DependsOn(steps[i]) {
+			as[k] = append(as[k], v...)
+		}
+	}
+	return as
+}
+
 type AddStep[S Steper] struct {
 	AddSteps
 	Steps []S

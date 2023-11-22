@@ -23,9 +23,11 @@ import (
 //
 // Let's start with implementing a Step:
 //
-// To satisfy the interface of Steper, just implement method
+// To satisfy the interface of Step, just implement
 //
-//	Do(context.Context) error
+//	type Steper interface {
+//		Do(context.Context) error
+//	}
 type Foo struct{}
 
 func (f *Foo) Do(ctx context.Context) error {

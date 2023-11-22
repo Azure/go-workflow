@@ -37,8 +37,8 @@ type SkippedStep struct{}
 
 func (s *SucceededStep) Do(context.Context) error { return nil }
 func (s *FailedStep) Do(context.Context) error    { return fmt.Errorf("failed!") }
-func (s *CanceledStep) Do(context.Context) error  { return flow.Cancel(fmt.Errorf("cancel")) }
-func (s *SkippedStep) Do(context.Context) error   { return flow.Skip(fmt.Errorf("skip")) }
+func (s *CanceledStep) Do(context.Context) error  { return flow.Cancel(fmt.Errorf("cancel")) } // notice you can manually cancel a Step
+func (s *SkippedStep) Do(context.Context) error   { return flow.Skip(fmt.Errorf("skip")) }     // and Skip also
 
 func ExampleConditionWhen() {
 	var (
@@ -96,10 +96,6 @@ func ExampleConditionWhen() {
 	fmt.Println(workflow.StatusOf(succeeded))
 	// Canceled
 
-	workflow = new(flow.Workflow)
-	workflow.Add(
-		flow.Step(succeeded).DependsOn(canceled),
-	)
 	// Output:
 	// AnyFailed
 	// Skipped
