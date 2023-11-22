@@ -27,6 +27,7 @@ import (
 //			workflow.Add(
 //				flow.Step(typedStep).Input(...), // update the typed Step
 //			)
+//		}
 //	}
 //
 // The above proposal works for most cases, but from the perspective of framework, we have to think twice.
