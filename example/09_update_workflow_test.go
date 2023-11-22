@@ -97,9 +97,9 @@ func ExampleUpdateWorkflow() {
 	// Output:
 	// Hello World!
 	// Foo
-	// BEFORE
+	// WRAP: BEFORE
 	// Bar
-	// AFTER
+	// WRAP: AFTER
 }
 
 // Since Go1.21, errors package support unwraping multiple errors, `flow` also supports this feature.

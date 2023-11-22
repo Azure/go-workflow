@@ -252,43 +252,32 @@ func keys[K comparable, V any](m map[K]V) []K {
 
 func TestWorkflowTree(t *testing.T) {
 	step1 := &someStep{value: "1"}
+	step2 := &someStep{value: "2"}
 	wStep1 := &wrappedStep{step1}
-	workflow := new(Workflow)
-	workflow.Add(Step(step1))
-	workflow.Add(Step(wStep1))
+	mStep := &multiStep{steps: []Steper{wStep1, step2}}
+
+	t.Run("add from leaf to root", func(t *testing.T) {
+		workflow := new(Workflow)
+		workflow.Add(Step(step1))
+		assert.Len(t, workflow.tree, 1)
+		assert.Len(t, workflow.dep[PhaseRun], 1)
+		assert.Len(t, workflow.status, 1)
+
+		workflow.Add(Step(wStep1))
+		assert.Len(t, workflow.tree, 2)
+		assert.Len(t, workflow.dep[PhaseRun], 1, "the previous root should be replaced")
+		assert.Len(t, workflow.status, 1)
+
+		workflow.Add(Step(mStep))
+		assert.Len(t, workflow.tree, 4)
+		assert.Len(t, workflow.dep[PhaseRun], 1, "the previous root should be replaced")
+		assert.Len(t, workflow.status, 1)
+	})
+	t.Run("add from root to leaf", func(t *testing.T) {
+		workflow := new(Workflow)
+		workflow.Add(Step(mStep))
+		assert.Len(t, workflow.tree, 4)
+		assert.Len(t, workflow.dep[PhaseRun], 1)
+		assert.Len(t, workflow.status, 1)
+	})
 }
-
-// func TestWorkflowChainedStep(t *testing.T) {
-// 	step := &NamedStep{
-// 		Name: "I have a name",
-// 		Steper: &someStep{
-// 			value: "I have a value",
-// 		},
-// 	}
-// 	root := &rootStep{step}
-// 	t.Run("should add all steps in Unwrap() chain", func(t *testing.T) {
-// 		workflow := new(Workflow)
-// 		workflow.Add(Step(root))
-// 		assert.Len(t, workflow.dep[PhaseRun], 1)
-// 		assert.Contains(t, workflow.dep[PhaseRun], root)
-// 		assert.Len(t, workflow.states, 1)
-// 		assert.Contains(t, workflow.states, root)
-// 		assert.Len(t, workflow.chain, 3)
-// 		assert.Contains(t, workflow.chain, root)
-// 		assert.Contains(t, workflow.chain, step)
-// 		assert.Contains(t, workflow.chain, step.Steper)
-// 	})
-// 	anotherRoot := &rootStep{root}
-// 	t.Run("should panic if add different root step", func(t *testing.T) {
-// 		workflow := new(Workflow)
-// 		assert.Panics(t, func() {
-// 			workflow.Add(Step(root, anotherRoot))
-// 		})
-// 	})
-// 	t.Run("should escalate if add a root", func(t *testing.T) {
-// 		workflow := new(Workflow)
-// 		workflow.Add(Step(step))
-// 		workflow.Add(Step(root))
-
-// 	})
-// }

@@ -104,15 +104,13 @@ func (w *Workflow) addStep(phase Phase, step Steper) (root Steper) {
 		w.status[root] = Pending
 	}
 	for old := range olds {
-		if old != root {
-			w.dep[phase][root].Union(w.dep[phase][old])
-			delete(w.dep[phase], old)
-			delete(w.status, old)
-			w.option[root] = append(w.option[root], w.option[old]...)
-			delete(w.option, old)
-			w.input[root] = append(w.input[root], w.input[old]...)
-			delete(w.input, old)
-		}
+		w.dep[phase][root].Union(w.dep[phase][old])
+		delete(w.dep[phase], old)
+		delete(w.status, old)
+		w.option[root] = append(w.option[root], w.option[old]...)
+		delete(w.option, old)
+		w.input[root] = append(w.input[root], w.input[old]...)
+		delete(w.input, old)
 	}
 	return root
 }

@@ -1,5 +1,7 @@
 package flow
 
+import "fmt"
+
 // Is reports whether the any step in step's chain matches target type.
 func Is[T Steper](s Steper) bool {
 	if s == nil {
@@ -85,22 +87,35 @@ type StepTree map[Steper]Steper
 
 // RootOf returns the root step of step in the tree.
 func (st StepTree) RootOf(step Steper) Steper { return st[step] }
+func (st StepTree) IsRoot(step Steper) bool   { return st[step] == step }
 
+// Add a step into the tree:
+//   - if step is already in the tree, no-op.
+//   - if step is new, it will be a new root.
+//     -- all sub-steps wrapped inside will also be updated to have this new root.
+//     -- if sub-step is already a root, it will be added to oldRoots.
+//     -- if sub-step is not a root, it means there must be another root, so panic.
 func (sc StepTree) Add(step Steper) (newRoot Steper, oldRoots set[Steper]) {
 	if step == nil {
 		return nil, nil
 	}
-	oldRoots = make(set[Steper])
 	if root, ok := sc[step]; ok {
-		newRoot = root
-		oldRoots.Add(root)
-		return
+		return root, nil
 	}
 	// now current step becomes new root!
 	newRoot = step
+	oldRoots = make(set[Steper])
 	for {
 		if pRoot, ok := sc[step]; ok {
-			oldRoots.Add(pRoot)
+			if pRoot == step { // step is a previous root
+				oldRoots.Add(pRoot)
+			} else if len(oldRoots) == 0 { // step has another root
+				panic(fmt.Errorf("add step %T(%s) failed: inner step %T(%s) already has a root %T(%s)",
+					newRoot, newRoot,
+					step, step,
+					pRoot, pRoot,
+				))
+			}
 		}
 		sc[step] = newRoot
 		switch u := step.(type) {
@@ -111,11 +126,24 @@ func (sc StepTree) Add(step Steper) (newRoot Steper, oldRoots set[Steper]) {
 			}
 		case interface{ Unwrap() []Steper }:
 			for _, step := range u.Unwrap() {
-				if step != nil {
-					_, olds := sc.Add(step)
-					sc[step] = newRoot
+				if step == nil {
+					continue
+				}
+				root, olds := sc.Add(step)
+				if olds == nil { // step already in tree
+					if root == step { // step is a previous root
+						oldRoots.Add(root)
+					} else {
+						panic(fmt.Errorf("add step %T(%s) failed: inner step %T(%s) already has a root %T(%s)",
+							newRoot, newRoot,
+							step, step,
+							root, root,
+						))
+					}
+				} else { // step is new
 					oldRoots.Union(olds)
 				}
+				sc[step] = newRoot
 			}
 			return
 		default:
