@@ -115,14 +115,16 @@ func String(step Steper) string {
 
 // LogValue is used with log/slog, you can use it like:
 //
-//	logger.With("step", LogValue{step})
+//	logger.With("step", LogValue(step))
 //
 // To prevent expensive String() calls,
 //
 //	logger.With("step", String(step))
-type LogValue struct{ Steper }
+func LogValue(step Steper) logValue { return logValue{Steper: step} }
 
-func (lv LogValue) LogValue() slog.Value { return slog.StringValue(String(lv.Steper)) }
+type logValue struct{ Steper }
+
+func (lv logValue) LogValue() slog.Value { return slog.StringValue(String(lv.Steper)) }
 
 // Add a step into the tree:
 //   - if step is already in the tree, no-op.
