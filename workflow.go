@@ -449,7 +449,7 @@ func (w *Workflow) listStatusErr(step Steper, of func(dependency) func(Steper) s
 			other = w.tree.RootOf(other)
 			rv[other] = StatusError{
 				Status: w.StatusOf(other),
-				Err:    w.err[other],
+				Err:    w.err[other].Err,
 			}
 		}
 	}
