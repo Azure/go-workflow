@@ -48,14 +48,14 @@ func TestBeCanceled(t *testing.T) {
 		fakeStep{}: {Status: Succeeded},
 		fakeStep{}: {Status: Succeeded},
 	})
-	assert.Equal(t, Running, stepStatus)
+	assert.Equal(t, Skipped, stepStatus)
 
 	stepStatus = BeCanceled(context.Background(), map[Steper]StatusError{
 		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Succeeded},
+		fakeStep{}: {Status: Canceled},
 		fakeStep{}: {Status: Failed},
 	})
-	assert.Equal(t, Running, stepStatus)
+	assert.Equal(t, Skipped, stepStatus)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -63,7 +63,7 @@ func TestBeCanceled(t *testing.T) {
 		fakeStep{}: {Status: Succeeded},
 		fakeStep{}: {Status: Succeeded},
 	})
-	assert.Equal(t, Canceled, stepStatus)
+	assert.Equal(t, Running, stepStatus)
 }
 
 func TestAnyFailed(t *testing.T) {
