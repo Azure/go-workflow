@@ -190,6 +190,29 @@ func TestStepTree(t *testing.T) {
 	})
 }
 
+func TestNestedTree(t *testing.T) {
+	step1 := &someStep{value: "1"}
+	step2 := &someStep{value: "2"}
+	step3 := &someStep{value: "3"}
+	step4 := &someStep{value: "4"}
+	wStep1 := &wrappedStep{Steper: step1}
+	a := &multiStep{steps: []Steper{wStep1, step2}}
+	b := &multiStep{steps: []Steper{step3, step4}}
+	mStep := &multiStep{steps: []Steper{a, b}}
+
+	tree := make(StepTree)
+	tree.Add(mStep)
+	assert.Len(t, tree, 8)
+	assert.Equal(t, mStep, tree.RootOf(step1))
+	assert.Equal(t, mStep, tree.RootOf(wStep1))
+	assert.Equal(t, mStep, tree.RootOf(step2))
+	assert.Equal(t, mStep, tree.RootOf(step3))
+	assert.Equal(t, mStep, tree.RootOf(step4))
+	assert.Equal(t, mStep, tree.RootOf(a))
+	assert.Equal(t, mStep, tree.RootOf(b))
+	assert.Equal(t, mStep, tree.RootOf(mStep))
+}
+
 func ExampleNamedStep() {
 	step := &NamedStep{
 		Name:   "hello",

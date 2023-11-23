@@ -126,6 +126,43 @@ type logValue struct{ Steper }
 
 func (lv logValue) LogValue() slog.Value { return slog.StringValue(String(lv.Steper)) }
 
+func (sc StepTree) newRoot(root, step Steper) (oldRoots set[Steper]) {
+	oldRoots = make(set[Steper])
+	for {
+		pRoot, ok := sc[step]
+		switch {
+		case !ok: // step is new
+			sc[step] = root
+		case ok && pRoot == step: // step is a previous root
+			sc[step] = root
+			oldRoots.Add(pRoot)
+		case ok && pRoot != step && len(oldRoots) == 0: // step has another root
+			panic(fmt.Errorf("add step %T(%s) failed: inner step %T(%s) already has a root %T(%s)",
+				root, root,
+				step, step,
+				pRoot, pRoot,
+			))
+		}
+		switch u := step.(type) {
+		case interface{ Unwrap() Steper }:
+			step = u.Unwrap()
+			if step == nil {
+				return
+			}
+		case interface{ Unwrap() []Steper }:
+			for _, step := range u.Unwrap() {
+				if step == nil {
+					continue
+				}
+				oldRoots.Union(sc.newRoot(root, step))
+			}
+			return
+		default:
+			return
+		}
+	}
+}
+
 // Add a step into the tree:
 //   - if step is already in the tree, no-op.
 //   - if step is new, it will be a new root.
@@ -141,52 +178,8 @@ func (sc StepTree) Add(step Steper) (newRoot Steper, oldRoots set[Steper]) {
 	}
 	// now current step becomes new root!
 	newRoot = step
-	oldRoots = make(set[Steper])
-	for {
-		if pRoot, ok := sc[step]; ok {
-			if pRoot == step { // step is a previous root
-				oldRoots.Add(pRoot)
-			} else if len(oldRoots) == 0 { // step has another root
-				panic(fmt.Errorf("add step %T(%s) failed: inner step %T(%s) already has a root %T(%s)",
-					newRoot, newRoot,
-					step, step,
-					pRoot, pRoot,
-				))
-			}
-		}
-		sc[step] = newRoot
-		switch u := step.(type) {
-		case interface{ Unwrap() Steper }:
-			step = u.Unwrap()
-			if step == nil {
-				return
-			}
-		case interface{ Unwrap() []Steper }:
-			for _, step := range u.Unwrap() {
-				if step == nil {
-					continue
-				}
-				root, olds := sc.Add(step)
-				if olds == nil { // step already in tree
-					if root == step { // step is a previous root
-						oldRoots.Add(root)
-					} else {
-						panic(fmt.Errorf("add step %T(%s) failed: inner step %T(%s) already has a root %T(%s)",
-							newRoot, newRoot,
-							step, step,
-							root, root,
-						))
-					}
-				} else { // step is new
-					oldRoots.Union(olds)
-				}
-				sc[step] = newRoot
-			}
-			return
-		default:
-			return
-		}
-	}
+	oldRoots = sc.newRoot(newRoot, step)
+	return
 }
 
 // Roots returns all root steps in the tree.
