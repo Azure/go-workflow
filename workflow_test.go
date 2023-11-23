@@ -41,13 +41,13 @@ func TestDep(t *testing.T) {
 			Step(a).DependsOn(b, c),
 			Step(c).DependsOn(d),
 		)
-		t.Run("list all steps from dependency", func(t *testing.T) {
+		t.Run("list all steps from stepsendency", func(t *testing.T) {
 			t.Parallel()
-			var dep []Steper
+			var steps []Steper
 			for _, s := range workflow.Steps() {
-				dep = append(dep, s)
+				steps = append(steps, s)
 			}
-			assert.ElementsMatch(t, []Steper{a, b, c, d}, dep)
+			assert.ElementsMatch(t, []Steper{a, b, c, d}, steps)
 		})
 		t.Run("list all upstream of some step", func(t *testing.T) {
 			t.Parallel()
@@ -64,7 +64,7 @@ func TestDep(t *testing.T) {
 			assert.ElementsMatch(t, []Steper{c}, keys(workflow.DownstreamOf(d)))
 		})
 	})
-	t.Run("cycle dependency", func(t *testing.T) {
+	t.Run("cycle stepsendency", func(t *testing.T) {
 		workflow := new(Workflow)
 		workflow.Add(
 			Step(a).DependsOn(b),
@@ -282,25 +282,25 @@ func TestWorkflowTree(t *testing.T) {
 		workflow := new(Workflow)
 		workflow.Add(Step(step1))
 		assert.Len(t, workflow.tree, 1)
-		assert.Len(t, workflow.dep[PhaseRun], 1)
-		assert.Len(t, workflow.status, 1)
+		assert.Len(t, workflow.steps[PhaseRun], 1)
+		assert.Len(t, workflow.state, 1)
 
 		workflow.Add(Step(wStep1))
 		assert.Len(t, workflow.tree, 2)
-		assert.Len(t, workflow.dep[PhaseRun], 1, "the previous root should be replaced")
-		assert.Len(t, workflow.status, 1)
+		assert.Len(t, workflow.steps[PhaseRun], 1, "the previous root should be replaced")
+		assert.Len(t, workflow.state, 1)
 
 		workflow.Add(Step(mStep))
 		assert.Len(t, workflow.tree, 4)
-		assert.Len(t, workflow.dep[PhaseRun], 1, "the previous root should be replaced")
-		assert.Len(t, workflow.status, 1)
+		assert.Len(t, workflow.steps[PhaseRun], 1, "the previous root should be replaced")
+		assert.Len(t, workflow.state, 1)
 	})
 	t.Run("add from root to leaf", func(t *testing.T) {
 		workflow := new(Workflow)
 		workflow.Add(Step(mStep))
 		assert.Len(t, workflow.tree, 4)
-		assert.Len(t, workflow.dep[PhaseRun], 1)
-		assert.Len(t, workflow.status, 1)
+		assert.Len(t, workflow.steps[PhaseRun], 1)
+		assert.Len(t, workflow.state, 1)
 	})
 }
 
@@ -309,16 +309,16 @@ func TestWorkflowTreeWithPhase(t *testing.T) {
 	step2 := &someStep{value: "2"}
 	wStep1 := &wrappedStep{step1}
 
-	workflow := new(Workflow)
-	workflow.Init(Step(step1))
-	workflow.Add(Step(step2).DependsOn(step1))
-	workflow.Init(Step(wStep1))
+	w := new(Workflow)
+	w.Init(Step(step1))
+	w.Add(Step(step2).DependsOn(step1))
+	w.Init(Step(wStep1))
 
-	assert.Len(t, workflow.tree, 3)
-	assert.Len(t, workflow.dep[PhaseInit], 1)
-	assert.Contains(t, workflow.dep[PhaseInit], wStep1)
-	assert.NotContains(t, workflow.dep[PhaseInit], step1)
-	assert.Len(t, workflow.dep[PhaseRun], 2)
-	assert.Contains(t, workflow.dep[PhaseRun], wStep1)
-	assert.NotContains(t, workflow.dep[PhaseRun], step1)
+	assert.Len(t, w.tree, 3)
+	assert.Len(t, w.steps[PhaseInit], 1)
+	assert.Contains(t, w.steps[PhaseInit], w.state[wStep1])
+	assert.NotContains(t, w.steps[PhaseInit], w.state[step1])
+	assert.Len(t, w.steps[PhaseRun], 2)
+	assert.Contains(t, w.steps[PhaseRun], w.state[wStep1])
+	assert.NotContains(t, w.steps[PhaseRun], w.state[step1])
 }

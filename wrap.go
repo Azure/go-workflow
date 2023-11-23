@@ -69,16 +69,16 @@ type NamedStep struct {
 func (ns *NamedStep) String() string { return ns.Name }
 func (ns *NamedStep) Unwrap() Steper { return ns.Steper }
 
-// StepTree records trees of steps, steps are chained with Unwrap() method.
+// stepTree records trees of steps, steps are chained with Unwrap() method.
 //
-// StepTree is actually a disjoint-set, where keys are each step in the chain, and values are the root step.
+// stepTree is actually a disjoint-set, where keys are each step in the chain, and values are the root step.
 // i.e.
 //
 //	StepA -- StepA.Unwrap() --> StepB -- StepB.Unwrap() --> StepC, StepD
 //
 // Then
 //
-//	StepTree = map[Steper]Steper{
+//	stepTree = map[Steper]Steper{
 //		StepA: StepA,
 //		StepB: StepA,
 //		StepC: StepA,
@@ -86,48 +86,14 @@ func (ns *NamedStep) Unwrap() Steper { return ns.Steper }
 //	}
 //
 // StepA is so-call "root" Step.
-type StepTree map[Steper]Steper
+type stepTree map[Steper]Steper
 
 // RootOf returns the root step of step in the tree.
-func (st StepTree) RootOf(step Steper) Steper { return st[step] }
-func (st StepTree) IsRoot(step Steper) bool   { return st[step] == step }
+func (st stepTree) RootOf(step Steper) Steper { return st[step] }
+func (st stepTree) IsRoot(step Steper) bool   { return st[step] == step }
 
-// String unwraps step and returns a proper string representation.
-func String(step Steper) string {
-	if step == nil {
-		return "<nil>"
-	}
-	switch u := step.(type) {
-	case interface{ String() string }:
-		return u.String()
-	case interface{ Unwrap() Steper }:
-		return String(u.Unwrap())
-	case interface{ Unwrap() []Steper }:
-		rv := "[ "
-		for _, step := range u.Unwrap() {
-			rv += String(step) + " "
-		}
-		return rv + "]"
-	default:
-		return fmt.Sprintf("%T(%v)", step, step)
-	}
-}
-
-// LogValue is used with log/slog, you can use it like:
-//
-//	logger.With("step", LogValue(step))
-//
-// To prevent expensive String() calls,
-//
-//	logger.With("step", String(step))
-func LogValue(step Steper) logValue { return logValue{Steper: step} }
-
-type logValue struct{ Steper }
-
-func (lv logValue) LogValue() slog.Value { return slog.StringValue(String(lv.Steper)) }
-
-func (sc StepTree) newRoot(root, step Steper) (oldRoots set[Steper]) {
-	oldRoots = make(set[Steper])
+func (sc stepTree) newRoot(root, step Steper) (oldRoots Set[Steper]) {
+	oldRoots = make(Set[Steper])
 	for {
 		pRoot, ok := sc[step]
 		switch {
@@ -169,7 +135,7 @@ func (sc StepTree) newRoot(root, step Steper) (oldRoots set[Steper]) {
 //     -- all sub-steps wrapped inside will also be updated to have this new root.
 //     -- if sub-step is already a root, it will be added to oldRoots.
 //     -- if sub-step is not a root, it means there must be another root, so panic.
-func (sc StepTree) Add(step Steper) (newRoot Steper, oldRoots set[Steper]) {
+func (sc stepTree) Add(step Steper) (newRoot Steper, oldRoots Set[Steper]) {
 	if step == nil {
 		return nil, nil
 	}
@@ -183,10 +149,44 @@ func (sc StepTree) Add(step Steper) (newRoot Steper, oldRoots set[Steper]) {
 }
 
 // Roots returns all root steps in the tree.
-func (sc StepTree) Roots() set[Steper] {
-	rv := make(set[Steper])
+func (sc stepTree) Roots() Set[Steper] {
+	rv := make(Set[Steper])
 	for _, v := range sc {
 		rv.Add(v)
 	}
 	return rv
 }
+
+// String unwraps step and returns a proper string representation.
+func String(step Steper) string {
+	if step == nil {
+		return "<nil>"
+	}
+	switch u := step.(type) {
+	case interface{ String() string }:
+		return u.String()
+	case interface{ Unwrap() Steper }:
+		return String(u.Unwrap())
+	case interface{ Unwrap() []Steper }:
+		rv := "[ "
+		for _, step := range u.Unwrap() {
+			rv += String(step) + " "
+		}
+		return rv + "]"
+	default:
+		return fmt.Sprintf("%T(%v)", step, step)
+	}
+}
+
+// LogValue is used with log/slog, you can use it like:
+//
+//	logger.With("step", LogValue(step))
+//
+// To prevent expensive String() calls,
+//
+//	logger.With("step", String(step))
+func LogValue(step Steper) logValue { return logValue{Steper: step} }
+
+type logValue struct{ Steper }
+
+func (lv logValue) LogValue() slog.Value { return slog.StringValue(String(lv.Steper)) }
