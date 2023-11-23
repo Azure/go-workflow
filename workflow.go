@@ -19,11 +19,12 @@ type Workflow struct {
 	tree   StepTree
 	dep    map[Phase]dependency                     // dep tracks the dependencies between Steps
 	status map[Steper]StepStatus                    // status of Steps
-	option map[Steper][]func(*StepOption)           // internal options for Steps, including status, timeout, retry options, etc.
+	option map[Steper][]func(*StepOption)           // internal options for Steps, including timeout, retry options, etc.
 	input  map[Steper][]func(context.Context) error // inputs callbacks that will be executed before Step.Do per retry
 
 	err               ErrWorkflow    // errors reported from Steps
 	errsMu            sync.RWMutex   // need this because errs are written from each Step's goroutine
+	statusMu          sync.RWMutex   // need this becauses status are written from each Step's goroutine
 	leaseBucket       chan struct{}  // constraint max concurrency of running Steps
 	waitGroup         sync.WaitGroup // to prevent goroutine leak, only Add(1) when forks a goroutine
 	isRunning         sync.Mutex     // indicate whether the Workflow is running
@@ -136,7 +137,19 @@ func (w *Workflow) Unwrap() []Steper {
 	}
 	return rv
 }
+func (w *Workflow) setStatus(step Steper, status StepStatus) {
+	w.statusMu.Lock()
+	defer w.statusMu.Unlock()
+	w.status[step] = status
+}
+func (w *Workflow) setError(step Steper, statusErr StatusError) {
+	w.errsMu.Lock()
+	defer w.errsMu.Unlock()
+	w.err[step] = statusErr
+}
 func (w *Workflow) StatusOf(step Steper) StepStatus {
+	w.statusMu.RLock()
+	defer w.statusMu.RUnlock()
 	if w.status == nil || w.tree == nil {
 		return Pending
 	}
@@ -183,7 +196,7 @@ func (w *Workflow) IsTerminated() bool {
 }
 func (w *Workflow) IsPhaseTerminated(phase Phase) bool {
 	for step := range w.dep[phase] {
-		if w.status != nil && !w.status[step].IsTerminated() {
+		if w.status != nil && !w.StatusOf(step).IsTerminated() {
 			return false
 		}
 	}
@@ -330,7 +343,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 	}
 	for step := range dep {
 		// continue if the Step is not Pending
-		if w.status[step] != Pending {
+		if w.StatusOf(step) != Pending {
 			continue
 		}
 		option := w.OptionOf(step)
@@ -344,16 +357,14 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			when = option.When
 		}
 		if nextStatus := when(ctx, ups); nextStatus.IsTerminated() {
-			w.status[step] = nextStatus
-			w.errsMu.Lock()
-			w.err[step] = StatusError{w.status[step], nil}
-			w.errsMu.Unlock()
+			w.setStatus(step, nextStatus)
+			w.setError(step, StatusError{nextStatus, nil})
 			w.signalTick()
 			continue
 		}
 		// start the Step
 		w.lease()
-		w.status[step] = Running
+		w.setStatus(step, Running)
 		w.waitGroup.Add(1)
 		go func(ctx context.Context, step Steper) {
 			defer w.waitGroup.Done()
@@ -361,20 +372,19 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			defer w.unlease()
 
 			err := w.runStep(ctx, step)
+			var result StepStatus
 			switch {
 			case err == nil:
-				w.status[step] = Succeeded
+				result = Succeeded
 			case DefaultIsCanceled(err):
-				w.status[step] = Canceled
+				result = Canceled
 			case errors.Is(err, &ErrSkip{}):
-				w.status[step] = Skipped
+				result = Skipped
 			default:
-				w.status[step] = Failed
+				result = Failed
 			}
-			// use mutex to guard errs
-			w.errsMu.Lock()
-			w.err[step] = StatusError{w.status[step], err}
-			w.errsMu.Unlock()
+			w.setStatus(step, result)
+			w.setError(step, StatusError{result, err})
 		}(ctx, step)
 	}
 	return false
