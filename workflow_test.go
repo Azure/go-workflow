@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 func TestNil(t *testing.T) {
@@ -217,29 +218,50 @@ func ExampleNotify() {
 	// after step: dummy step error: step error
 }
 
-func ExampleInitDefer() {
-	workflow := new(Workflow)
-	workflow.Init(
-		Step(Func("init", func(ctx context.Context) error {
-			fmt.Println("run in init")
-			return nil
-		})),
-	).Add(
-		Step(Func("step", func(ctx context.Context) error {
-			fmt.Println("run in step")
-			return nil
-		})),
-	).Defer(
-		Step(Func("defer", func(ctx context.Context) error {
-			fmt.Println("run in defer")
-			return nil
-		})),
-	)
-	_ = workflow.Do(context.Background())
-	// Output:
-	// run in init
-	// run in step
-	// run in defer
+type MockOrder struct{ mock.Mock }
+
+func (m *MockOrder) Do(s string) { m.Called(s) }
+
+func TestInitDefer(t *testing.T) {
+	t.Run("should in order of init -> step -> defer", func(t *testing.T) {
+		workflow := new(Workflow)
+		mockOrder := new(MockOrder)
+		makeStep := func(s string) Steper {
+			return Func(s, func(ctx context.Context) error {
+				mockOrder.Do(s)
+				return nil
+			})
+		}
+		var (
+			a = makeStep("A")
+			b = makeStep("B")
+			c = makeStep("C")
+			d = makeStep("D")
+		)
+
+		// Init:  B -> A
+		// Run:   C -> A
+		// Defer: D
+		workflow.Init(
+			Step(b).DependsOn(a),
+		).Add(
+			Step(c).DependsOn(a),
+		).Defer(
+			Step(d),
+		)
+
+		// order should be a -> b -> c -> d
+		var (
+			mA = mockOrder.On("Do", "A")
+			mB = mockOrder.On("Do", "B")
+			mC = mockOrder.On("Do", "C")
+			mD = mockOrder.On("Do", "D")
+		)
+		mB.NotBefore(mA)
+		mC.NotBefore(mB)
+		mD.NotBefore(mC)
+		_ = workflow.Do(context.Background())
+	})
 }
 
 func keys[K comparable, V any](m map[K]V) []K {
@@ -280,4 +302,23 @@ func TestWorkflowTree(t *testing.T) {
 		assert.Len(t, workflow.dep[PhaseRun], 1)
 		assert.Len(t, workflow.status, 1)
 	})
+}
+
+func TestWorkflowTreeWithPhase(t *testing.T) {
+	step1 := &someStep{value: "1"}
+	step2 := &someStep{value: "2"}
+	wStep1 := &wrappedStep{step1}
+
+	workflow := new(Workflow)
+	workflow.Init(Step(step1))
+	workflow.Add(Step(step2).DependsOn(step1))
+	workflow.Init(Step(wStep1))
+
+	assert.Len(t, workflow.tree, 3)
+	assert.Len(t, workflow.dep[PhaseInit], 1)
+	assert.Contains(t, workflow.dep[PhaseInit], wStep1)
+	assert.NotContains(t, workflow.dep[PhaseInit], step1)
+	assert.Len(t, workflow.dep[PhaseRun], 2)
+	assert.Contains(t, workflow.dep[PhaseRun], wStep1)
+	assert.NotContains(t, workflow.dep[PhaseRun], step1)
 }
