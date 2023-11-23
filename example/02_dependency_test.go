@@ -43,8 +43,8 @@ func ExampleDeclareDependency() {
 	fmt.Println(workflow.UpstreamOf(c))
 	fmt.Println(workflow.UpstreamOf(d))
 	// Output:
-	// map[b:{Pending <nil>} c:{Pending <nil>}]
-	// map[d:{Pending <nil>}]
-	// map[d:{Pending <nil>}]
+	// map[b:[Pending] <nil> c:[Pending] <nil>]
+	// map[d:[Pending] <nil>]
+	// map[d:[Pending] <nil>]
 	// map[]
 }

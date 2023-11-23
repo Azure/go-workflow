@@ -22,14 +22,14 @@ type Workflow struct {
 	option map[Steper][]func(*StepOption)           // internal options for Steps, including status, timeout, retry options, etc.
 	input  map[Steper][]func(context.Context) error // inputs callbacks that will be executed before Step.Do per retry
 
-	err               map[Steper]error // errors reported from Steps
-	errsMu            sync.RWMutex     // need this because errs are written from each Step's goroutine
-	leaseBucket       chan struct{}    // constraint max concurrency of running Steps
-	waitGroup         sync.WaitGroup   // to prevent goroutine leak, only Add(1) when forks a goroutine
-	isRunning         sync.Mutex       // indicate whether the Workflow is running
-	oneStepTerminated chan struct{}    // signals for next tick
-	clock             clock.Clock      // clock for unit test
-	notify            []Notify         // notify before and after Step
+	err               ErrWorkflow    // errors reported from Steps
+	errsMu            sync.RWMutex   // need this because errs are written from each Step's goroutine
+	leaseBucket       chan struct{}  // constraint max concurrency of running Steps
+	waitGroup         sync.WaitGroup // to prevent goroutine leak, only Add(1) when forks a goroutine
+	isRunning         sync.Mutex     // indicate whether the Workflow is running
+	oneStepTerminated chan struct{}  // signals for next tick
+	clock             clock.Clock    // clock for unit test
+	notify            []Notify       // notify before and after Step
 }
 
 // Phase indicates the phase to run of a Step in Workflow.
@@ -202,7 +202,7 @@ func (w *Workflow) Do(ctx context.Context) error {
 	if w.clock == nil {
 		w.clock = clock.New()
 	}
-	w.err = make(map[Steper]error)
+	w.err = make(ErrWorkflow)
 	w.oneStepTerminated = make(chan struct{}, len(w.status)+1) // need one more for the first tick
 	// signal for the first tick
 	w.signalTick()
@@ -215,14 +215,10 @@ func (w *Workflow) Do(ctx context.Context) error {
 	// ensure all goroutines are exited
 	w.waitGroup.Wait()
 	// return the error
-	wErr := make(ErrWorkflow)
-	for step, err := range w.err {
-		wErr[step] = &StatusError{w.status[step], err}
-	}
-	if wErr.IsNil() {
+	if w.err.IsNil() {
 		return nil
 	}
-	return wErr
+	return w.err
 }
 
 func (w *Workflow) Reset() {
@@ -339,6 +335,9 @@ func (w *Workflow) tick(ctx context.Context) bool {
 		}
 		if nextStatus := when(ctx, ups); nextStatus.IsTerminated() {
 			w.status[step] = nextStatus
+			w.errsMu.Lock()
+			w.err[step] = StatusError{w.status[step], nil}
+			w.errsMu.Unlock()
 			w.signalTick()
 			continue
 		}
@@ -364,7 +363,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			}
 			// use mutex to guard errs
 			w.errsMu.Lock()
-			w.err[step] = err
+			w.err[step] = StatusError{w.status[step], err}
 			w.errsMu.Unlock()
 		}(ctx, step)
 	}
@@ -404,8 +403,7 @@ func (w *Workflow) makeDoForStep(step Steper) func(ctx context.Context) error {
 				if ferr := catchPanicAsError(func() error {
 					return input(ctx)
 				}); ferr != nil {
-					err = &ErrInput{ferr, step}
-					return err
+					return ErrInput{ferr, step}
 				}
 			}
 			err = step.Do(ctx)
