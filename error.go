@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -40,23 +41,57 @@ func (e ErrInput) Unwrap() error { return e.Err }
 
 // StatusError tracks the status and error of a Step.
 type StatusError struct {
-	Status StepStatus
-	Err    error
+	Status StepStatus `json:"status"`
+	Err    error      `json:"error"`
 }
 
 func (e StatusError) Error() string { return fmt.Sprintf("[%s] %v", e.Status, e.Err) }
 func (e StatusError) Unwrap() error { return e.Err }
+func (e StatusError) MarshalJSON() ([]byte, error) {
+	switch e.Err.(type) {
+	case interface{ MarshalJSON() ([]byte, error) }:
+		return json.Marshal(struct {
+			Status StepStatus `json:"status"`
+			Err    error      `json:"error"`
+		}{
+			Status: e.Status,
+			Err:    e.Err,
+		})
+	default:
+		rv := struct {
+			Status StepStatus `json:"status"`
+			Err    *string    `json:"error"`
+		}{
+			Status: e.Status,
+		}
+		if e.Err != nil {
+			err := e.Err.Error()
+			rv.Err = &err
+		}
+		return json.Marshal(rv)
+	}
+}
 
 // ErrWorkflow contains all errors reported from terminated Steps.
 type ErrWorkflow map[Steper]StatusError
 
 func (e ErrWorkflow) Error() string {
+	if jsonBytes, err := json.MarshalIndent(e, "", "  "); err == nil {
+		return string(jsonBytes)
+	}
 	builder := new(strings.Builder)
 	for step, serr := range e {
 		builder.WriteString(fmt.Sprintf("%s: ", String(step)))
 		builder.WriteString(fmt.Sprintln(serr))
 	}
 	return builder.String()
+}
+func (e ErrWorkflow) MarshalJSON() ([]byte, error) {
+	rv := make(map[string]StatusError)
+	for step, sErr := range e {
+		rv[String(step)] = sErr
+	}
+	return json.Marshal(rv)
 }
 func (e ErrWorkflow) Unwrap() []error {
 	rv := []error{}

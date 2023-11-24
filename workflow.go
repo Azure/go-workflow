@@ -123,6 +123,9 @@ func (w *Workflow) addStep(phase Phase, step Steper, sc *StepConfig) {
 	}
 }
 
+func (w *Workflow) String() string {
+	return fmt.Sprintf("Workflow(%d-%d-%d)", len(w.steps[PhaseInit]), len(w.steps[PhaseRun]), len(w.steps[PhaseDefer]))
+}
 func (w *Workflow) empty() bool     { return len(w.tree) == 0 || len(w.state) == 0 || len(w.steps) == 0 }
 func (w *Workflow) Steps() []Steper { return w.Unwrap() }
 func (w *Workflow) Unwrap() []Steper {

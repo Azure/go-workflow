@@ -27,11 +27,12 @@ func ExamplePhase() {
 			return nil
 		}),
 	))
-	workflow.Add(flow.Step(
+	workflow.Add(flow.Steps(
 		flow.Func("run", func(ctx context.Context) error {
 			fmt.Println("Do main logic here")
 			return nil
 		}),
+		new(FailedStep), // even one phase failed, the next phase will still be executed
 	))
 	workflow.Defer(flow.Step(
 		flow.Func("defer", func(ctx context.Context) error {
