@@ -7,7 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type fakeStep struct{}
+type fakeStep struct {
+	Name string `json:"name"`
+}
 
 func (fakeStep) Do(context.Context) error {
 	return nil
