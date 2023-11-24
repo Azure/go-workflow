@@ -138,6 +138,11 @@ func (w *Workflow) Unwrap() []Steper {
 	}
 	return rv
 }
+func (w *Workflow) ErrorOf(step Steper) StatusError {
+	w.errsMu.RLock()
+	defer w.errsMu.RUnlock()
+	return w.err[w.tree.RootOf(step)]
+}
 func (w *Workflow) setError(step Steper, statusErr StatusError) {
 	w.errsMu.Lock()
 	defer w.errsMu.Unlock()
@@ -191,7 +196,7 @@ func (w *Workflow) UpstreamOf(step Steper) map[Steper]StatusError {
 				up = w.tree.RootOf(up)
 				rv[up] = StatusError{
 					Status: w.state[up].GetStatus(),
-					Err:    w.err[up].Err,
+					Err:    w.ErrorOf(up).Err,
 				}
 			}
 		}
@@ -213,7 +218,7 @@ func (w *Workflow) DownstreamOf(step Steper) map[Steper]StatusError {
 				if w.tree.RootOf(up) == step {
 					rv[down.Step] = StatusError{
 						Status: down.GetStatus(),
-						Err:    w.err[down.Step].Err,
+						Err:    w.ErrorOf(down.Step).Err,
 					}
 				}
 			}

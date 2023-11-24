@@ -84,7 +84,7 @@ func ExampleConditionWhen() {
 		flow.Step(always).DependsOn(succeeded, failed, canceled, skipped).
 			When(flow.Always),
 		// BeCanceled will run when the workflow is canceled
-		flow.Step(beCanceled).When(flow.BeCanceled),
+		flow.Step(beCanceled).When(flow.BeCanceled).DependsOn(always),
 		// will be canceled
 		flow.Step(succeeded).When(flow.AllSucceeded),
 	)
