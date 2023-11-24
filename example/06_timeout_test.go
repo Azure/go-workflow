@@ -72,12 +72,8 @@ func ExampleTimeout() {
 	// Output:
 	// done
 	// done
-	// {
-	//   "WaitDone": {
-	//     "status": "Canceled",
-	//     "error": "context deadline exceeded"
-	//   }
-	// }
+	// WaitDone: [Canceled]
+	//	context deadline exceeded
 }
 
 // testTimer is a Timer that all retry intervals are immediate (0).

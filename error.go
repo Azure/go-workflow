@@ -20,32 +20,21 @@ func (e ErrCancel) Unwrap() error { return e.Err }
 func (e ErrSkip) Error() string   { return e.Err.Error() }
 func (e ErrSkip) Unwrap() error   { return e.Err }
 
-// ErrInput indicates the error happens in feeding input to a Step.
-//
-//	Input(func(ctx context.Context, s *SomeStep) error {
-//		return err
-//	})
-//
-// or
-//
-//	Input(func(_ context.Context, _ *SomeStep) error {
-//		panic(err)
-//	})
-type ErrInput struct {
-	Err error
-	To  Steper
-}
-
-func (e ErrInput) Error() string { return fmt.Sprintf("ErrInput(%s): %v", String(e.To), e.Err) }
-func (e ErrInput) Unwrap() error { return e.Err }
-
 // StatusError tracks the status and error of a Step.
 type StatusError struct {
 	Status StepStatus `json:"status"`
 	Err    error      `json:"error"`
 }
 
-func (e StatusError) Error() string { return fmt.Sprintf("[%s] %v", e.Status, e.Err) }
+func (e StatusError) Error() string {
+	rv := fmt.Sprintf("[%s]", e.Status)
+	if e.Err != nil {
+		rv += "\n\t" + strings.ReplaceAll(e.Err.Error(), "\n", "\n\t")
+	} else {
+		rv += " <nil>"
+	}
+	return rv
+}
 func (e StatusError) Unwrap() error { return e.Err }
 func (e StatusError) MarshalJSON() ([]byte, error) {
 	switch e.Err.(type) {
@@ -76,13 +65,10 @@ func (e StatusError) MarshalJSON() ([]byte, error) {
 type ErrWorkflow map[Steper]StatusError
 
 func (e ErrWorkflow) Error() string {
-	if jsonBytes, err := json.MarshalIndent(e, "", "  "); err == nil {
-		return string(jsonBytes)
-	}
 	builder := new(strings.Builder)
 	for step, serr := range e {
 		builder.WriteString(fmt.Sprintf("%s: ", String(step)))
-		builder.WriteString(fmt.Sprintln(serr))
+		builder.WriteString(fmt.Sprintln(serr.Error()))
 	}
 	return builder.String()
 }

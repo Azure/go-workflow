@@ -461,7 +461,7 @@ func (w *Workflow) makeDoForStep(step *state) func(ctx context.Context) error {
 				if ierr := catchPanicAsError(func() error {
 					return step.Input(ctx)
 				}); ierr != nil {
-					err = ErrInput{ierr, step.Step}
+					err = ierr
 					return err
 				}
 			}
