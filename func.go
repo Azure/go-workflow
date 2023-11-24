@@ -11,7 +11,7 @@ func Func(name string, do func(context.Context) error) *Function[struct{}, struc
 	})
 }
 func FuncIO[I, O any](name string, do func(context.Context, I) (O, error)) *Function[I, O] {
-	f := &Function[I, O]{Name: name, do: do}
+	f := &Function[I, O]{Name: name, DoFunc: do}
 	return f
 }
 func FuncI[I any](name string, do func(context.Context, I) error) *Function[I, struct{}] {
@@ -30,12 +30,14 @@ type Function[I, O any] struct {
 	Name   string
 	Input  I
 	Output O
-	do     func(context.Context, I) (O, error)
+	DoFunc func(context.Context, I) (O, error)
 }
 
 func (f *Function[I, O]) String() string { return f.Name }
 func (f *Function[I, O]) Do(ctx context.Context) error {
 	var err error
-	f.Output, err = f.do(ctx, f.Input)
+	if f.DoFunc != nil {
+		f.Output, err = f.DoFunc(ctx, f.Input)
+	}
 	return err
 }
