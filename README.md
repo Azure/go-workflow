@@ -1,7 +1,7 @@
 # Workflow - a library organizes steps with dependencies into DAG (Directed-Acyclic-Graph) for Go
 [![Go Report Card](https://goreportcard.com/badge/github.com/Azure/go-workflow)](https://goreportcard.com/report/github.com/Azure/go-workflow)
-[![Go Build Status](https://github.com/Azure/go-workflow/actions/workflows/go.yml/badge.svg)](https://github.com/Azure/go-workflow/actions/workflows/go.yml)
-<!-- ![v2 Status](https://github.com/azure/azure-service-operator/actions/workflows/live-validation.yml/badge.svg?branch=main) -->
+[![Go Test Status](https://github.com/Azure/go-workflow/actions/workflows/go.yml/badge.svg)](https://github.com/Azure/go-workflow/actions/workflows/go.yml)
+[![Go Test Coverage](https://raw.githubusercontent.com/Azure/go-workflow/badges/.badges/main/coverage.svg)](/.github/.testcoverage.yml)
 
 > This repo has been populated by an initial template to help get you started. Please
 > make sure to update the content to build a great experience for community-building.
