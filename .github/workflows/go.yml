@@ -29,7 +29,7 @@ jobs:
         go test -v ./... -coverprofile=./cover.out -covermode=atomic -coverpkg=./...
 
     - name: Check test coverage
-      if: github.ref == 'refs/heads/master'
+      if: github.ref == 'refs/heads/main'
       uses: vladopajic/go-test-coverage@v2
       with:
         config: ./.github/.testcoverage.yml
