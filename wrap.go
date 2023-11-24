@@ -60,7 +60,11 @@ func As[T Steper](s Steper) []T {
 	}
 }
 
-// NamedStep wraps and changes step's name by override String() method.
+// WithName gives your step a name by overriding String() method.
+func WithName(name string, step Steper) *NamedStep {
+	return &NamedStep{Name: name, Steper: step}
+}
+
 type NamedStep struct {
 	Name string
 	Steper
