@@ -6,39 +6,47 @@ import (
 	"strings"
 )
 
-// Cancel will mark the current step `Canceled`.
-func Cancel(err error) ErrCancel { return ErrCancel{Err: err} }
+// Cancel will terminate the current step and set status to `Canceled`.
+func Cancel(err error) ErrCancel { return ErrCancel{err} }
 
-// Skip will mark the current step `Skipped`.
-func Skip(err error) ErrSkip { return ErrSkip{Err: err} }
+// Skip will terminate the current step and set status to `Skipped`.
+func Skip(err error) ErrSkip { return ErrSkip{err} }
 
-type ErrCancel struct{ Err error }
-type ErrSkip struct{ Err error }
+type ErrCancel struct{ error }
+type ErrSkip struct{ error }
 
-func (e ErrCancel) Error() string { return e.Err.Error() }
-func (e ErrCancel) Unwrap() error { return e.Err }
-func (e ErrSkip) Error() string   { return e.Err.Error() }
-func (e ErrSkip) Unwrap() error   { return e.Err }
+func (e ErrCancel) Unwrap() error { return e.error }
+func (e ErrSkip) Unwrap() error   { return e.error }
 
-// StatusError tracks the status and error of a Step.
+// StatusError contains the status and error of a Step.
 type StatusError struct {
-	Status StepStatus `json:"status"`
-	Err    error      `json:"error"`
+	Status StepStatus
+	Err    error
 }
 
+// StatusError will be printed as:
+//
+//	[Status]
+//		error message
 func (e StatusError) Error() string {
 	rv := fmt.Sprintf("[%s]", e.Status)
 	if e.Err != nil {
 		rv += "\n\t" + strings.ReplaceAll(e.Err.Error(), "\n", "\n\t")
-	} else {
-		rv += " <nil>"
 	}
 	return rv
 }
 func (e StatusError) Unwrap() error { return e.Err }
+
+// MarshalJSON allows us to marshal StatusError to json.
+//
+//	{
+//		"status": "Status",
+//		"error": "error message"
+//	}
 func (e StatusError) MarshalJSON() ([]byte, error) {
 	switch e.Err.(type) {
 	case interface{ MarshalJSON() ([]byte, error) }:
+		// new an anonymous struct to avoid stack overflow
 		return json.Marshal(struct {
 			Status StepStatus `json:"status"`
 			Err    error      `json:"error"`
@@ -61,17 +69,32 @@ func (e StatusError) MarshalJSON() ([]byte, error) {
 	}
 }
 
-// ErrWorkflow contains all errors reported from terminated Steps.
+// ErrWorkflow contains all errors reported from terminated Steps in Workflow.
+//
+// Keys are root Steps, values are its status and error.
 type ErrWorkflow map[Steper]StatusError
 
+// ErrWorkflow will be printed as:
+//
+//	Step: [Status]
+//		error message
 func (e ErrWorkflow) Error() string {
-	builder := new(strings.Builder)
+	var builder strings.Builder
 	for step, serr := range e {
 		builder.WriteString(fmt.Sprintf("%s: ", String(step)))
 		builder.WriteString(fmt.Sprintln(serr.Error()))
 	}
 	return builder.String()
 }
+
+// MarshalJSON allows us to marshal ErrWorkflow to json.
+//
+//	{
+//		"Step": {
+//			"status": "Status",
+//			"error": "error message"
+//		}
+//	}
 func (e ErrWorkflow) MarshalJSON() ([]byte, error) {
 	rv := make(map[string]StatusError)
 	for step, sErr := range e {
@@ -96,14 +119,14 @@ func (e ErrWorkflow) IsNil() bool {
 }
 
 var ErrWorkflowIsRunning = fmt.Errorf("Workflow is running, please wait for it terminated")
-var ErrWorkflowHasRun = fmt.Errorf("Workflow has run, check result error via .Err()")
+var ErrWorkflowHasRun = fmt.Errorf("Workflow has run, for now you can't run it again")
 
 // Step status is not Pending when Workflow starts to run.
 type ErrUnexpectStepInitStatus map[Steper]StepStatus
 
 func (e ErrUnexpectStepInitStatus) Error() string {
-	builder := new(strings.Builder)
-	builder.WriteString("Unexpect Step initial status:")
+	var builder strings.Builder
+	builder.WriteString("Unexpected Step Initial Status:")
 	for step, status := range e {
 		builder.WriteRune('\n')
 		builder.WriteString(fmt.Sprintf(
@@ -118,7 +141,7 @@ func (e ErrUnexpectStepInitStatus) Error() string {
 type ErrCycleDependency map[Steper][]Steper
 
 func (e ErrCycleDependency) Error() string {
-	builder := new(strings.Builder)
+	var builder strings.Builder
 	builder.WriteString("Cycle Dependency Error:")
 	for step, ups := range e {
 		depsStr := []string{}

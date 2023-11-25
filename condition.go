@@ -37,13 +37,13 @@ func (s StepStatus) String() string {
 	}
 }
 
-// When is a function to determine what's the next status of Step.
-// When makes the decision based on the status and result of all the Upstream Steps.
-// When is only called when all Upstreams are terminated.
-type When func(ctx context.Context, ups map[Steper]StatusError) StepStatus
+// Condition is a function to determine what's the next status of Step.
+// Condition makes the decision based on the status and result of all the Upstream Steps.
+// Condition is only called when all Upstreams are terminated.
+type Condition func(ctx context.Context, ups map[Steper]StatusError) StepStatus
 
 var (
-	DefaultWhen When = AllSucceeded
+	DefaultCondition Condition = AllSucceeded
 	// DefaultIsCanceled is used to determine whether an error is being regarded as canceled.
 	DefaultIsCanceled = func(err error) bool {
 		switch {

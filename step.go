@@ -5,40 +5,37 @@ import (
 	"time"
 )
 
-// Steper is basic unit of a Workflow.
+// Steper describes the requirement for a Step, which is basic unit of a Workflow.
 //
-// Implement this interface to be added into Workflow via Step() or Steps().
-//
-// Please do not expect the type of Steper, use Is() or As() if you need to check / get the typed step from the step tree.
+// Implement this interface to allow the power of Workflow to orchestrate your Steps.
+// Notice your implementation should be a pointer type.
 type Steper interface {
 	Do(context.Context) error
 }
 
-// implement this interface to be added into Workflow!
+// Implement this interface to be added into Workflow!
 type WorkflowAdder interface {
 	Done() map[Steper]*StepConfig
 }
 type StepConfig struct {
-	Upstreams Set[Steper]
-	Input     func(context.Context) error
-	Option    func(*StepOption)
+	Upstreams Set[Steper]                 // Upstreams of the Step, means these Steps should happen-before this Step
+	Input     func(context.Context) error // Input callback of the Step, will be called before Do
+	Option    func(*StepOption)           // Option customize the Step settings
 }
-
-// StepOption saves the option for a Step in Workflow,
-// including its timeout, retry options, etc.
 type StepOption struct {
-	RetryOption *RetryOption
-	When        When
-	Timeout     time.Duration
+	RetryOption *RetryOption   // RetryOption customize how the Step should be retried, default (nil) means no retry.
+	Condition   Condition      // Condition decides whether Workflow should execute the Step, default to DefaultCondition.
+	Timeout     *time.Duration // Timeout sets the Step level timeout, default (nil) means no timeout.
 }
 
-// Steps declares a series of Steps.
-// The Steps are mutually independent, and will be executed in parallel.
+// Steps declares a series of Steps ready to be added into Workflow.
 //
-//	Steps(a, b, c) // a, b, c will be executed in parallel
-//	Steps(a, b, c).DependsOn(d, e) // d, e will be executed in parallel, then a, b, c in parallel
+// The Steps declared are mutually independent.
 //
-// Steps are weak-typed, use Step if you need add Input or InputDependsOn
+//	workflow.Add(
+//		Steps(a, b, c),					// a, b, c will be executed in parallel
+//		Steps(a, b, c).DependsOn(d, e), // d, e will be executed in parallel, then a, b, c in parallel
+//	)
 func Steps(steps ...Steper) addSteps {
 	rv := make(addSteps)
 	for _, step := range steps {
@@ -47,8 +44,14 @@ func Steps(steps ...Steper) addSteps {
 	return rv
 }
 
-// Step declares Steps ready for building dependencies to Workflow,
-// with the support of Input(...) and InputDependsOn(...).
+// Step declares Step ready to be added into Workflow.
+//
+// The main difference between Step() and Steps() is that,
+// Step() allows to add Input and InputDependsOn for the Step.
+//
+//	Step(a).Input(func(ctx context.Context, a *A) error {
+//		// fill a
+//	}))
 func Step[S Steper](steps ...S) addStep[S] {
 	return addStep[S]{
 		addSteps: Steps(ToSteps(steps)...),
@@ -56,12 +59,20 @@ func Step[S Steper](steps ...S) addStep[S] {
 	}
 }
 
-// Pipe creates a pipeline in Workflow, the order would be steps[0] -> steps[1] -> steps[2] -> ...
+// Pipe creates a pipeline in Workflow.
+//
+//	workflow.Add(
+//		Pipe(a, b, c), // a -> b -> c
+//	)
+//
+// The above code is equivalent to:
+//
+//	workflow.Add(
+//		Step(b).DependsOn(a),
+//		Step(c).DependsOn(b),
+//	)
 func Pipe(steps ...Steper) addSteps {
-	if len(steps) == 0 {
-		return Steps()
-	}
-	as := Steps(steps[0])
+	as := Steps()
 	for i := 0; i < len(steps)-1; i++ {
 		for k, v := range Steps(steps[i+1]).DependsOn(steps[i]) {
 			if as[k] == nil {
@@ -73,26 +84,37 @@ func Pipe(steps ...Steper) addSteps {
 	return as
 }
 
-type addStep[S Steper] struct {
-	addSteps
-	Steps []S
+// DependsOn declares dependency on the given Steps.
+//
+//	Step(a).DependsOn(b, c)
+//
+// Then b, c should happen-before a.
+func (as addSteps) DependsOn(ups ...Steper) addSteps {
+	for down := range as {
+		as[down].Upstreams.Add(ups...)
+	}
+	return as
 }
 
-// Input adds Input func for the Step(s).
-// If the Input function returns error, will return an ErrInput.
-// Input respects the order in building calls.
+// Input adds Input callback for the Step(s).
 //
-//	Step(down).
-//		Input(/* this Input will be feeded first */).
-//		InputDependsOn(Adapt(up, /* then receive Output from up */)).
-//		Input(/* this Input is after up's Output */),
+// Input callback will be called before Do,
+// and the order will respect the order of declarations.
+//
+//	Step(a).
+//		Input(/* 1. this Input will be called first */).
+//		InputDependsOn(Adapt(up, /* 2. then receive Output from up */)).
+//		Input(/* 3. this Input is after up's Output */)
+//	Step(a).Input(/* 4. this Input is after all */)
 func (as addStep[S]) Input(fns ...func(context.Context, S) error) addStep[S] {
 	for _, step := range as.Steps {
 		step := step // capture range variable
 		as.addSteps[step].AddInput(func(ctx context.Context) error {
 			for _, fn := range fns {
-				if err := fn(ctx, step); err != nil {
-					return err
+				if fn != nil {
+					if err := fn(ctx, step); err != nil {
+						return err
+					}
 				}
 			}
 			return nil
@@ -101,13 +123,18 @@ func (as addStep[S]) Input(fns ...func(context.Context, S) error) addStep[S] {
 	return as
 }
 
-// InputDependsOn declares dependency between Steps, with flowing data from Upstream to Downstream.
+// InputDependsOn declares dependency between Steps, and with feeding data from Upstream to Downstream.
 //
-// Use Adapt function to flow the data from Upstream to Downstream:
+// It's useful when the Downstream needs some data from Upstream, and the data is not available until Upstream is done.
+// The Input callback will ignore the Upstream's result as long as it's terminated.
+//
+// Due to limitation of Go's generic type system,
+// Use Adapt function to workaround the type check.
 //
 //	Step(down).InputDependsOn(
 //		Adapt(up, func(_ context.Context, u *Up, d *Down) error {
 //			// fill Down from Up
+//			// here Up is terminated, and Down has not started yet
 //		}),
 //	)
 func (as addStep[S]) InputDependsOn(adapts ...Adapter[S]) addStep[S] {
@@ -124,12 +151,16 @@ func (as addStep[S]) InputDependsOn(adapts ...Adapter[S]) addStep[S] {
 	return as
 }
 
-type Adapter[S Steper] struct {
-	Upstream Steper
-	Flow     func(context.Context, S) error // Flow will flow data from Upstream to Downstream
-}
-
 // Adapt bridges Upstream and Downstream with defining how to flow data.
+//
+// Use it with InputDependsOn.
+//
+//	Step(down).InputDependsOn(
+//		Adapt(up, func(_ context.Context, u *Up, d *Down) error {
+//			// fill Down from Up
+//			// here Up is terminated, and Down has not started yet
+//		}),
+//	)
 func Adapt[U, D Steper](up U, fn func(context.Context, U, D) error) Adapter[D] {
 	return Adapter[D]{
 		Upstream: up,
@@ -139,66 +170,54 @@ func Adapt[U, D Steper](up U, fn func(context.Context, U, D) error) Adapter[D] {
 	}
 }
 
-type addSteps map[Steper]*StepConfig
-
-// DependsOn declares dependency between Steps.
-//
-// "Upstreams happen before Downstream" is guaranteed.
-func (as addSteps) DependsOn(ups ...Steper) addSteps {
-	for down := range as {
-		as[down].Upstreams.Add(ups...)
-	}
-	return as
-}
-
 // Timeout sets the Step level timeout.
 func (as addSteps) Timeout(timeout time.Duration) addSteps {
 	for step := range as {
 		as[step].AddOption(func(so *StepOption) {
-			so.Timeout = timeout
+			so.Timeout = &timeout
 		})
 	}
 	return as
 }
 
-// When decides whether the Step should be Skipped.
-func (as addSteps) When(when When) addSteps {
+// When set the Condition for the Step.
+func (as addSteps) When(cond Condition) addSteps {
 	for step := range as {
 		as[step].AddOption(func(so *StepOption) {
-			so.When = when
+			so.Condition = cond
 		})
 	}
 	return as
 }
 
-func appendRetry(opt *RetryOption, fns ...func(*RetryOption)) *RetryOption {
-	if opt == nil {
-		opt = new(RetryOption)
-		*opt = DefaultRetryOption
-	}
-	for _, fn := range fns {
-		fn(opt)
-	}
-	return opt
-}
-
-// Retry sets the RetryOption for the Step.
+// Retry customize how the Step should be retried.
+//
+// If it's never called, the Step will not be retried.
+// The RetryOption has a DefaultRetryOption as base to be modified.
 func (as addSteps) Retry(opts ...func(*RetryOption)) addSteps {
 	for step := range as {
 		as[step].AddOption(func(so *StepOption) {
-			so.RetryOption = appendRetry(so.RetryOption, opts...)
+			if so.RetryOption == nil {
+				so.RetryOption = new(RetryOption)
+				*so.RetryOption = DefaultRetryOption
+			}
+			for _, opt := range opts {
+				if opt != nil {
+					opt(so.RetryOption)
+				}
+			}
 		})
 	}
 	return as
 }
 
-func (as addSteps) Done() map[Steper]*StepConfig { return as }
+func (as addSteps) Done() map[Steper]*StepConfig { return as } // WorkflowAdder
 
 func (as addStep[S]) Timeout(timeout time.Duration) addStep[S] {
 	as.addSteps = as.addSteps.Timeout(timeout)
 	return as
 }
-func (as addStep[S]) When(when When) addStep[S] {
+func (as addStep[S]) When(when Condition) addStep[S] {
 	as.addSteps = as.addSteps.When(when)
 	return as
 }
@@ -206,6 +225,16 @@ func (as addStep[S]) Retry(fns ...func(*RetryOption)) addStep[S] {
 	as.addSteps = as.addSteps.Retry(fns...)
 	return as
 }
+
+type Adapter[S Steper] struct {
+	Upstream Steper
+	Flow     func(context.Context, S) error
+}
+type addStep[S Steper] struct {
+	addSteps
+	Steps []S
+}
+type addSteps map[Steper]*StepConfig
 
 // ToSteps converts []<StepDoer implemention> to []StepDoer.
 //

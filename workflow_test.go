@@ -282,24 +282,24 @@ func TestWorkflowTree(t *testing.T) {
 		workflow := new(Workflow)
 		workflow.Add(Step(step1))
 		assert.Len(t, workflow.tree, 1)
-		assert.Len(t, workflow.steps[PhaseRun], 1)
+		assert.Len(t, workflow.steps[PhaseMain], 1)
 		assert.Len(t, workflow.state, 1)
 
 		workflow.Add(Step(wStep1))
 		assert.Len(t, workflow.tree, 2)
-		assert.Len(t, workflow.steps[PhaseRun], 1, "the previous root should be replaced")
+		assert.Len(t, workflow.steps[PhaseMain], 1, "the previous root should be replaced")
 		assert.Len(t, workflow.state, 1)
 
 		workflow.Add(Step(mStep))
 		assert.Len(t, workflow.tree, 4)
-		assert.Len(t, workflow.steps[PhaseRun], 1, "the previous root should be replaced")
+		assert.Len(t, workflow.steps[PhaseMain], 1, "the previous root should be replaced")
 		assert.Len(t, workflow.state, 1)
 	})
 	t.Run("add from root to leaf", func(t *testing.T) {
 		workflow := new(Workflow)
 		workflow.Add(Step(mStep))
 		assert.Len(t, workflow.tree, 4)
-		assert.Len(t, workflow.steps[PhaseRun], 1)
+		assert.Len(t, workflow.steps[PhaseMain], 1)
 		assert.Len(t, workflow.state, 1)
 	})
 }
@@ -316,9 +316,9 @@ func TestWorkflowTreeWithPhase(t *testing.T) {
 
 	assert.Len(t, w.tree, 3)
 	assert.Len(t, w.steps[PhaseInit], 1)
-	assert.Contains(t, w.steps[PhaseInit], w.state[wStep1])
+	assert.Contains(t, w.steps[PhaseInit], wStep1)
 	assert.NotContains(t, w.steps[PhaseInit], w.state[step1])
-	assert.Len(t, w.steps[PhaseRun], 2)
-	assert.Contains(t, w.steps[PhaseRun], w.state[wStep1])
-	assert.NotContains(t, w.steps[PhaseRun], w.state[step1])
+	assert.Len(t, w.steps[PhaseMain], 2)
+	assert.Contains(t, w.steps[PhaseMain], wStep1)
+	assert.NotContains(t, w.steps[PhaseMain], w.state[step1])
 }

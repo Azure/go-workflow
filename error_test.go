@@ -59,7 +59,7 @@ func TestErrUnexpectStepInitStatus(t *testing.T) {
 	errUnexpectStepInitStatus := ErrUnexpectStepInitStatus{
 		&fakeStep{}: Failed,
 	}
-	assert.Equal(t, "Unexpect Step initial status:\n*flow.fakeStep(&{}) [Failed]", errUnexpectStepInitStatus.Error())
+	assert.Equal(t, "Unexpected Step Initial Status:\n*flow.fakeStep(&{}) [Failed]", errUnexpectStepInitStatus.Error())
 }
 
 func TestErrCycleDependency(t *testing.T) {
