@@ -119,7 +119,6 @@ func (e ErrWorkflow) IsNil() bool {
 }
 
 var ErrWorkflowIsRunning = fmt.Errorf("Workflow is running, please wait for it terminated")
-var ErrWorkflowHasRun = fmt.Errorf("Workflow has run, for now you can't run it again")
 
 // Step status is not Pending when Workflow starts to run.
 type ErrUnexpectStepInitStatus map[Steper]StepStatus

@@ -14,19 +14,57 @@ func TestNil(t *testing.T) {
 	workflow := new(Workflow)
 	t.Run("nil step", func(t *testing.T) {
 		assert.Nil(t, workflow.Steps())
-		assert.Equal(t, Pending, workflow.StatusOf(nil))
+		assert.Nil(t, workflow.StateOf(nil))
 		assert.Equal(t, PhaseUnknown, workflow.PhaseOf(nil))
-		assert.Nil(t, workflow.DownstreamOf(nil))
 		assert.Nil(t, workflow.UpstreamOf(nil))
+		assert.Nil(t, workflow.DownstreamOf(nil))
 		assert.True(t, workflow.IsTerminated())
 	})
 	t.Run("step not in workflow", func(t *testing.T) {
 		step := Func("step", func(ctx context.Context) error { return nil })
 		assert.Nil(t, workflow.Steps())
-		assert.Equal(t, Pending, workflow.StatusOf(step))
+		assert.Nil(t, workflow.StateOf(step))
 		assert.Equal(t, PhaseUnknown, workflow.PhaseOf(step))
 		assert.Nil(t, workflow.DownstreamOf(step))
 		assert.Nil(t, workflow.UpstreamOf(step))
+	})
+}
+
+func TestAdd(t *testing.T) {
+	t.Run("add nil WorkflowAdder", func(t *testing.T) {
+		workflow := new(Workflow)
+		workflow.Add(nil)
+		assert.Nil(t, workflow.Steps())
+	})
+	t.Run("add nil step", func(t *testing.T) {
+		workflow := new(Workflow)
+		workflow.Add(Steps(nil))
+		assert.Nil(t, workflow.Steps())
+	})
+	t.Run("add new step", func(t *testing.T) {
+		workflow := new(Workflow)
+		a := &someStep{value: "a"}
+		workflow.Add(Step(a))
+		assert.Len(t, workflow.Steps(), 1)
+		assert.Equal(t, a, workflow.Steps()[0])
+	})
+	t.Run("nested workflow with input", func(t *testing.T) {
+		inner := new(Workflow)
+		step := &someStep{value: "inner step"}
+		inner.Add(Step(step))
+		outer := new(Workflow)
+		outer.Add(Step(inner))
+		for _, step := range As[*someStep](outer) {
+			outer.Add(Step(step).Input(func(ctx context.Context, ss *someStep) error {
+				ss.value = "modified"
+				return nil
+			}))
+		}
+		outerState := outer.StateOf(step)
+		innerState := inner.StateOf(step)
+		assert.ObjectsAreEqual(outerState, innerState)
+		assert.NoError(t, innerState.Input(context.Background()))
+		assert.Equal(t, "modified", step.value)
 	})
 }
 
@@ -114,13 +152,6 @@ func TestPreflight(t *testing.T) {
 		workflow := new(Workflow)
 		assert.NoError(t, workflow.Do(context.Background()))
 		assert.NoError(t, workflow.Do(context.Background()))
-	})
-	t.Run("Workflow has run", func(t *testing.T) {
-		t.Parallel()
-		workflow := new(Workflow)
-		workflow.Add(Step(Func("A", func(ctx context.Context) error { return nil })))
-		assert.NoError(t, workflow.Do(context.Background()))
-		assert.ErrorIs(t, workflow.Do(context.Background()), ErrWorkflowHasRun)
 	})
 }
 

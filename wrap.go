@@ -199,7 +199,7 @@ func As[T Steper](s Steper) []T {
 type StepTree map[Steper]Steper
 
 func (st StepTree) IsRoot(step Steper) bool {
-	if step == nil {
+	if step == nil || st[step] == nil {
 		return false
 	}
 	return st[step] == step
