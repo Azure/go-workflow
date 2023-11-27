@@ -213,6 +213,10 @@ func (as addSteps) Retry(opts ...func(*RetryOption)) addSteps {
 
 func (as addSteps) Done() map[Steper]*StepConfig { return as } // WorkflowAdder
 
+func (as addStep[S]) DependsOn(ups ...Steper) addStep[S] {
+	as.addSteps = as.addSteps.DependsOn(ups...)
+	return as
+}
 func (as addStep[S]) Timeout(timeout time.Duration) addStep[S] {
 	as.addSteps = as.addSteps.Timeout(timeout)
 	return as
