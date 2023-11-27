@@ -129,32 +129,25 @@ func (w *Workflow) Unwrap() []Steper {
 }
 
 // StateOf returns the internal state of the Step.
-//
-// StateOf is relatively an internal operation, you don't need to use it normally.
+// State includes Step's status, error, input, dependency and config.
 func (w *Workflow) StateOf(step Steper) *State {
-	if w.empty() {
+	if w.empty() || step == nil || w.tree[step] == nil {
 		return nil
 	}
-	origin := step
-	for {
-		if step == nil {
-			return nil
-		}
-		if w.tree.IsRoot(step) {
-			return w.state[step]
-		}
-		step = w.tree[step]
-		// check whether the Step implements StateOf().
-		// it allows the lowest branch ancestor of the step in the tree
-		// returning the state of the step.
-		// normally, the ancestor should be a nested Workflow managing the step.
-		// returning the state of the step is useful when
-		// 1. we could know the exact status or error
-		// 2. we could update the input to the step instead of its wrapped Workflow
-		if s, ok := step.(interface{ StateOf(Steper) *State }); ok {
-			return s.StateOf(origin)
-		}
+	ancestor := w.tree[step]
+	if ancestor == step { // the current step is a root
+		return w.state[step]
 	}
+	// check whether the lowest ancestor implements StateOf().
+	// normally, the ancestor should be a nested Workflow managing the step.
+	// returning the state of the step is useful when
+	// 1. we could know the exact status or error
+	// 2. we could update the input to the step directly instead of its wrapped Workflow
+	if s, ok := ancestor.(interface{ StateOf(Steper) *State }); ok {
+		return s.StateOf(step)
+	}
+	// otherwise, track back to the root
+	return w.state[w.tree.RootOf(ancestor)]
 }
 
 // PhaseOf returns the execution phase of the Step.
