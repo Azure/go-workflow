@@ -68,48 +68,85 @@ func (w *Workflow) add(phase Phase, was ...WorkflowAdder) *Workflow {
 		if wa != nil {
 			for step, config := range wa.Done() {
 				w.addStep(phase, step, config)
-				if config != nil {
-					for up := range config.Upstreams {
-						w.addStep(phase, up, nil)
-					}
-				}
 			}
 		}
 	}
 	return w
 }
+
+// AddStep adds a Step into Workflow with the given phase and config.
 func (w *Workflow) addStep(phase Phase, step Steper, config *StepConfig) {
 	if step == nil {
 		return
 	}
-	if state := w.StateOf(step); state != nil { // the step is already in the Workflow
-		state.MergeConfig(config)
-		w.steps[phase].Add(w.tree.RootOf(step))
-		return
-	}
-	// the step is new, it becomes a new root
-	w.state[step] = &State{Config: config}
 	w.steps[phase].Add(step)
-	// add the step (and all its descendant steps) to the tree,
-	// tree.Add() returns all old roots in descendant steps.
-	// we need to replace them with the new root.
-	// workflow will only orchestrate the root Steps,
-	// and leave the descendant Steps being managed by the root Steps.
-	for old := range w.tree.Add(step) {
-		w.state[step].MergeConfig(w.state[old].Config)
-		delete(w.state, old)
-		for _, phase := range w.steps {
-			if phase != nil && phase.Has(old) {
-				phase.Add(step)
-				delete(phase, old)
+	if w.StateOf(step) == nil {
+		// the step is new, it becomes a new root
+		w.state[step] = new(State)
+		// add the new root (and all its descendant steps) to the tree,
+		// tree.Add() returns all old roots in descendant steps.
+		// we need to replace them with the new root.
+		// workflow will only orchestrate the root Steps,
+		// and leave the descendant Steps being managed by the root Steps.
+		for old := range w.tree.Add(step) {
+			w.state[step].MergeConfig(w.state[old].Config)
+			delete(w.state, old)
+			for _, phase := range w.steps {
+				if phase != nil && phase.Has(old) {
+					phase.Add(step)
+					delete(phase, old)
+				}
 			}
 		}
 	}
+	if config != nil {
+		for up := range config.Upstreams {
+			w.setUpstream(phase, step, up)
+		}
+		config.Upstreams = nil
+		// merge config to the state in the lowest workflow
+		w.StateOf(step).MergeConfig(config)
+	}
+}
+
+// setUpstreams will put the upstreams into proper state.
+func (w *Workflow) setUpstream(phase Phase, step, up Steper) {
+	if step == nil || up == nil {
+		return
+	}
+	// just add the upstream step to the phase
+	// even upstream already in, we still need add it to the phase
+	w.addStep(phase, up, nil)
+	if w.StateOf(up) == nil { // the upstream is not in the Workflow
+		w.StateOf(w.RootOf(step)).AddUpstream(up)
+		return
+	}
+	// find the lowest workflow manages both step and up
+	ancestor := w.tree[step]
+	for {
+		if ancestor == nil {
+			return
+		}
+		if s, ok := ancestor.(interface {
+			StateOf(Steper) *State
+			RootOf(Steper) Steper
+		}); ok {
+			if s.StateOf(up) != nil {
+				s.StateOf(s.RootOf(step)).AddUpstream(up)
+				return
+			}
+		}
+		if w.tree.IsRoot(ancestor) {
+			break
+		}
+		ancestor = w.tree[ancestor]
+	}
+	w.StateOf(ancestor).AddUpstream(up)
 }
 
 func (w *Workflow) empty() bool { return len(w.tree) == 0 || len(w.state) == 0 || len(w.steps) == 0 }
 
-// Steps returns all Steps in the Workflow.
+// Steps returns all root Steps in the Workflow.
 func (w *Workflow) Steps() []Steper { return w.Unwrap() }
 func (w *Workflow) Unwrap() []Steper {
 	if w.empty() {
@@ -120,6 +157,14 @@ func (w *Workflow) Unwrap() []Steper {
 		rv = append(rv, step)
 	}
 	return rv
+}
+
+// RootOf returns the root Step of the given Step.
+func (w *Workflow) RootOf(step Steper) Steper {
+	if w.empty() {
+		return nil
+	}
+	return w.tree.RootOf(step)
 }
 
 // StateOf returns the internal state of the Step.
@@ -141,7 +186,7 @@ func (w *Workflow) StateOf(step Steper) *State {
 		return s.StateOf(step)
 	}
 	// otherwise, track back to the root
-	return w.state[w.tree.RootOf(ancestor)]
+	return w.state[w.RootOf(ancestor)]
 }
 
 // PhaseOf returns the execution phase of the Step.
@@ -149,7 +194,7 @@ func (w *Workflow) PhaseOf(step Steper) Phase {
 	if w.empty() {
 		return PhaseUnknown
 	}
-	root := w.tree.RootOf(step)
+	root := w.RootOf(step)
 	for _, phase := range w.getPhases() {
 		if steps := w.steps[phase]; steps != nil {
 			if steps.Has(root) {
@@ -166,13 +211,13 @@ func (w *Workflow) UpstreamOf(step Steper) map[Steper]StatusError {
 	if w.empty() {
 		return nil
 	}
-	root := w.tree.RootOf(step)
+	root := w.RootOf(step)
 	rv := make(map[Steper]StatusError)
 	for _, phase := range w.getPhases() {
 		if steps := w.steps[phase]; steps != nil {
 			if steps.Has(root) {
 				for up := range w.StateOf(root).Upstreams() {
-					up = w.tree.RootOf(up)
+					up = w.RootOf(up)
 					rv[up] = w.StateOf(up).GetStatusError()
 				}
 			}
@@ -192,7 +237,7 @@ func (w *Workflow) DownstreamOf(step Steper) map[Steper]StatusError {
 	for _, phase := range w.getPhases() {
 		for down := range w.steps[phase] {
 			for up := range w.StateOf(down).Upstreams() {
-				if w.tree.RootOf(up) == root {
+				if w.RootOf(up) == root {
 					rv[down] = w.StateOf(down).GetStatusError()
 				}
 			}

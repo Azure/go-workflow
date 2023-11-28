@@ -59,6 +59,17 @@ func (s *State) Input(ctx context.Context) error {
 	}
 	return s.Config.Input(ctx)
 }
+func (s *State) AddUpstream(up Steper) {
+	if s.Config == nil {
+		s.Config = &StepConfig{}
+	}
+	if s.Config.Upstreams == nil {
+		s.Config.Upstreams = make(Set[Steper])
+	}
+	if up != nil {
+		s.Config.Upstreams.Add(up)
+	}
+}
 func (s *State) MergeConfig(sc *StepConfig) {
 	if s.Config == nil {
 		s.Config = &StepConfig{}

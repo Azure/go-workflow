@@ -66,6 +66,53 @@ func TestAdd(t *testing.T) {
 		assert.NoError(t, innerState.Input(context.Background()))
 		assert.Equal(t, "modified", step.value)
 	})
+	t.Run("inner depends on new", func(t *testing.T) {
+		inner := new(Workflow)
+		outer := new(Workflow)
+		{
+			a := &someStep{value: "a"}
+			inner.Add(Step(a))
+			outer.Add(Step(inner))
+		}
+
+		var a *someStep
+		for _, step := range As[*someStep](outer) {
+			a = step
+		}
+		b := &someStep{value: "b"}
+		outer.Add(Step(a).DependsOn(b))
+		assert.Contains(t, outer.state[inner].Config.Upstreams, b,
+			"b is new, so the dependency should be added to root of a")
+		assert.NotContains(t, inner.state[a].Config.Upstreams, b,
+			"inner workflow doesn't know the existing of b")
+	})
+	t.Run("inner depends on existing inner", func(t *testing.T) {
+		inner := new(Workflow)
+		outer := new(Workflow)
+		{
+			a := &someStep{value: "a"}
+			b := &someStep{value: "b"}
+			inner.Add(Steps(a, b))
+			outer.Add(Step(inner))
+		}
+
+		var b *someStep
+		for _, step := range As[*someStep](outer) {
+			if step.value == "b" {
+				b = step
+			}
+		}
+		var a *someStep
+		for _, step := range As[*someStep](outer) {
+			if step.value == "a" {
+				a = step
+			}
+		}
+		outer.Add(Step(a).DependsOn(b))
+		assert.NotContains(t, outer.UpstreamOf(a), b)
+		assert.Contains(t, inner.state[a].Config.Upstreams, b,
+			"b is known by inner, so it should be added to inner")
+	})
 }
 
 func TestDep(t *testing.T) {

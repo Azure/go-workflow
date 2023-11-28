@@ -57,9 +57,7 @@ import (
 // Kindly remind that, nesting problem is not a new issue in Go.
 // In Go, we have a very common error pattern:
 //
-//	type MyError struct {
-//		Err error
-//	}
+//	type MyError struct { Err error }
 //	func (e *MyError) Error() string { return fmt.Sprintf("MyError(%v)", e.Err) }
 //
 // The solution is using Unwrap() method:
@@ -147,18 +145,20 @@ func As[T Steper](s Steper) []T {
 //		Step(decorated),
 //	)
 //
+// docorated.Do() will call doSomeThing.Do() internally, and apparently,
+// we don't want doSomeThing.Do() being called twice.
+//
 // StepTree is the solution to the above questions.
 //
 // # What is StepTree?
 //
-// StepTree is a data structure that
-//   - keys are all Steps in track
-//   - values are the root of that Step, or lowest ancestor that branches.
+// Let's dive into the definitions, if some Step wrap another Step, then
 //
-// Let's dive into the definitions, if some Step nest another Step, then
-//
-//	type Parent struct { // the outer one as Parent
-//		Child Steper     // the inner one as Child
+//	type Parent struct {
+//		Child Steper
+//	}
+//	type Parent struct { // This Parent "branches"
+//		Children []Steper
 //	}
 //
 // Then we can draw a tree like:
@@ -178,10 +178,10 @@ func As[T Steper](s Steper) []T {
 //	                      └────┘
 //
 // Where
-//   - [R]oot: the root of some Nested Step, it doesn't have outer layer.
-//   - [L]eaf: the leaf of some Nested Step, it doesn't have inner layer.
-//   - [T]runk: the trunk of some Nested Step, it has method Unwrap() Steper
-//   - [B]ranch: the branch of some Nested Step, it has method Unwrap() []Steper
+//   - [R]oot: the root Step, there isn't other Step wrapping it.
+//   - [L]eaf: the leaf Step, it doesn't wrap any Step inside.
+//   - [T]runk: the trunk Step, it has method Unwrap() Steper, one Child.
+//   - [B]ranch: the branch Step, it has method Unwrap() []Steper, multiple Children.
 //
 // Then the StepTree built for the above tree is:
 //
@@ -196,6 +196,19 @@ func As[T Steper](s Steper) []T {
 //		L4: B3,
 //		...
 //	}
+//
+// StepTree is a data structure that
+//   - keys are all Steps in track
+//   - values are the root of that Step, or lowest ancestor that branches.
+//
+// If we consider Workflow into the tree, all sub-Workflow are "branch" Steps.
+//
+// The contract between Nested Step and Workflow is:
+//
+//	Once a Step "wrap" other Steps, it should have responsibility to orchestrate them.
+//
+// So from the Workflow's perspective, it only needs to orchestrate the root Steps,
+// to make sure all Steps are executed in the right order.
 type StepTree map[Steper]Steper
 
 func (st StepTree) IsRoot(step Steper) bool {
@@ -205,7 +218,7 @@ func (st StepTree) IsRoot(step Steper) bool {
 	return st[step] == step
 }
 func (st StepTree) RootOf(step Steper) Steper {
-	for !st.IsRoot(st[step]) {
+	for step != nil && !st.IsRoot(step) {
 		step = st[step]
 	}
 	return step
@@ -270,6 +283,31 @@ func (sc StepTree) newRoot(root, step Steper) (oldRoots Set[Steper]) {
 		}
 	}
 }
+
+// func (st StepTree) LCA(a, b Steper) Steper {
+// 	A, B := []Steper{}, []Steper{}
+// 	for a != nil && !st.IsRoot(a) {
+// 		A = append(A, a)
+// 		a = st[a]
+// 	}
+// 	for b != nil && !st.IsRoot(b) {
+// 		B = append(B, b)
+// 		b = st[b]
+// 	}
+// 	// now a and b are both root
+// 	if a != b {
+// 		return nil // a and b has different root
+// 	}
+// 	A = append(A, a)
+// 	B = append(B, b)
+// 	// then we just need find the last common ancestor
+// 	for i := 0; i < len(A) && i < len(B); i++ {
+// 		if A[len(A)-1-i] != B[len(B)-1-i] {
+// 			return A[len(A)-i]
+// 		}
+// 	}
+// 	return a
+// }
 
 // WithName gives your step a name by overriding String() method.
 func WithName(name string, step Steper) *NamedStep {
