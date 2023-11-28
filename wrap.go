@@ -250,17 +250,6 @@ func (sc StepTree) newRoot(root, step Steper) (oldRoots Set[Steper]) {
 			))
 		}
 		switch u := step.(type) {
-		case interface{ Tree() StepTree }:
-			// this is a quick path for using Workflow as a Step
-			// Workflow implements Tree(), such that we can skip building the sub-tree,
-			// instead, just make current step as the root of the previous roots
-			// and merge the sub-tree
-			subTree := u.Tree()
-			for subRoot := range subTree.Roots() {
-				subTree[subRoot] = root
-			}
-			sc.Merge(subTree)
-			return
 		case interface{ Unwrap() Steper }:
 			step = u.Unwrap()
 			if step == nil {
@@ -278,20 +267,6 @@ func (sc StepTree) newRoot(root, step Steper) (oldRoots Set[Steper]) {
 			return
 		default:
 			return
-		}
-	}
-}
-func (sc StepTree) Merge(other StepTree) {
-	for k, v := range other {
-		switch {
-		case sc[k] == nil:
-			sc[k] = v
-		case sc[k] != v:
-			panic(fmt.Errorf("merge step tree failed: step %T(%s) already has a root %T(%s), but to merge %T(%s)",
-				k, k,
-				sc[k], sc[k],
-				v, v,
-			))
 		}
 	}
 }

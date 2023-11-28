@@ -187,38 +187,6 @@ func TestStepTree(t *testing.T) {
 			assert.Equal(t, ab, tree[ab])
 		})
 	})
-	t.Run("subtree", func(t *testing.T) {
-		sub := &subTreeStep{StepTree{
-			a:  Ab,
-			b:  Ab,
-			A:  Ab,
-			Ab: Ab,
-		}}
-		t.Run("add subtree", func(t *testing.T) {
-			tree := make(StepTree)
-			assert.Empty(t, tree.Add(sub))
-			assert.Len(t, tree, 5)
-			assert.Equal(t, sub, tree[sub])
-			assert.Equal(t, sub, tree[Ab])
-			assert.Equal(t, Ab, tree[a])
-			assert.Equal(t, Ab, tree[b])
-			assert.Equal(t, Ab, tree[A])
-		})
-		Sub := &wrappedStep{Steper: sub}
-		t.Run("add wrap subtree", func(t *testing.T) {
-			tree := make(StepTree)
-			tree.Add(sub)
-			olds := tree.Add(Sub)
-			assert.Len(t, olds, 1)
-			assert.Contains(t, olds, sub)
-			assert.Equal(t, Sub, tree[Sub])
-			assert.Equal(t, Sub, tree[sub])
-			assert.Equal(t, sub, tree[Ab])
-			assert.Equal(t, Ab, tree[a])
-			assert.Equal(t, Ab, tree[b])
-			assert.Equal(t, Ab, tree[A])
-		})
-	})
 	t.Run("conflict", func(t *testing.T) {
 		B := &wrappedStep{b}
 		aB := &multiStep{steps: []Steper{a, B}}
@@ -234,16 +202,6 @@ func TestStepTree(t *testing.T) {
 			tree.Add(Ab)
 			assert.Panics(t, func() {
 				tree.Add(aB)
-			})
-		})
-		t.Run("merge", func(t *testing.T) {
-			tree := make(StepTree)
-			tree.Add(Ab)
-			other := make(StepTree)
-			other.Add(aB)
-			sub := &subTreeStep{other}
-			assert.Panics(t, func() {
-				tree.Add(sub)
 			})
 		})
 	})

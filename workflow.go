@@ -107,12 +107,6 @@ func (w *Workflow) addStep(phase Phase, step Steper, config *StepConfig) {
 	}
 }
 
-// Tree returns the tree of all nested Steps in the Workflow.
-func (w *Workflow) Tree() StepTree {
-	rv := make(StepTree)
-	rv.Merge(w.tree)
-	return rv
-}
 func (w *Workflow) empty() bool { return len(w.tree) == 0 || len(w.state) == 0 || len(w.steps) == 0 }
 
 // Steps returns all Steps in the Workflow.
