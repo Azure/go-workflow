@@ -250,6 +250,7 @@ func (sc StepTree) newRoot(root, step Steper) (oldRoots Set[Steper]) {
 		switch {
 		case !ok: // step is new
 			sc[step] = root
+		case ok && pRoot == root: // step already has root
 		case ok && pRoot == step && pRoot != root: // step is an old root
 			sc[step] = root
 			oldRoots.Add(pRoot)

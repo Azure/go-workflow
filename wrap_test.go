@@ -186,6 +186,17 @@ func TestStepTree(t *testing.T) {
 			assert.Equal(t, ab, tree[b])
 			assert.Equal(t, ab, tree[ab])
 		})
+		t.Run("single wrap multi", func(t *testing.T) {
+			wab := &wrappedStep{ab}
+			tree := make(StepTree)
+			tree.Add(ab)
+			tree.Add(wab)
+			assert.Len(t, tree, 4)
+			assert.Equal(t, wab, tree[wab])
+			assert.Equal(t, wab, tree[ab])
+			assert.Equal(t, ab, tree[a])
+			assert.Equal(t, ab, tree[b])
+		})
 	})
 	t.Run("conflict", func(t *testing.T) {
 		B := &wrappedStep{b}
