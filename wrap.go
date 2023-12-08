@@ -324,6 +324,14 @@ type NamedStep struct {
 func (ns *NamedStep) String() string { return ns.Name }
 func (ns *NamedStep) Unwrap() Steper { return ns.Steper }
 
+type StringerNamedStep struct {
+	Name fmt.Stringer
+	Steper
+}
+
+func (sns *StringerNamedStep) String() string { return sns.Name.String() }
+func (sns *StringerNamedStep) Unwrap() Steper { return sns.Steper }
+
 // String unwraps step and returns a proper string representation.
 func String(step Steper) string {
 	if step == nil {
