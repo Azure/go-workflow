@@ -11,11 +11,3 @@ type MockStep struct {
 
 func (m *MockStep) Unwrap() Steper               { return m.Step }
 func (m *MockStep) Do(ctx context.Context) error { return m.MockDo(ctx) }
-
-type MockSteps struct {
-	Steps  []Steper
-	MockDo func(context.Context) error
-}
-
-func (m *MockSteps) Unwrap() []Steper             { return m.Steps }
-func (m *MockSteps) Do(ctx context.Context) error { return m.MockDo(ctx) }

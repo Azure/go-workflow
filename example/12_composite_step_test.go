@@ -13,6 +13,14 @@ import (
 // In the real world, it is a good practice to reuse implemented Steps. We can build a composite step
 // by combining a set of steps to achieve complex goals.
 
+// BTW, this composite step is feasible in the this framework, but it has a few drawbacks:
+//	- it's not testable
+//	- the inner steps are invisible to the workflow if not implement Unwrap() method
+//	- only one error returned in Do() will be showed in the final error message
+//	- when add input callbacks to the inner steps, the callbacks will be called before the composite step's Do()
+//
+// Thus, we recommend to use the another pattern to build a composite step, see example 13.
+
 type Bootstrap struct{}
 type Cleanup struct{}
 type SimpleStep struct{ Value string }
