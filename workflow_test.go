@@ -205,7 +205,7 @@ func TestPreflight(t *testing.T) {
 func TestWorkflowWillRecover(t *testing.T) {
 	t.Run("panic in step", func(t *testing.T) {
 		t.Parallel()
-		workflow := new(Workflow)
+		workflow := new(Workflow).Options(DontPanic)
 		panicStep := Func("panic", func(ctx context.Context) error {
 			panic("panic in step")
 		})
@@ -217,7 +217,7 @@ func TestWorkflowWillRecover(t *testing.T) {
 	})
 	t.Run("panic in flow", func(t *testing.T) {
 		t.Parallel()
-		workflow := new(Workflow)
+		workflow := new(Workflow).Options(DontPanic)
 		answer := FuncO("answer", func(ctx context.Context) (int, error) {
 			return 42, nil
 		})

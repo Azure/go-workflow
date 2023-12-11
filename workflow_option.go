@@ -33,3 +33,7 @@ func WithNotify(notify Notify) WorkflowOption {
 		w.notify = append(w.notify, notify)
 	}
 }
+
+func DontPanic(w *Workflow) {
+	w.DontPanic = true
+}

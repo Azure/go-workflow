@@ -155,3 +155,11 @@ func (e ErrCycleDependency) Error() string {
 	}
 	return builder.String()
 }
+
+type ErrPanic struct{ Err error }
+type ErrInput struct{ Err error }
+
+func (e ErrPanic) Error() string { return e.Err.Error() }
+func (e ErrPanic) Unwrap() error { return e.Err }
+func (e ErrInput) Error() string { return e.Err.Error() }
+func (e ErrInput) Unwrap() error { return e.Err }

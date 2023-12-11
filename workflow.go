@@ -40,6 +40,7 @@ type Workflow struct {
 	oneStepTerminated chan struct{}  // signals for next tick
 	clock             clock.Clock    // clock for unit test
 	notify            []Notify       // notify before and after Step
+	DontPanic         bool           // whether recover panic from Step(s)
 }
 
 // Add Steps into Workflow in phase Main.
@@ -461,17 +462,21 @@ func (w *Workflow) runStep(ctx context.Context, step Steper, state *State) error
 // makeDoForStep is panic-free from Step's Do and Input.
 func (w *Workflow) makeDoForStep(step Steper, state *State) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
-		return catchPanicAsError(func() error {
+		do := func(fn func() error) error { return fn() }
+		if w.DontPanic {
+			do = catchPanicAsError
+		}
+		return do(func() error {
 			var err error
 			ctx, afterStep := w.notifyStep(ctx, step)
 			defer func() {
 				afterStep(ctx, step, err)
 			}()
 			// apply up's output to current Step's input
-			if ierr := catchPanicAsError(func() error {
+			if ierr := do(func() error {
 				return state.Input(ctx)
 			}); ierr != nil {
-				err = ierr
+				err = ErrInput{Err: ierr}
 				return err
 			}
 			err = step.Do(ctx)
@@ -512,7 +517,13 @@ func catchPanicAsError(f func() error) error {
 	func(err *error) {
 		defer func() {
 			if r := recover(); r != nil {
-				*err = fmt.Errorf("%s", r)
+				switch t := r.(type) {
+				case error:
+					*err = t
+				default:
+					*err = fmt.Errorf("%s", r)
+				}
+				*err = ErrPanic{Err: *err}
 			}
 		}()
 		*err = f()
