@@ -36,8 +36,8 @@ type StepOption struct {
 //		Steps(a, b, c),					// a, b, c will be executed in parallel
 //		Steps(a, b, c).DependsOn(d, e), // d, e will be executed in parallel, then a, b, c in parallel
 //	)
-func Steps(steps ...Steper) addSteps {
-	rv := make(addSteps)
+func Steps(steps ...Steper) AddSteps {
+	rv := make(AddSteps)
 	for _, step := range steps {
 		rv[step] = &StepConfig{Upstreams: make(Set[Steper])}
 	}
@@ -52,9 +52,9 @@ func Steps(steps ...Steper) addSteps {
 //	Step(a).Input(func(ctx context.Context, a *A) error {
 //		// fill a
 //	}))
-func Step[S Steper](steps ...S) addStep[S] {
-	return addStep[S]{
-		addSteps: Steps(ToSteps(steps)...),
+func Step[S Steper](steps ...S) AddStep[S] {
+	return AddStep[S]{
+		AddSteps: Steps(ToSteps(steps)...),
 		Steps:    steps,
 	}
 }
@@ -71,7 +71,7 @@ func Step[S Steper](steps ...S) addStep[S] {
 //		Step(b).DependsOn(a),
 //		Step(c).DependsOn(b),
 //	)
-func Pipe(steps ...Steper) addSteps {
+func Pipe(steps ...Steper) AddSteps {
 	as := Steps()
 	for i := 0; i < len(steps)-1; i++ {
 		for k, v := range Steps(steps[i+1]).DependsOn(steps[i]) {
@@ -89,7 +89,7 @@ func Pipe(steps ...Steper) addSteps {
 //	Step(a).DependsOn(b, c)
 //
 // Then b, c should happen-before a.
-func (as addSteps) DependsOn(ups ...Steper) addSteps {
+func (as AddSteps) DependsOn(ups ...Steper) AddSteps {
 	for down := range as {
 		as[down].Upstreams.Add(ups...)
 	}
@@ -106,10 +106,10 @@ func (as addSteps) DependsOn(ups ...Steper) addSteps {
 //		InputDependsOn(Adapt(up, /* 2. then receive Output from up */)).
 //		Input(/* 3. this Input is after up's Output */)
 //	Step(a).Input(/* 4. this Input is after all */)
-func (as addStep[S]) Input(fns ...func(context.Context, S) error) addStep[S] {
+func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 	for _, step := range as.Steps {
 		step := step // capture range variable
-		as.addSteps[step].AddInput(func(ctx context.Context) error {
+		as.AddSteps[step].AddInput(func(ctx context.Context) error {
 			for _, fn := range fns {
 				if fn != nil {
 					if err := fn(ctx, step); err != nil {
@@ -137,13 +137,13 @@ func (as addStep[S]) Input(fns ...func(context.Context, S) error) addStep[S] {
 //			// here Up is terminated, and Down has not started yet
 //		}),
 //	)
-func (as addStep[S]) InputDependsOn(adapts ...Adapter[S]) addStep[S] {
+func (as AddStep[S]) InputDependsOn(adapts ...Adapter[S]) AddStep[S] {
 	for _, step := range as.Steps {
 		step := step
 		for _, adapt := range adapts {
 			adapt := adapt
-			as.addSteps[step].Upstreams.Add(adapt.Upstream)
-			as.addSteps[step].AddInput(func(ctx context.Context) error {
+			as.AddSteps[step].Upstreams.Add(adapt.Upstream)
+			as.AddSteps[step].AddInput(func(ctx context.Context) error {
 				return adapt.Flow(ctx, step)
 			})
 		}
@@ -171,7 +171,7 @@ func Adapt[U, D Steper](up U, fn func(context.Context, U, D) error) Adapter[D] {
 }
 
 // Timeout sets the Step level timeout.
-func (as addSteps) Timeout(timeout time.Duration) addSteps {
+func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
 	for step := range as {
 		as[step].AddOption(func(so *StepOption) {
 			so.Timeout = &timeout
@@ -181,7 +181,7 @@ func (as addSteps) Timeout(timeout time.Duration) addSteps {
 }
 
 // When set the Condition for the Step.
-func (as addSteps) When(cond Condition) addSteps {
+func (as AddSteps) When(cond Condition) AddSteps {
 	for step := range as {
 		as[step].AddOption(func(so *StepOption) {
 			so.Condition = cond
@@ -194,7 +194,7 @@ func (as addSteps) When(cond Condition) addSteps {
 //
 // If it's never called, the Step will not be retried.
 // The RetryOption has a DefaultRetryOption as base to be modified.
-func (as addSteps) Retry(opts ...func(*RetryOption)) addSteps {
+func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 	for step := range as {
 		as[step].AddOption(func(so *StepOption) {
 			if so.RetryOption == nil {
@@ -211,22 +211,22 @@ func (as addSteps) Retry(opts ...func(*RetryOption)) addSteps {
 	return as
 }
 
-func (as addSteps) Done() map[Steper]*StepConfig { return as } // WorkflowAdder
+func (as AddSteps) Done() map[Steper]*StepConfig { return as } // WorkflowAdder
 
-func (as addStep[S]) DependsOn(ups ...Steper) addStep[S] {
-	as.addSteps = as.addSteps.DependsOn(ups...)
+func (as AddStep[S]) DependsOn(ups ...Steper) AddStep[S] {
+	as.AddSteps = as.AddSteps.DependsOn(ups...)
 	return as
 }
-func (as addStep[S]) Timeout(timeout time.Duration) addStep[S] {
-	as.addSteps = as.addSteps.Timeout(timeout)
+func (as AddStep[S]) Timeout(timeout time.Duration) AddStep[S] {
+	as.AddSteps = as.AddSteps.Timeout(timeout)
 	return as
 }
-func (as addStep[S]) When(when Condition) addStep[S] {
-	as.addSteps = as.addSteps.When(when)
+func (as AddStep[S]) When(when Condition) AddStep[S] {
+	as.AddSteps = as.AddSteps.When(when)
 	return as
 }
-func (as addStep[S]) Retry(fns ...func(*RetryOption)) addStep[S] {
-	as.addSteps = as.addSteps.Retry(fns...)
+func (as AddStep[S]) Retry(fns ...func(*RetryOption)) AddStep[S] {
+	as.AddSteps = as.AddSteps.Retry(fns...)
 	return as
 }
 
@@ -234,11 +234,11 @@ type Adapter[S Steper] struct {
 	Upstream Steper
 	Flow     func(context.Context, S) error
 }
-type addStep[S Steper] struct {
-	addSteps
+type AddStep[S Steper] struct {
+	AddSteps
 	Steps []S
 }
-type addSteps map[Steper]*StepConfig
+type AddSteps map[Steper]*StepConfig
 
 // ToSteps converts []<StepDoer implemention> to []StepDoer.
 //
