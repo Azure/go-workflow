@@ -12,13 +12,25 @@ package flow
 //
 // Only all Steps in previous phase terminated, the next phase will start.
 // Even if the steps in previous phase are not successful, the next phase will still start.
-type Phase int
+type Phase string
 
 const (
-	PhaseUnknown Phase = iota
-	PhaseInit
-	PhaseMain
-	PhaseDefer
+	PhaseUnknown Phase = ""
+	PhaseInit    Phase = "Init"
+	PhaseMain    Phase = "Main"
+	PhaseDefer   Phase = "Defer"
 )
 
-func (w *Workflow) getPhases() []Phase { return []Phase{PhaseInit, PhaseMain, PhaseDefer} }
+// WorkflowPhases defines the order of phases Workflow executes.
+// New phases can be added to this, please support the built-in phases.
+//
+// i.e.
+//
+//	var PhaseDebug flow.Phase = "Debug"
+//
+//	func init() {
+//		flow.WorkflowPhases = []flow.Phase{flow.PhaseInit, flow.PhaseMain, PhaseDebug, flow.PhaseDefer}
+//	}
+//
+// Then in your package, workflow will execute the steps in PhaseDebug after PhaseMain, before PhaseDefer.
+var WorkflowPhases = []Phase{PhaseInit, PhaseMain, PhaseDefer}

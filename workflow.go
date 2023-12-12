@@ -44,15 +44,16 @@ type Workflow struct {
 }
 
 // Add Steps into Workflow in phase Main.
-func (w *Workflow) Add(was ...WorkflowAdder) *Workflow { return w.add(PhaseMain, was...) }
+func (w *Workflow) Add(was ...WorkflowAdder) *Workflow { return w.PhaseAdd(PhaseMain, was...) }
 
 // Init adds Steps into Workflow in phase Init.
-func (w *Workflow) Init(was ...WorkflowAdder) *Workflow { return w.add(PhaseInit, was...) }
+func (w *Workflow) Init(was ...WorkflowAdder) *Workflow { return w.PhaseAdd(PhaseInit, was...) }
 
 // Defer adds Steps into Workflow in phase Defer.
-func (w *Workflow) Defer(was ...WorkflowAdder) *Workflow { return w.add(PhaseDefer, was...) }
+func (w *Workflow) Defer(was ...WorkflowAdder) *Workflow { return w.PhaseAdd(PhaseDefer, was...) }
 
-func (w *Workflow) add(phase Phase, was ...WorkflowAdder) *Workflow {
+// PhaseAdd add Steps into specific phase.
+func (w *Workflow) PhaseAdd(phase Phase, was ...WorkflowAdder) *Workflow {
 	if w.tree == nil {
 		w.tree = make(StepTree)
 	}
@@ -196,7 +197,7 @@ func (w *Workflow) PhaseOf(step Steper) Phase {
 		return PhaseUnknown
 	}
 	root := w.RootOf(step)
-	for _, phase := range w.getPhases() {
+	for _, phase := range WorkflowPhases {
 		if steps := w.steps[phase]; steps != nil {
 			if steps.Has(root) {
 				return phase
@@ -214,7 +215,7 @@ func (w *Workflow) UpstreamOf(step Steper) map[Steper]StatusError {
 	}
 	root := w.RootOf(step)
 	rv := make(map[Steper]StatusError)
-	for _, phase := range w.getPhases() {
+	for _, phase := range WorkflowPhases {
 		if steps := w.steps[phase]; steps != nil {
 			if steps.Has(root) {
 				for up := range w.StateOf(root).Upstreams() {
@@ -235,7 +236,7 @@ func (w *Workflow) DownstreamOf(step Steper) map[Steper]StatusError {
 	}
 	root := w.tree[step]
 	rv := make(map[Steper]StatusError)
-	for _, phase := range w.getPhases() {
+	for _, phase := range WorkflowPhases {
 		for down := range w.steps[phase] {
 			for up := range w.StateOf(down).Upstreams() {
 				if w.RootOf(up) == root {
@@ -249,7 +250,7 @@ func (w *Workflow) DownstreamOf(step Steper) map[Steper]StatusError {
 
 // IsTerminated returns true if all Steps terminated.
 func (w *Workflow) IsTerminated() bool {
-	for _, phase := range w.getPhases() {
+	for _, phase := range WorkflowPhases {
 		if !w.IsPhaseTerminated(phase) {
 			return false
 		}
@@ -386,7 +387,7 @@ func (w *Workflow) signalTick() { w.oneStepTerminated <- struct{}{} }
 // tick returns true if all steps in all phases are terminated.
 func (w *Workflow) tick(ctx context.Context) bool {
 	var steps Set[Steper]
-	for _, phase := range w.getPhases() {
+	for _, phase := range WorkflowPhases {
 		if !w.IsPhaseTerminated(phase) {
 			steps = w.steps[phase]
 			break
