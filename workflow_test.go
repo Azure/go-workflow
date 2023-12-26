@@ -17,7 +17,6 @@ func TestNil(t *testing.T) {
 		assert.Nil(t, workflow.StateOf(nil))
 		assert.Equal(t, PhaseUnknown, workflow.PhaseOf(nil))
 		assert.Nil(t, workflow.UpstreamOf(nil))
-		assert.Nil(t, workflow.DownstreamOf(nil))
 		assert.True(t, workflow.IsTerminated())
 	})
 	t.Run("step not in workflow", func(t *testing.T) {
@@ -25,7 +24,6 @@ func TestNil(t *testing.T) {
 		assert.Nil(t, workflow.Steps())
 		assert.Nil(t, workflow.StateOf(step))
 		assert.Equal(t, PhaseUnknown, workflow.PhaseOf(step))
-		assert.Nil(t, workflow.DownstreamOf(step))
 		assert.Nil(t, workflow.UpstreamOf(step))
 	})
 }
@@ -65,6 +63,23 @@ func TestAdd(t *testing.T) {
 		assert.ObjectsAreEqual(outerState, innerState)
 		assert.NoError(t, innerState.Input(context.Background()))
 		assert.Equal(t, "modified", step.value)
+	})
+	t.Run("nested multi step in nested workflow", func(t *testing.T) {
+		inner, outer := new(Workflow), new(Workflow)
+		a, b := &someStep{value: "a"}, &someStep{value: "b"}
+		multi := &multiStep{steps: []Steper{a, b}}
+		inner.Add(Step(multi))
+		outer.Add(Step(inner))
+		outer.Add(Step(a).Input(func(ctx context.Context, ss *someStep) error {
+			ss.value += "_updated"
+			return nil
+		}))
+		outerState := outer.StateOf(a)
+		innerState := inner.StateOf(a)
+		assert.ObjectsAreEqual(outerState, innerState)
+		assert.NoError(t, innerState.Input(context.TODO()))
+		assert.Equal(t, "a_updated", a.value)
+
 	})
 	t.Run("inner depends on new", func(t *testing.T) {
 		inner := new(Workflow)
@@ -140,13 +155,6 @@ func TestDep(t *testing.T) {
 			assert.ElementsMatch(t, []Steper{}, keys(workflow.UpstreamOf(b)))
 			assert.ElementsMatch(t, []Steper{d}, keys(workflow.UpstreamOf(c)))
 			assert.ElementsMatch(t, []Steper{}, keys(workflow.UpstreamOf(d)))
-		})
-		t.Run("list all downstrem of some step", func(t *testing.T) {
-			t.Parallel()
-			assert.ElementsMatch(t, []Steper{}, keys(workflow.DownstreamOf(a)))
-			assert.ElementsMatch(t, []Steper{a}, keys(workflow.DownstreamOf(b)))
-			assert.ElementsMatch(t, []Steper{a}, keys(workflow.DownstreamOf(c)))
-			assert.ElementsMatch(t, []Steper{c}, keys(workflow.DownstreamOf(d)))
 		})
 	})
 	t.Run("cycle stepsendency", func(t *testing.T) {

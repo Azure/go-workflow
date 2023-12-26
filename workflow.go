@@ -81,7 +81,6 @@ func (w *Workflow) addStep(phase Phase, step Steper, config *StepConfig) {
 	if step == nil {
 		return
 	}
-	w.steps[phase].Add(step)
 	if w.StateOf(step) == nil {
 		// the step is new, it becomes a new root
 		w.state[step] = new(State)
@@ -101,6 +100,7 @@ func (w *Workflow) addStep(phase Phase, step Steper, config *StepConfig) {
 			}
 		}
 	}
+	w.steps[phase].Add(w.RootOf(step))
 	if config != nil {
 		for up := range config.Upstreams {
 			w.setUpstream(phase, step, up)
@@ -119,34 +119,26 @@ func (w *Workflow) setUpstream(phase Phase, step, up Steper) {
 	// just add the upstream step to the phase
 	// even upstream already in, we still need add it to the phase
 	w.addStep(phase, up, nil)
-	if w.StateOf(up) == nil { // the upstream is not in the Workflow
-		w.StateOf(w.RootOf(step)).AddUpstream(up)
-		return
-	}
-	// find the lowest workflow manages both step and up
-	ancestor := w.tree[step]
-	for {
-		if ancestor == nil {
-			return
-		}
-		if s, ok := ancestor.(interface {
+	origin := step
+	for w.tree[step] != step {
+		step = w.tree[step]
+		if s, ok := step.(interface {
 			StateOf(Steper) *State
 			RootOf(Steper) Steper
 		}); ok {
 			if s.StateOf(up) != nil {
-				s.StateOf(s.RootOf(step)).AddUpstream(up)
+				s.StateOf(s.RootOf(origin)).AddUpstream(s.RootOf(up))
 				return
 			}
 		}
-		if w.tree.IsRoot(ancestor) {
-			break
-		}
-		ancestor = w.tree[ancestor]
 	}
-	w.StateOf(ancestor).AddUpstream(up)
+	// otherwise, add the upstream to the root state
+	w.StateOf(w.RootOf(origin)).AddUpstream(w.RootOf(up))
 }
 
-func (w *Workflow) empty() bool { return len(w.tree) == 0 || len(w.state) == 0 || len(w.steps) == 0 }
+func (w *Workflow) empty() bool {
+	return w == nil || len(w.tree) == 0 || len(w.state) == 0 || len(w.steps) == 0
+}
 
 // Steps returns all root Steps in the Workflow.
 func (w *Workflow) Steps() []Steper { return w.Unwrap() }
@@ -175,20 +167,20 @@ func (w *Workflow) StateOf(step Steper) *State {
 	if w.empty() || step == nil || w.tree[step] == nil {
 		return nil
 	}
-	ancestor := w.tree[step]
-	if ancestor == step { // the current step is a root
-		return w.state[step]
+	origin := step
+	for w.tree[step] != step { // the step is not a root
+		step = w.tree[step]
+		// check whether the lowest ancestor implements StateOf().
+		// normally, the ancestor should be a nested Workflow managing the step.
+		// returning the state of the step is useful when
+		// 1. we could know the exact status or error
+		// 2. we could update the input to the step directly instead of its wrapped Workflow
+		if s, ok := step.(interface{ StateOf(Steper) *State }); ok {
+			return s.StateOf(origin)
+		}
 	}
-	// check whether the lowest ancestor implements StateOf().
-	// normally, the ancestor should be a nested Workflow managing the step.
-	// returning the state of the step is useful when
-	// 1. we could know the exact status or error
-	// 2. we could update the input to the step directly instead of its wrapped Workflow
-	if s, ok := ancestor.(interface{ StateOf(Steper) *State }); ok {
-		return s.StateOf(step)
-	}
-	// otherwise, track back to the root
-	return w.state[w.RootOf(ancestor)]
+	// otherwise, use the root state
+	return w.state[step]
 }
 
 // PhaseOf returns the execution phase of the Step.
@@ -207,43 +199,15 @@ func (w *Workflow) PhaseOf(step Steper) Phase {
 	return PhaseUnknown
 }
 
-// UpstreamOf returns all upstream Steps of the Step.
-// Upstream Steps are the Steps that the Step depends on.
+// UpstreamOf returns all upstream Steps and their status / error of the Step.
 func (w *Workflow) UpstreamOf(step Steper) map[Steper]StatusError {
 	if w.empty() {
 		return nil
 	}
-	root := w.RootOf(step)
 	rv := make(map[Steper]StatusError)
-	for _, phase := range WorkflowPhases {
-		if steps := w.steps[phase]; steps != nil {
-			if steps.Has(root) {
-				for up := range w.StateOf(root).Upstreams() {
-					up = w.RootOf(up)
-					rv[up] = w.StateOf(up).GetStatusError()
-				}
-			}
-		}
-	}
-	return rv
-}
-
-// DownstreamOf returns all downstream Steps of the Step.
-// Downstream Steps are the Steps that depend on the Step.
-func (w *Workflow) DownstreamOf(step Steper) map[Steper]StatusError {
-	if w.empty() {
-		return nil
-	}
-	root := w.tree[step]
-	rv := make(map[Steper]StatusError)
-	for _, phase := range WorkflowPhases {
-		for down := range w.steps[phase] {
-			for up := range w.StateOf(down).Upstreams() {
-				if w.RootOf(up) == root {
-					rv[down] = w.StateOf(down).GetStatusError()
-				}
-			}
-		}
+	for up := range w.StateOf(w.RootOf(step)).Upstreams() {
+		up = w.RootOf(up)
+		rv[up] = w.StateOf(up).GetStatusError()
 	}
 	return rv
 }
