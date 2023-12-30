@@ -136,14 +136,14 @@ func (w *Workflow) setUpstream(phase Phase, step, up Steper) {
 	w.StateOf(w.RootOf(origin)).AddUpstream(w.RootOf(up))
 }
 
-func (w *Workflow) empty() bool {
+func (w *Workflow) Empty() bool {
 	return w == nil || len(w.tree) == 0 || len(w.state) == 0 || len(w.steps) == 0
 }
 
 // Steps returns all root Steps in the Workflow.
 func (w *Workflow) Steps() []Steper { return w.Unwrap() }
 func (w *Workflow) Unwrap() []Steper {
-	if w.empty() {
+	if w.Empty() {
 		return nil
 	}
 	rv := []Steper{}
@@ -155,7 +155,7 @@ func (w *Workflow) Unwrap() []Steper {
 
 // RootOf returns the root Step of the given Step.
 func (w *Workflow) RootOf(step Steper) Steper {
-	if w.empty() {
+	if w.Empty() {
 		return nil
 	}
 	return w.tree.RootOf(step)
@@ -164,7 +164,7 @@ func (w *Workflow) RootOf(step Steper) Steper {
 // StateOf returns the internal state of the Step.
 // State includes Step's status, error, input, dependency and config.
 func (w *Workflow) StateOf(step Steper) *State {
-	if w.empty() || step == nil || w.tree[step] == nil {
+	if w.Empty() || step == nil || w.tree[step] == nil {
 		return nil
 	}
 	origin := step
@@ -185,7 +185,7 @@ func (w *Workflow) StateOf(step Steper) *State {
 
 // PhaseOf returns the execution phase of the Step.
 func (w *Workflow) PhaseOf(step Steper) Phase {
-	if w.empty() {
+	if w.Empty() {
 		return PhaseUnknown
 	}
 	root := w.RootOf(step)
@@ -201,7 +201,7 @@ func (w *Workflow) PhaseOf(step Steper) Phase {
 
 // UpstreamOf returns all upstream Steps and their status / error of the Step.
 func (w *Workflow) UpstreamOf(step Steper) map[Steper]StatusError {
-	if w.empty() {
+	if w.Empty() {
 		return nil
 	}
 	rv := make(map[Steper]StatusError)
@@ -222,7 +222,7 @@ func (w *Workflow) IsTerminated() bool {
 	return true
 }
 func (w *Workflow) IsPhaseTerminated(phase Phase) bool {
-	if w.empty() {
+	if w.Empty() {
 		return true
 	}
 	for step := range w.steps[phase] {
@@ -244,7 +244,7 @@ func (w *Workflow) Do(ctx context.Context) error {
 	}
 	defer w.isRunning.Unlock()
 	// if no steps to run
-	if w.empty() {
+	if w.Empty() {
 		return nil
 	}
 	// preflight check
@@ -441,7 +441,7 @@ func (w *Workflow) makeDoForStep(step Steper, state *State) func(ctx context.Con
 			if ierr := do(func() error {
 				return state.Input(ctx)
 			}); ierr != nil {
-				err = ErrInput{Err: ierr}
+				err = ErrInput{ierr}
 				return err
 			}
 			err = step.Do(ctx)
@@ -488,7 +488,7 @@ func catchPanicAsError(f func() error) error {
 				default:
 					*err = fmt.Errorf("%s", r)
 				}
-				*err = ErrPanic{Err: *err}
+				*err = ErrPanic{*err}
 			}
 		}()
 		*err = f()

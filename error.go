@@ -14,9 +14,13 @@ func Skip(err error) ErrSkip { return ErrSkip{err} }
 
 type ErrCancel struct{ error }
 type ErrSkip struct{ error }
+type ErrPanic struct{ error }
+type ErrInput struct{ error }
 
 func (e ErrCancel) Unwrap() error { return e.error }
 func (e ErrSkip) Unwrap() error   { return e.error }
+func (e ErrPanic) Unwrap() error  { return e.error }
+func (e ErrInput) Unwrap() error  { return e.error }
 
 // StatusError contains the status and error of a Step.
 type StatusError struct {
@@ -155,11 +159,3 @@ func (e ErrCycleDependency) Error() string {
 	}
 	return builder.String()
 }
-
-type ErrPanic struct{ Err error }
-type ErrInput struct{ Err error }
-
-func (e ErrPanic) Error() string { return e.Err.Error() }
-func (e ErrPanic) Unwrap() error { return e.Err }
-func (e ErrInput) Error() string { return e.Err.Error() }
-func (e ErrInput) Unwrap() error { return e.Err }
