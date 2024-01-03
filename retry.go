@@ -44,7 +44,14 @@ func (w *Workflow) retry(opt *RetryOption) func(
 		return backoff.RetryNotifyWithTimer(
 			func() error {
 				defer func() { attempt++ }()
-				ctx, cancel := w.clock.WithTimeout(ctx, opt.Timeout)
+				ctx := ctx
+				var cancel func()
+
+				if opt.Timeout > 0 {
+					ctx, cancel = w.clock.WithTimeout(ctx, opt.Timeout)
+				} else {
+					ctx, cancel = context.WithCancel(ctx)
+				}
 				defer cancel()
 				err := fn(ctx)
 				if err == nil {
