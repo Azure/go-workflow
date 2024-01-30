@@ -397,7 +397,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 				result = Succeeded
 			case DefaultIsCanceled(err):
 				result = Canceled
-			case errors.Is(err, &ErrSkip{}):
+			case errors.Is(err, ErrSkip{}):
 				result = Skipped
 			default:
 				result = Failed

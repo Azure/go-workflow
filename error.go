@@ -18,9 +18,17 @@ type ErrPanic struct{ error }
 type ErrInput struct{ error }
 
 func (e ErrCancel) Unwrap() error { return e.error }
-func (e ErrSkip) Unwrap() error   { return e.error }
-func (e ErrPanic) Unwrap() error  { return e.error }
-func (e ErrInput) Unwrap() error  { return e.error }
+func (e ErrCancel) Is(err error) bool {
+	_, ok := err.(ErrCancel)
+	return ok
+}
+func (e ErrSkip) Unwrap() error { return e.error }
+func (e ErrSkip) Is(err error) bool {
+	_, ok := err.(ErrSkip)
+	return ok
+}
+func (e ErrPanic) Unwrap() error { return e.error }
+func (e ErrInput) Unwrap() error { return e.error }
 
 // StatusError contains the status and error of a Step.
 type StatusError struct {
