@@ -7,9 +7,19 @@ import (
 )
 
 // Cancel will terminate the current step and set status to `Canceled`.
+// Notice Cancel will only take effect when Do returns ErrCancel directly.
+//
+// Example:
+//
+//	func (s *SomeStepImpl) Do(ctx context.Context) error {
+//		err := flow.Cancel(fmt.Errorf("some error"))
+//		return err // this will cancel the step
+//		return fmt.Errorf("wrap error: %w", err) // this will not cancel the step, but fail it
+//	}
 func Cancel(err error) ErrCancel { return ErrCancel{err} }
 
 // Skip will terminate the current step and set status to `Skipped`.
+// Notice Skip will only take effect when Do returns ErrSkip directly.
 func Skip(err error) ErrSkip { return ErrSkip{err} }
 
 type ErrCancel struct{ error }
@@ -18,17 +28,9 @@ type ErrPanic struct{ error }
 type ErrInput struct{ error }
 
 func (e ErrCancel) Unwrap() error { return e.error }
-func (e ErrCancel) Is(err error) bool {
-	_, ok := err.(ErrCancel)
-	return ok
-}
-func (e ErrSkip) Unwrap() error { return e.error }
-func (e ErrSkip) Is(err error) bool {
-	_, ok := err.(ErrSkip)
-	return ok
-}
-func (e ErrPanic) Unwrap() error { return e.error }
-func (e ErrInput) Unwrap() error { return e.error }
+func (e ErrSkip) Unwrap() error   { return e.error }
+func (e ErrPanic) Unwrap() error  { return e.error }
+func (e ErrInput) Unwrap() error  { return e.error }
 
 // StatusError contains the status and error of a Step.
 type StatusError struct {
@@ -121,9 +123,22 @@ func (e ErrWorkflow) Unwrap() []error {
 	}
 	return rv
 }
-func (e ErrWorkflow) IsNil() bool {
+func (e ErrWorkflow) AllSucceeded() bool {
 	for _, sErr := range e {
-		if sErr.Err != nil {
+		switch {
+		case sErr.Status == Succeeded && sErr.Err == nil:
+		default:
+			return false
+		}
+	}
+	return true
+}
+func (e ErrWorkflow) AllSucceededOrSkipped() bool {
+	for _, sErr := range e {
+		switch {
+		case sErr.Status == Succeeded && sErr.Err == nil:
+		case sErr.Status == Skipped: // skipped step can have error to indicate why it's skipped
+		default:
 			return false
 		}
 	}

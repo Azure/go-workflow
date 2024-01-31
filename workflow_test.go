@@ -408,3 +408,22 @@ func TestWorkflowTreeWithPhase(t *testing.T) {
 	assert.Contains(t, w.steps[PhaseMain], wStep1)
 	assert.NotContains(t, w.steps[PhaseMain], w.state[step1])
 }
+
+func TestSkip(t *testing.T) {
+	t.Run("should skip step if return ErrSkip", func(t *testing.T) {
+		w := new(Workflow)
+		skipMe := Func("SkipMe", func(ctx context.Context) error {
+			return Skip(fmt.Errorf("skip me"))
+		})
+		w.Add(Step(skipMe))
+		err := w.Do(context.Background())
+		errWorkflow := new(ErrWorkflow)
+		if assert.ErrorAs(t, err, errWorkflow) {
+			assert.False(t, errWorkflow.AllSucceeded())
+			assert.True(t, errWorkflow.AllSucceededOrSkipped())
+			assert.Equal(t, Skipped, (*errWorkflow)[skipMe].Status)
+			assert.NotErrorIs(t, (*errWorkflow)[skipMe].Err, ErrSkip{})
+			assert.ErrorContains(t, (*errWorkflow)[skipMe].Err, "skip me")
+		}
+	})
+}

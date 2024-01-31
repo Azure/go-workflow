@@ -2,7 +2,6 @@ package flow
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -40,7 +39,8 @@ type Workflow struct {
 	oneStepTerminated chan struct{}  // signals for next tick
 	clock             clock.Clock    // clock for unit test
 	notify            []Notify       // notify before and after Step
-	DontPanic         bool           // whether recover panic from Step(s)
+
+	DontPanic bool // whether recover panic from Step(s)
 }
 
 // Add Steps into Workflow in phase Main.
@@ -271,7 +271,7 @@ func (w *Workflow) Do(ctx context.Context) error {
 	for step, state := range w.state {
 		err[step] = state.GetStatusError()
 	}
-	if err.IsNil() {
+	if err.AllSucceeded() {
 		return nil
 	}
 	return err
@@ -396,11 +396,17 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			case err == nil:
 				result = Succeeded
 			case DefaultIsCanceled(err):
+				if errCancel, isCancel := err.(ErrCancel); isCancel {
+					err = errCancel.Unwrap()
+				}
 				result = Canceled
-			case errors.Is(err, ErrSkip{}):
-				result = Skipped
 			default:
-				result = Failed
+				if errSkip, isSkip := err.(ErrSkip); isSkip {
+					result = Skipped
+					err = errSkip.Unwrap()
+				} else {
+					result = Failed
+				}
 			}
 			state.SetStatus(result)
 			state.SetError(err)
