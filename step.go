@@ -17,10 +17,18 @@ type Steper interface {
 type WorkflowAdder interface {
 	Done() map[Steper]*StepConfig
 }
+
+// BeforeStep defines callback being called BEFORE step being executed.
+type BeforeStep func(context.Context, Steper) (context.Context, error)
+
+// AfterStep defines callback being called AFTER step being executed.
+type AfterStep func(context.Context, Steper, error) error
+
 type StepConfig struct {
-	Upstreams Set[Steper]                 // Upstreams of the Step, means these Steps should happen-before this Step
-	Input     func(context.Context) error // Input callback of the Step, will be called before Do
-	Option    func(*StepOption)           // Option customize the Step settings
+	Upstreams Set[Steper]       // Upstreams of the Step, means these Steps should happen-before this Step
+	Before    BeforeStep        // Before callbacks of the Step, will be called before Do
+	After     AfterStep         // After callbacks of the Step, will be called before Do
+	Option    func(*StepOption) // Option customize the Step settings
 }
 type StepOption struct {
 	RetryOption *RetryOption   // RetryOption customize how the Step should be retried, default (nil) means no retry.
@@ -96,9 +104,9 @@ func (as AddSteps) DependsOn(ups ...Steper) AddSteps {
 	return as
 }
 
-// Input adds Input callback for the Step(s).
+// Input adds Before callback for the Step(s).
 //
-// Input callback will be called before Do,
+// Input callbacks will be called before Do,
 // and the order will respect the order of declarations.
 //
 //	Step(a).
@@ -109,15 +117,15 @@ func (as AddSteps) DependsOn(ups ...Steper) AddSteps {
 func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 	for _, step := range as.Steps {
 		step := step // capture range variable
-		as.AddSteps[step].AddInput(func(ctx context.Context) error {
+		as.AddSteps[step].AddBefore(func(ctx context.Context, _ Steper) (context.Context, error) {
 			for _, fn := range fns {
 				if fn != nil {
 					if err := fn(ctx, step); err != nil {
-						return err
+						return ctx, err
 					}
 				}
 			}
-			return nil
+			return ctx, nil
 		})
 	}
 	return as
@@ -137,14 +145,16 @@ func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 //			// here Up is terminated, and Down has not started yet
 //		}),
 //	)
+//
+// Deprecated: Use Input with DependsOn instead.
 func (as AddStep[S]) InputDependsOn(adapts ...Adapter[S]) AddStep[S] {
 	for _, step := range as.Steps {
 		step := step
 		for _, adapt := range adapts {
 			adapt := adapt
 			as.AddSteps[step].Upstreams.Add(adapt.Upstream)
-			as.AddSteps[step].AddInput(func(ctx context.Context) error {
-				return adapt.Flow(ctx, step)
+			as.AddSteps[step].AddBefore(func(ctx context.Context, _ Steper) (context.Context, error) {
+				return ctx, adapt.Flow(ctx, step)
 			})
 		}
 	}
@@ -168,6 +178,23 @@ func Adapt[U, D Steper](up U, fn func(context.Context, U, D) error) Adapter[D] {
 			return fn(ctx, up, d)
 		},
 	}
+}
+
+func (as AddSteps) Before(befores ...BeforeStep) AddSteps {
+	for step := range as {
+		for _, before := range befores {
+			as[step].AddBefore(before)
+		}
+	}
+	return as
+}
+func (as AddSteps) After(afters ...AfterStep) AddSteps {
+	for step := range as {
+		for _, after := range afters {
+			as[step].AddAfter(after)
+		}
+	}
+	return as
 }
 
 // Timeout sets the Step level timeout.
@@ -215,6 +242,14 @@ func (as AddSteps) Done() map[Steper]*StepConfig { return as } // WorkflowAdder
 
 func (as AddStep[S]) DependsOn(ups ...Steper) AddStep[S] {
 	as.AddSteps = as.AddSteps.DependsOn(ups...)
+	return as
+}
+func (as AddStep[S]) Before(befores ...BeforeStep) AddStep[S] {
+	as.AddSteps = as.AddSteps.Before(befores...)
+	return as
+}
+func (as AddStep[S]) After(afters ...AfterStep) AddStep[S] {
+	as.AddSteps = as.AddSteps.After(afters...)
 	return as
 }
 func (as AddStep[S]) Timeout(timeout time.Duration) AddStep[S] {
@@ -268,19 +303,33 @@ func (sc *StepConfig) AddOption(opt func(*StepOption)) {
 		}
 	}
 }
-func (sc *StepConfig) AddInput(input func(context.Context) error) {
+func (sc *StepConfig) AddBefore(before BeforeStep) {
 	switch {
-	case input == nil:
+	case before == nil:
 		return
-	case sc.Input == nil:
-		sc.Input = input
+	case sc.Before == nil:
+		sc.Before = before
 	default:
-		old := sc.Input
-		sc.Input = func(ctx context.Context) error {
-			if err := old(ctx); err != nil {
-				return err
+		old := sc.Before
+		sc.Before = func(ctx context.Context, s Steper) (context.Context, error) {
+			if newCtx, err := old(ctx, s); err != nil {
+				return newCtx, err
+			} else {
+				return before(newCtx, s)
 			}
-			return input(ctx)
+		}
+	}
+}
+func (sc *StepConfig) AddAfter(after AfterStep) {
+	switch {
+	case after == nil:
+		return
+	case sc.After == nil:
+		sc.After = after
+	default:
+		old := sc.After
+		sc.After = func(ctx context.Context, s Steper, err error) error {
+			return after(ctx, s, old(ctx, s, err))
 		}
 	}
 }
@@ -292,7 +341,8 @@ func (sc *StepConfig) Merge(other *StepConfig) {
 		sc.Upstreams = make(Set[Steper])
 	}
 	sc.Upstreams.Union(other.Upstreams)
-	sc.AddInput(other.Input)
+	sc.AddBefore(other.Before)
+	sc.AddAfter(other.After)
 	sc.AddOption(other.Option)
 }
 

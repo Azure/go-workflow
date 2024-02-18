@@ -28,12 +28,6 @@ func WithClock(clock clock.Clock) WorkflowOption {
 	}
 }
 
-func WithNotify(notify Notify) WorkflowOption {
-	return func(w *Workflow) {
-		w.notify = append(w.notify, notify)
-	}
-}
-
 func DontPanic(w *Workflow) {
 	w.DontPanic = true
 }

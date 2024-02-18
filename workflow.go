@@ -39,7 +39,6 @@ type Workflow struct {
 	isRunning         sync.Mutex     // indicate whether the Workflow is running
 	oneStepTerminated chan struct{}  // signals for next tick
 	clock             clock.Clock    // clock for unit test
-	notify            []Notify       // notify before and after Step
 
 	DontPanic bool // whether recover panic from Step(s)
 	OkToSkip  bool // whether returns nil when some Steps are skipped
@@ -447,37 +446,20 @@ func (w *Workflow) makeDoForStep(step Steper, state *State) func(ctx context.Con
 			do = catchPanicAsError
 		}
 		return do(func() error {
-			var err error
-			ctx, afterStep := w.notifyStep(ctx, step)
-			defer func() {
-				afterStep(ctx, step, err)
-			}()
-			// apply up's output to current Step's input
-			if ierr := do(func() error {
-				return state.Input(ctx)
-			}); ierr != nil {
-				err = ErrInput{ierr}
-				return err
+			// call Before callbacks
+			if errBefore := do(func() error {
+				ctxBefore, errBefore := state.Before(ctx, step)
+				ctx = ctxBefore // use the context returned by Before
+				return errBefore
+			}); errBefore != nil {
+				return ErrBefore{errBefore}
 			}
-			err = step.Do(ctx)
-			return err
+			err := step.Do(ctx)
+			// call After callbacks
+			return do(func() error {
+				return state.After(ctx, step, err)
+			})
 		})
-	}
-}
-func (w *Workflow) notifyStep(ctx context.Context, step Steper) (context.Context, func(context.Context, Steper, error)) {
-	afterStep := []func(context.Context, Steper, error){}
-	for _, notify := range w.notify {
-		if notify.BeforeStep != nil {
-			ctx = notify.BeforeStep(ctx, step)
-		}
-		if notify.AfterStep != nil {
-			afterStep = append(afterStep, notify.AfterStep)
-		}
-	}
-	return ctx, func(ctx context.Context, sr Steper, err error) {
-		for _, notify := range afterStep {
-			notify(ctx, sr, err)
-		}
 	}
 }
 func (w *Workflow) lease() {
