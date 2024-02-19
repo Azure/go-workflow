@@ -139,9 +139,7 @@ func (e ErrWorkflow) Unwrap() []error {
 }
 func (e ErrWorkflow) AllSucceeded() bool {
 	for _, sErr := range e {
-		switch {
-		case sErr.Status == Succeeded && sErr.Err == nil:
-		default:
+		if sErr.Status != Succeeded {
 			return false
 		}
 	}
@@ -149,9 +147,8 @@ func (e ErrWorkflow) AllSucceeded() bool {
 }
 func (e ErrWorkflow) AllSucceededOrSkipped() bool {
 	for _, sErr := range e {
-		switch {
-		case sErr.Status == Succeeded && sErr.Err == nil:
-		case sErr.Status == Skipped: // skipped step can have error to indicate why it's skipped
+		switch sErr.Status {
+		case Succeeded, Skipped: // skipped step can have error to indicate why it's skipped
 		default:
 			return false
 		}
