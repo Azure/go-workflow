@@ -42,6 +42,7 @@ type Workflow struct {
 	notify            []Notify       // notify before and after Step
 
 	DontPanic bool // whether recover panic from Step(s)
+	OkToSkip  bool // whether returns nil when some Steps are skipped
 }
 
 // Add Steps into Workflow in phase Main.
@@ -272,7 +273,10 @@ func (w *Workflow) Do(ctx context.Context) error {
 	for step, state := range w.state {
 		err[step] = state.GetStatusError()
 	}
-	if err.AllSucceeded() {
+	if w.OkToSkip && err.AllSucceededOrSkipped() {
+		return nil
+	}
+	if !w.OkToSkip && err.AllSucceeded() {
 		return nil
 	}
 	return err
