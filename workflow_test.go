@@ -445,8 +445,8 @@ func TestBeforeAfter(t *testing.T) {
 		w := new(Workflow)
 		w.Add(
 			Step(step).
-				Before(beforeInc).
-				After(afterAssert),
+				BeforeStep(beforeInc).
+				AfterStep(afterAssert),
 		)
 		assert.NoError(t, w.Do(context.TODO()))
 	})
@@ -455,7 +455,7 @@ func TestBeforeAfter(t *testing.T) {
 		w := new(Workflow)
 		w.Add(
 			Step(step).
-				Before(beforeFail),
+				BeforeStep(beforeFail),
 		)
 		assert.Error(t, w.Do(context.TODO()))
 		assert.EqualValues(t, 0, i.Load())
@@ -465,8 +465,8 @@ func TestBeforeAfter(t *testing.T) {
 		w := new(Workflow)
 		w.Add(
 			Step(step).
-				Before(beforeContext, beforeAssertContext, beforeInc).
-				After(afterAssert, afterFail),
+				BeforeStep(beforeContext, beforeAssertContext, beforeInc).
+				AfterStep(afterAssert, afterFail),
 		)
 		assert.Error(t, w.Do(context.TODO()))
 	})

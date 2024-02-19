@@ -180,7 +180,7 @@ func Adapt[U, D Steper](up U, fn func(context.Context, U, D) error) Adapter[D] {
 	}
 }
 
-func (as AddSteps) Before(befores ...BeforeStep) AddSteps {
+func (as AddSteps) BeforeStep(befores ...BeforeStep) AddSteps {
 	for step := range as {
 		for _, before := range befores {
 			as[step].AddBefore(before)
@@ -188,7 +188,7 @@ func (as AddSteps) Before(befores ...BeforeStep) AddSteps {
 	}
 	return as
 }
-func (as AddSteps) After(afters ...AfterStep) AddSteps {
+func (as AddSteps) AfterStep(afters ...AfterStep) AddSteps {
 	for step := range as {
 		for _, after := range afters {
 			as[step].AddAfter(after)
@@ -244,12 +244,12 @@ func (as AddStep[S]) DependsOn(ups ...Steper) AddStep[S] {
 	as.AddSteps = as.AddSteps.DependsOn(ups...)
 	return as
 }
-func (as AddStep[S]) Before(befores ...BeforeStep) AddStep[S] {
-	as.AddSteps = as.AddSteps.Before(befores...)
+func (as AddStep[S]) BeforeStep(befores ...BeforeStep) AddStep[S] {
+	as.AddSteps = as.AddSteps.BeforeStep(befores...)
 	return as
 }
-func (as AddStep[S]) After(afters ...AfterStep) AddStep[S] {
-	as.AddSteps = as.AddSteps.After(afters...)
+func (as AddStep[S]) AfterStep(afters ...AfterStep) AddStep[S] {
+	as.AddSteps = as.AddSteps.AfterStep(afters...)
 	return as
 }
 func (as AddStep[S]) Timeout(timeout time.Duration) AddStep[S] {
