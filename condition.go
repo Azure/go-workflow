@@ -46,10 +46,10 @@ var (
 	DefaultCondition Condition = AllSucceeded
 	// DefaultIsCanceled is used to determine whether an error is being regarded as canceled.
 	DefaultIsCanceled = func(err error) bool {
-		switch _, isCancel := err.(ErrCancel); {
+		switch {
 		case errors.Is(err, context.Canceled),
 			errors.Is(err, context.DeadlineExceeded),
-			isCancel:
+			StatusFromError(err) == Canceled:
 			return true
 		}
 		return false

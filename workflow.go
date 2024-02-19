@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -41,6 +42,7 @@ type Workflow struct {
 	notify            []Notify       // notify before and after Step
 
 	DontPanic bool // whether recover panic from Step(s)
+	OkToSkip  bool // whether returns nil when some Steps are skipped
 }
 
 // Add Steps into Workflow in phase Main.
@@ -271,7 +273,10 @@ func (w *Workflow) Do(ctx context.Context) error {
 	for step, state := range w.state {
 		err[step] = state.GetStatusError()
 	}
-	if err.AllSucceeded() {
+	if w.OkToSkip && err.AllSucceededOrSkipped() {
+		return nil
+	}
+	if !w.OkToSkip && err.AllSucceeded() {
 		return nil
 	}
 	return err
@@ -390,26 +395,30 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			defer w.signalTick()
 			defer w.unlease()
 
-			err := w.runStep(ctx, step, state)
-			var result StepStatus
-			switch {
-			case err == nil:
-				result = Succeeded
-			case DefaultIsCanceled(err):
-				if errCancel, isCancel := err.(ErrCancel); isCancel {
-					err = errCancel.Unwrap()
-				}
-				result = Canceled
-			default:
-				if errSkip, isSkip := err.(ErrSkip); isSkip {
-					result = Skipped
-					err = errSkip.Unwrap()
-				} else {
-					result = Failed
+			var (
+				err    error
+				status StepStatus
+			)
+			defer func() {
+				state.SetStatus(status)
+				state.SetError(err)
+			}()
+
+			err = w.runStep(ctx, step, state)
+			if err == nil {
+				status = Succeeded
+				return
+			}
+			status = StatusFromError(err)
+			if status == Failed { // do some extra checks
+				switch {
+				case
+					DefaultIsCanceled(err),
+					errors.Is(err, context.Canceled),
+					errors.Is(err, context.DeadlineExceeded):
+					status = Canceled
 				}
 			}
-			state.SetStatus(result)
-			state.SetError(err)
 		}(ctx, step, state)
 	}
 	return false
