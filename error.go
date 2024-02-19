@@ -19,13 +19,13 @@ type ErrSucceed struct{ error }
 type ErrCancel struct{ error }
 type ErrSkip struct{ error }
 type ErrPanic struct{ error }
-type ErrInput struct{ error }
+type ErrBefore struct{ error }
 
 func (e ErrSucceed) Unwrap() error { return e.error }
 func (e ErrCancel) Unwrap() error  { return e.error }
 func (e ErrSkip) Unwrap() error    { return e.error }
 func (e ErrPanic) Unwrap() error   { return e.error }
-func (e ErrInput) Unwrap() error   { return e.error }
+func (e ErrBefore) Unwrap() error  { return e.error }
 
 // StatusFromError gets the StepStatus from error.
 func StatusFromError(err error) StepStatus {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -61,7 +62,8 @@ func TestAdd(t *testing.T) {
 		outerState := outer.StateOf(step)
 		innerState := inner.StateOf(step)
 		assert.ObjectsAreEqual(outerState, innerState)
-		assert.NoError(t, innerState.Input(context.Background()))
+		_, err := innerState.Before(context.Background(), inner)
+		assert.NoError(t, err)
 		assert.Equal(t, "modified", step.value)
 	})
 	t.Run("nested multi step in nested workflow", func(t *testing.T) {
@@ -77,7 +79,8 @@ func TestAdd(t *testing.T) {
 		outerState := outer.StateOf(a)
 		innerState := inner.StateOf(a)
 		assert.ObjectsAreEqual(outerState, innerState)
-		assert.NoError(t, innerState.Input(context.TODO()))
+		_, err := innerState.Before(context.TODO(), inner)
+		assert.NoError(t, err)
 		assert.Equal(t, "a_updated", a.value)
 
 	})
@@ -279,31 +282,6 @@ func TestWorkflowErr(t *testing.T) {
 	})
 }
 
-func ExampleNotify() {
-	workflow := new(Workflow)
-	workflow.Add(
-		Step(Func("dummy step", func(ctx context.Context) error {
-			fmt.Println("inside step")
-			return fmt.Errorf("step error")
-		})),
-	).Options(
-		WithNotify(Notify{
-			BeforeStep: func(ctx context.Context, step Steper) context.Context {
-				fmt.Printf("before step: %s\n", step)
-				return ctx
-			},
-			AfterStep: func(ctx context.Context, step Steper, err error) {
-				fmt.Printf("after step: %s error: %s\n", step, err)
-			},
-		}),
-	)
-	_ = workflow.Do(context.Background())
-	// Output:
-	// before step: dummy step
-	// inside step
-	// after step: dummy step error: step error
-}
-
 type MockOrder struct{ mock.Mock }
 
 func (m *MockOrder) Do(s string) { m.Called(s) }
@@ -425,5 +403,71 @@ func TestSkip(t *testing.T) {
 			assert.NotErrorIs(t, (*errWorkflow)[skipMe].Err, ErrSkip{})
 			assert.ErrorContains(t, (*errWorkflow)[skipMe].Err, "skip me")
 		}
+	})
+}
+
+func TestBeforeAfter(t *testing.T) {
+	var (
+		i    atomic.Int32
+		step = Func("step", func(ctx context.Context) error {
+			assert.EqualValues(t, 1, i.Load())
+			i.Add(1)
+			return nil
+		})
+		beforeContext = func(ctx context.Context, _ Steper) (context.Context, error) {
+			assert.Equal(t, "context.TODO", fmt.Sprint(ctx))
+			return context.Background(), nil
+		}
+		beforeInc = func(ctx context.Context, _ Steper) (context.Context, error) {
+			i.Add(1)
+			return ctx, nil
+		}
+		beforeAssertContext = func(ctx context.Context, _ Steper) (context.Context, error) {
+			assert.Equal(t, "context.Background", fmt.Sprint(ctx))
+			return ctx, nil
+		}
+		beforeFail = func(ctx context.Context, _ Steper) (context.Context, error) {
+			return ctx, assert.AnError
+		}
+		afterAssert = func(ctx context.Context, _ Steper, err error) error {
+			assert.EqualValues(t, 2, i.Load())
+			return nil
+		}
+		afterFail = func(ctx context.Context, _ Steper, err error) error {
+			return assert.AnError
+		}
+		reset = func() {
+			i.Store(0)
+		}
+	)
+	t.Run("should call Before then Step then After", func(t *testing.T) {
+		defer reset()
+		w := new(Workflow)
+		w.Add(
+			Step(step).
+				BeforeStep(beforeInc).
+				AfterStep(afterAssert),
+		)
+		assert.NoError(t, w.Do(context.TODO()))
+	})
+	t.Run("should fail if Before failed", func(t *testing.T) {
+		defer reset()
+		w := new(Workflow)
+		w.Add(
+			Step(step).
+				BeforeStep(beforeFail),
+		)
+		assert.Error(t, w.Do(context.TODO()))
+		assert.EqualValues(t, 0, i.Load())
+	})
+	t.Run("before callbacks are executed in order", func(t *testing.T) {
+		defer reset()
+		w := new(Workflow)
+		w.Add(
+			Step(step).
+				BeforeStep(beforeContext, beforeAssertContext, beforeInc).
+				AfterStep(afterAssert, afterFail),
+		)
+		assert.Error(t, w.Do(context.TODO()))
 	})
 }
