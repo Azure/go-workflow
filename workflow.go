@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -390,26 +391,30 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			defer w.signalTick()
 			defer w.unlease()
 
-			err := w.runStep(ctx, step, state)
-			var result StepStatus
-			switch {
-			case err == nil:
-				result = Succeeded
-			case DefaultIsCanceled(err):
-				if errCancel, isCancel := err.(ErrCancel); isCancel {
-					err = errCancel.Unwrap()
-				}
-				result = Canceled
-			default:
-				if errSkip, isSkip := err.(ErrSkip); isSkip {
-					result = Skipped
-					err = errSkip.Unwrap()
-				} else {
-					result = Failed
+			var (
+				err    error
+				status StepStatus
+			)
+			defer func() {
+				state.SetStatus(status)
+				state.SetError(err)
+			}()
+
+			err = w.runStep(ctx, step, state)
+			if err == nil {
+				status = Succeeded
+				return
+			}
+			status = StatusFromError(err)
+			if status == Failed { // do some extra checks
+				switch {
+				case
+					DefaultIsCanceled(err),
+					errors.Is(err, context.Canceled),
+					errors.Is(err, context.DeadlineExceeded):
+					status = Canceled
 				}
 			}
-			state.SetStatus(result)
-			state.SetError(err)
 		}(ctx, step, state)
 	}
 	return false

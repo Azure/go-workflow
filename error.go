@@ -6,31 +6,45 @@ import (
 	"strings"
 )
 
-// Cancel will terminate the current step and set status to `Canceled`.
-// Notice Cancel will only take effect when Do returns ErrCancel directly.
-//
-// Example:
-//
-//	func (s *SomeStepImpl) Do(ctx context.Context) error {
-//		err := flow.Cancel(fmt.Errorf("some error"))
-//		return err // this will cancel the step
-//		return fmt.Errorf("wrap error: %w", err) // this will not cancel the step, but fail it
-//	}
+// Succeed marks the current step as `Succeeded`, while still reports the error.
+func Succeed(err error) ErrSucceed { return ErrSucceed{err} }
+
+// Cancel marks the current step as `Canceled`, and reports the error.
 func Cancel(err error) ErrCancel { return ErrCancel{err} }
 
-// Skip will terminate the current step and set status to `Skipped`.
-// Notice Skip will only take effect when Do returns ErrSkip directly.
+// Skip marks the current step as `Skipped`, and reports the error.
 func Skip(err error) ErrSkip { return ErrSkip{err} }
 
+type ErrSucceed struct{ error }
 type ErrCancel struct{ error }
 type ErrSkip struct{ error }
 type ErrPanic struct{ error }
 type ErrInput struct{ error }
 
-func (e ErrCancel) Unwrap() error { return e.error }
-func (e ErrSkip) Unwrap() error   { return e.error }
-func (e ErrPanic) Unwrap() error  { return e.error }
-func (e ErrInput) Unwrap() error  { return e.error }
+func (e ErrSucceed) Unwrap() error { return e.error }
+func (e ErrCancel) Unwrap() error  { return e.error }
+func (e ErrSkip) Unwrap() error    { return e.error }
+func (e ErrPanic) Unwrap() error   { return e.error }
+func (e ErrInput) Unwrap() error   { return e.error }
+
+// StatusFromError gets the StepStatus from error.
+func StatusFromError(err error) StepStatus {
+	if err == nil {
+		return Succeeded
+	}
+	switch typedErr := err.(type) {
+	case ErrSucceed:
+		return Succeeded
+	case ErrCancel:
+		return Canceled
+	case ErrSkip:
+		return Skipped
+	case interface{ Unwrap() error }:
+		return StatusFromError(typedErr.Unwrap())
+	default:
+		return Failed
+	}
+}
 
 // StatusError contains the status and error of a Step.
 type StatusError struct {
