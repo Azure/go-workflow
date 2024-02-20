@@ -7,6 +7,8 @@ import (
 	flow "github.com/Azure/go-workflow"
 )
 
+// # Dependency
+//
 // Steps are connected with dependencies to form a Workflow.
 //
 // `flow` provides rich featured Step dependency builders,
@@ -18,7 +20,7 @@ import (
 // Most time, `Step` and `Steps` are mutually exchangeable.
 // The only difference is that:
 //
-//	Step is a generic builder accepting method `Input` and `InputDependsOn`, check next session about I/O for more details.
+//	Step supports a generic method `Input`, check next session about BeforeStep and AfterStep callbacks.
 func ExampleDeclareDependency() {
 	workflow := new(flow.Workflow)
 

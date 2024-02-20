@@ -17,9 +17,10 @@ import (
 // So Bob combines the above Steps into a new Step,
 //
 //	type DoManyThings struct {
-//		Things []*DoSomeThing
+//		DoSomeThing
+//		DoOtherThing
 //	}
-//	func (d *DoManyThings) Do(context.Context) error { /* do many fancy things */ }
+//	func (d *DoManyThings) Do(context.Context) error { /* do fancy things then other thing */ }
 //
 // We define the above DoManyThings as a Nested Step, the below Decorator is another example.
 //
@@ -38,6 +39,7 @@ import (
 //	}
 //
 // It's easy, intuitive, flexible and yet powerful to use Nested Steps.
+//
 // Actually, Workflow itself also implements Steper interface,
 // meaning you can use Workflow as a Step in another Workflow!
 
@@ -48,9 +50,10 @@ import (
 //		workflow.Add(Step(doSomeThing))
 //		return workflow
 //	}
-//	// from now on, we don't have reference to doSomeThing
-//	// however, I still want to update doSomeThing,
-//	// like modify its input, configuration, or even behavior (by decorator).
+//
+//	from now on, we don't have reference to the internal steps, like doSomeThing
+//	however, it's totally possible have necessary to update doSomeThing,
+//	like modify its input, configuration, or even its behavior (by decorator).
 //
 // # Introduce Unwrap()
 //
@@ -67,7 +70,7 @@ import (
 // Then standard package errors provides Is() and As() functions to help us deal with nested errors.
 // We also provides a similar Is() and As() functions for Steper.
 //
-// Workflow users only need to implement the below methods for your Step implementations:
+// Users only need to implement the below methods for your Step implementations:
 //
 //	type WrapStep struct { Steper }
 //	func (w *WrapStep) Unwrap() Steper { return w.Steper }
@@ -106,6 +109,7 @@ func Is[T Steper](s Steper) bool {
 }
 
 // As finds all steps in the tree of step that matches target type, and returns them.
+// The sequence of the returned steps is preorder traversal.
 func As[T Steper](s Steper) []T {
 	if s == nil {
 		return nil
@@ -139,7 +143,7 @@ func As[T Steper](s Steper) []T {
 // What if someone add a Step and its Nested Step to Workflow?
 //
 //	doSomeThing := &DoSomeThing{}
-//	decorated := &Docorator{Steper: step}
+//	decorated := &Decorator{Steper: step}
 //	workflow.Add(
 //		Step(doSomeThing),
 //		Step(decorated),
@@ -188,44 +192,52 @@ func As[T Steper](s Steper) []T {
 //	StepTree{
 //		R1: R1, // root's value is itself
 //		L1: R1,
-//		T2: R2, // trunk is "trasparent"
-//		L2: R2,
+//		T2: R2,
+//		L2: T2,
 //		B3: R3,
-//		L3: B3, // to the lowest [B]ranch ancestor
+//		L3: B3,
 //		T3: B3,
-//		L4: B3,
+//		L4: T3,
 //		...
 //	}
 //
 // StepTree is a data structure that
 //   - keys are all Steps in track
-//   - values are the root of that Step, or lowest ancestor that branches.
+//   - values are the ancestor Steps of the corresponding key
 //
-// If we consider Workflow into the tree, all sub-Workflow are "branch" Steps.
+// If we consider sub-workflow into the tree, all sub-Workflow are "branch" Steps.
 //
 // The contract between Nested Step and Workflow is:
 //
-//	Once a Step "wrap" other Steps, it should have responsibility to orchestrate them.
+//	Once a Step "wrap" other Steps, it should have responsibility to orchestrate the inner steps.
 //
 // So from the Workflow's perspective, it only needs to orchestrate the root Steps,
 // to make sure all Steps are executed in the right order.
 type StepTree map[Steper]Steper
 
+// IsRoot reports whether the step is a root step.
 func (st StepTree) IsRoot(step Steper) bool {
-	if step == nil || st[step] == nil {
+	if st == nil || step == nil || st[step] == nil {
 		return false
 	}
 	return st[step] == step
 }
+
+// RootOf returns the root step of the given step.
 func (st StepTree) RootOf(step Steper) Steper {
-	for step != nil && !st.IsRoot(step) {
+	if st == nil || step == nil || st[step] == nil {
+		return nil
+	}
+	for step != nil && st[step] != step { // traverse to root
 		step = st[step]
 	}
 	return step
 }
-func (sc StepTree) Roots() Set[Steper] {
+
+// Roots returns all root steps.
+func (st StepTree) Roots() Set[Steper] {
 	rv := make(Set[Steper])
-	for k, v := range sc {
+	for k, v := range st {
 		if k == v {
 			rv.Add(v)
 		}
@@ -233,50 +245,62 @@ func (sc StepTree) Roots() Set[Steper] {
 	return rv
 }
 
-// Add a step and all it's descendant steps to the tree.
+// Add a step and all it's wrapped steps to the tree.
 //
-// If step is already in the tree, it's no-op.
-// If step is new, the step will becomes a new root.
-func (sc StepTree) Add(step Steper) (oldRoots Set[Steper]) {
-	if step == nil || sc[step] != nil {
+// Return the steps that were roots, but now are wrapped and taken place by the new root step.
+//
+//   - If step is already in the tree, it's no-op.
+//   - If step is new, the step will becomes a new root.
+//     and all its inner steps will be added to the tree.
+//   - If one of the inner steps is already in tree, panic.
+func (st StepTree) Add(step Steper) (oldRoots Set[Steper]) {
+	if st == nil || step == nil || st[step] != nil {
 		return nil
 	}
-	return sc.newRoot(step, step)
+	return st.traverse(step, step)
 }
-func (sc StepTree) newRoot(root, step Steper) (oldRoots Set[Steper]) {
+
+type ErrWrappedStepAlreadyInTree struct {
+	StepAlreadyThere Steper
+	NewAncestor      Steper
+	OldAncestor      Steper
+}
+
+func (e ErrWrappedStepAlreadyInTree) Error() string {
+	return fmt.Sprintf("add step %q failed: inner step %q already has an ancestor %q",
+		String(e.NewAncestor),
+		String(e.StepAlreadyThere),
+		String(e.OldAncestor),
+	)
+}
+
+func (st StepTree) traverse(root, step Steper) (oldRoots Set[Steper]) {
 	oldRoots = make(Set[Steper])
 	for {
-		pRoot, ok := sc[step]
-		switch {
-		case !ok: // step is new
-			sc[step] = root
-		case ok && pRoot == root: // step already has root
-		case ok && pRoot == step && pRoot != root: // step is an old root
-			sc[step] = root
-			oldRoots.Add(pRoot)
-		case ok && pRoot != step && oldRoots.Has(pRoot): // step is the child of old root
-			sc[step] = root
-		case ok && pRoot != step && !oldRoots.Has(pRoot):
-			panic(fmt.Errorf("add step %T(%s) failed: inner step %T(%s) already has a root %T(%s)",
-				root, root,
-				step, step,
-				pRoot, pRoot,
-			))
+		if step == nil {
+			return
 		}
+		if ancestor, ok := st[step]; ok {
+			if st.IsRoot(step) {
+				oldRoots.Add(step)
+				st[step] = root
+				return
+			} else {
+				panic(ErrWrappedStepAlreadyInTree{
+					StepAlreadyThere: step,
+					NewAncestor:      root,
+					OldAncestor:      ancestor,
+				})
+			}
+		}
+		st[step] = root
 		switch u := step.(type) {
 		case interface{ Unwrap() Steper }:
+			root = step // the current step becomes new ancestor
 			step = u.Unwrap()
-			if step == nil {
-				return
-			}
 		case interface{ Unwrap() []Steper }:
 			for _, inner := range u.Unwrap() {
-				if inner == nil {
-					continue
-				}
-				// the current step will becomes the root
-				// of descendants steps
-				oldRoots.Union(sc.newRoot(step, inner))
+				oldRoots.Union(st.traverse(step, inner))
 			}
 			return
 		default:
@@ -285,34 +309,19 @@ func (sc StepTree) newRoot(root, step Steper) (oldRoots Set[Steper]) {
 	}
 }
 
-// func (st StepTree) LCA(a, b Steper) Steper {
-// 	A, B := []Steper{}, []Steper{}
-// 	for a != nil && !st.IsRoot(a) {
-// 		A = append(A, a)
-// 		a = st[a]
-// 	}
-// 	for b != nil && !st.IsRoot(b) {
-// 		B = append(B, b)
-// 		b = st[b]
-// 	}
-// 	// now a and b are both root
-// 	if a != b {
-// 		return nil // a and b has different root
-// 	}
-// 	A = append(A, a)
-// 	B = append(B, b)
-// 	// then we just need find the last common ancestor
-// 	for i := 0; i < len(A) && i < len(B); i++ {
-// 		if A[len(A)-1-i] != B[len(B)-1-i] {
-// 			return A[len(A)-i]
-// 		}
-// 	}
-// 	return a
-// }
-
-// WithName gives your step a name by overriding String() method.
-func WithName(name string, step Steper) *NamedStep {
-	return &NamedStep{Name: name, Steper: step}
+// Name can rename a Step.
+//
+//	workflow.Add(
+//		Step(a),
+//		Name(a, "StepA"),
+//	)
+//
+// Attention: Name will wrap the original Step
+func Name(step Steper, name string) WorkflowAdder {
+	return Step(&NamedStep{Name: name, Steper: step})
+}
+func NameStringer(step Steper, name fmt.Stringer) WorkflowAdder {
+	return Step(&StringerNamedStep{Name: name, Steper: step})
 }
 
 // NamedStep is a wrapper of Steper, it gives your step a name by overriding String() method.

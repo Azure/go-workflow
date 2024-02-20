@@ -9,37 +9,39 @@ import (
 	flow "github.com/Azure/go-workflow"
 )
 
-// `workflow` provides Workflow Options that configures the Workflow behavior.
+// # Workflow Options
 //
-//   - WithMaxConcurrency: set the maximum concurrency of the Workflow
+// Workflow provides options that configures its behavior.
 //
-// WorkflowOption can be passed to Workflow via `(*Workflow).Options()`
+//	type Workflow struct {
+//		MaxConcurrency int  // MaxConcurrency limits the max concurrency of running Steps
+//		DontPanic      bool // DontPanic suppress panics, instead return it as error
+//		OKToSkip       bool // OKToSkip returns nil if all Steps succeeded or skipped, otherwise only return nil if all Steps succeeded
+//	}
 
-func ExampleWorkflowWithMaxConcurrency() {
-	workflow := &flow.Workflow{}
-
-	start := make(chan struct{})
-	counter := new(atomic.Int32)
-	done := make(chan struct{})
-
-	countOneThenWaitDone := func(context.Context) error {
-		counter.Add(1)
-		start <- struct{}{}
-		<-done
-		return nil
-	}
-
+func ExampleMaxConcurrency() {
 	var (
+		workflow = &flow.Workflow{
+			MaxConcurrency: 2,
+		}
+
+		counter = new(atomic.Int32)
+		start   = make(chan struct{})
+		done    = make(chan struct{})
+
+		countOneThenWaitDone = func(context.Context) error {
+			counter.Add(1)
+			start <- struct{}{} // signal start
+			<-done
+			return nil
+		}
+
 		a = flow.Func("a", countOneThenWaitDone)
 		b = flow.Func("b", countOneThenWaitDone)
 		c = flow.Func("c", countOneThenWaitDone)
 	)
 
-	workflow.Add(
-		flow.Steps(a, b, c),
-	).Options(
-		flow.WithMaxConcurrency(2), // only 2 Steps can run concurrently
-	)
+	workflow.Add(flow.Steps(a, b, c))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -68,4 +70,49 @@ func ExampleWorkflowWithMaxConcurrency() {
 	// Output:
 	// 2
 	// 3
+}
+
+func ExampleDontPanic() {
+	var (
+		workflow = &flow.Workflow{
+			DontPanic: true,
+		}
+
+		panicStep = flow.Func("panic", func(context.Context) error {
+			panic("I'm panicking")
+		})
+	)
+
+	workflow.Add(flow.Step(panicStep))
+
+	fmt.Println(workflow.Do(context.TODO()))
+	// Output:
+	// panic: [Failed]
+	//	I'm panicking
+}
+
+func ExampleOKToSkip() {
+	var (
+		workflow1 = &flow.Workflow{
+			OKToSkip: false,
+		}
+		workflow2 = &flow.Workflow{
+			OKToSkip: true,
+		}
+
+		skipped = flow.Func("skipped", func(context.Context) error {
+			return flow.Skip(fmt.Errorf("skip me"))
+		})
+	)
+
+	workflow1.Add(flow.Step(skipped))
+	workflow2.Add(flow.Step(skipped))
+
+	fmt.Println(workflow1.Do(context.TODO()))
+	fmt.Println(workflow2.Do(context.TODO()))
+	// Output:
+	// skipped: [Skipped]
+	//	skip me
+	//
+	// <nil>
 }

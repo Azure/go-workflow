@@ -2,6 +2,15 @@ package flow
 
 import "context"
 
+// Mock helps to mock a step in Workflow.
+//
+//	w.Add(
+//		flow.Mock(step, func(ctx context.Context) error {}),
+//	)
+func Mock[T Steper](step T, do func(context.Context) error) WorkflowAdder {
+	return Step(&MockStep{Step: step, MockDo: do})
+}
+
 // MockStep helps to mock a step.
 // After building a workflow, you can mock the original step with a mock step.
 type MockStep struct {

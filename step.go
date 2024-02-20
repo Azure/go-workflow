@@ -13,7 +13,7 @@ type Steper interface {
 	Do(context.Context) error
 }
 
-// Implement this interface to be added into Workflow!
+// WorkflowAdder is addable into Workflow!
 type WorkflowAdder interface {
 	Done() map[Steper]*StepConfig
 }
@@ -82,12 +82,34 @@ func Step[S Steper](steps ...S) AddStep[S] {
 func Pipe(steps ...Steper) AddSteps {
 	as := Steps()
 	for i := 0; i < len(steps)-1; i++ {
-		for k, v := range Steps(steps[i+1]).DependsOn(steps[i]) {
-			if as[k] == nil {
-				as[k] = &StepConfig{Upstreams: make(Set[Steper])}
-			}
-			as[k].Merge(v)
-		}
+		as.Merge(Steps(steps[i+1]).DependsOn(steps[i]))
+	}
+	return as
+}
+
+// BatchPipe creates a batched pipeline in Workflow.
+//
+//	workflow.Add(
+//		BatchPipe(
+//			Steps(a, b),
+//			Steps(c, d, e),
+//			Steps(f),
+//		),
+//	)
+//
+// The above code is equivalent to:
+//
+//	workflow.Add(
+//		Steps(c, d, e).DependsOn(a, b),
+//		Steps(f).DependsOn(c, d, e),
+//	)
+func BatchPipe(batch ...AddSteps) AddSteps {
+	as := Steps()
+	for _, other := range batch {
+		as.Merge(other)
+	}
+	for i := 0; i < len(batch)-1; i++ {
+		as.Merge(Steps(Keys(batch[i+1])...).DependsOn(Keys(batch[i])...))
 	}
 	return as
 }
@@ -104,82 +126,37 @@ func (as AddSteps) DependsOn(ups ...Steper) AddSteps {
 	return as
 }
 
-// Input adds Before callback for the Step(s).
+// Input adds BeforeStep callback for the Step(s).
 //
 // Input callbacks will be called before Do,
 // and the order will respect the order of declarations.
 //
 //	Step(a).
 //		Input(/* 1. this Input will be called first */).
-//		InputDependsOn(Adapt(up, /* 2. then receive Output from up */)).
-//		Input(/* 3. this Input is after up's Output */)
-//	Step(a).Input(/* 4. this Input is after all */)
+//		Input(/* 2. this Input is after up's Output */)
+//	Step(a).Input(/* 3. this Input is after all */)
+//
+// The Input callbacks are executed at runtime and per try.
 func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 	for _, step := range as.Steps {
 		step := step // capture range variable
-		as.AddSteps[step].AddBefore(func(ctx context.Context, _ Steper) (context.Context, error) {
-			for _, fn := range fns {
-				if fn != nil {
-					if err := fn(ctx, step); err != nil {
-						return ctx, err
-					}
-				}
+		for _, fn := range fns {
+			if fn != nil {
+				as.AddSteps[step].AddBefore(func(ctx context.Context, _ Steper) (context.Context, error) {
+					return ctx, fn(ctx, step)
+				})
 			}
-			return ctx, nil
-		})
-	}
-	return as
-}
-
-// InputDependsOn declares dependency between Steps, and with feeding data from Upstream to Downstream.
-//
-// It's useful when the Downstream needs some data from Upstream, and the data is not available until Upstream is done.
-// The Input callback will ignore the Upstream's result as long as it's terminated.
-//
-// Due to limitation of Go's generic type system,
-// Use Adapt function to workaround the type check.
-//
-//	Step(down).InputDependsOn(
-//		Adapt(up, func(_ context.Context, u *Up, d *Down) error {
-//			// fill Down from Up
-//			// here Up is terminated, and Down has not started yet
-//		}),
-//	)
-//
-// Deprecated: Use Input with DependsOn instead.
-func (as AddStep[S]) InputDependsOn(adapts ...Adapter[S]) AddStep[S] {
-	for _, step := range as.Steps {
-		step := step
-		for _, adapt := range adapts {
-			adapt := adapt
-			as.AddSteps[step].Upstreams.Add(adapt.Upstream)
-			as.AddSteps[step].AddBefore(func(ctx context.Context, _ Steper) (context.Context, error) {
-				return ctx, adapt.Flow(ctx, step)
-			})
 		}
 	}
 	return as
 }
 
-// Adapt bridges Upstream and Downstream with defining how to flow data.
+// BeforeStep adds BeforeStep callback for the Step(s).
 //
-// Use it with InputDependsOn.
-//
-//	Step(down).InputDependsOn(
-//		Adapt(up, func(_ context.Context, u *Up, d *Down) error {
-//			// fill Down from Up
-//			// here Up is terminated, and Down has not started yet
-//		}),
-//	)
-func Adapt[U, D Steper](up U, fn func(context.Context, U, D) error) Adapter[D] {
-	return Adapter[D]{
-		Upstream: up,
-		Flow: func(ctx context.Context, d D) error {
-			return fn(ctx, up, d)
-		},
-	}
-}
-
+// The BeforeStep callback will be called before Do, and return when first error occurs.
+// The order of execution will respect the order of declarations.
+// The BeforeStep callbacks are able to change the context.Context feed into Do.
+// The BeforeStep callbacks are executed at runtime and per try.
 func (as AddSteps) BeforeStep(befores ...BeforeStep) AddSteps {
 	for step := range as {
 		for _, before := range befores {
@@ -188,6 +165,13 @@ func (as AddSteps) BeforeStep(befores ...BeforeStep) AddSteps {
 	}
 	return as
 }
+
+// AfterStep adds AfterStep callback for the Step(s).
+//
+// The AfterStep callback will be called after Do, and pass the error to next AfterStep callback.
+// The order of execution will respect the order of declarations.
+// The AfterStep callbacks are able to change the error returned by Do.
+// The AfterStep callbacks are executed at runtime and per try.
 func (as AddSteps) AfterStep(afters ...AfterStep) AddSteps {
 	for step := range as {
 		for _, after := range afters {
@@ -219,8 +203,15 @@ func (as AddSteps) When(cond Condition) AddSteps {
 
 // Retry customize how the Step should be retried.
 //
-// If it's never called, the Step will not be retried.
-// The RetryOption has a DefaultRetryOption as base to be modified.
+// Step will be retried as long as this option is configured.
+//
+//	w.Add(
+//		Step(a), // not retry
+//		Step(b).Retry(func(opt *RetryOption) { // will retry 3 times
+//			opt.MaxAttempts = 3
+//		}),
+//		Step(c).Retry(nil), // will use DefaultRetryOption!
+//	)
 func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 	for step := range as {
 		as[step].AddOption(func(so *StepOption) {
@@ -238,7 +229,19 @@ func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 	return as
 }
 
-func (as AddSteps) Done() map[Steper]*StepConfig { return as } // WorkflowAdder
+// Done implements WorkflowAdder
+func (as AddSteps) Done() map[Steper]*StepConfig { return as }
+
+// Merge another AddSteps into one.
+func (as AddSteps) Merge(other AddSteps) AddSteps {
+	for k, v := range other {
+		if as[k] == nil {
+			as[k] = new(StepConfig)
+		}
+		as[k].Merge(v)
+	}
+	return as
+}
 
 func (as AddStep[S]) DependsOn(ups ...Steper) AddStep[S] {
 	as.AddSteps = as.AddSteps.DependsOn(ups...)
@@ -265,10 +268,6 @@ func (as AddStep[S]) Retry(fns ...func(*RetryOption)) AddStep[S] {
 	return as
 }
 
-type Adapter[S Steper] struct {
-	Upstream Steper
-	Flow     func(context.Context, S) error
-}
 type AddStep[S Steper] struct {
 	AddSteps
 	Steps []S
@@ -363,4 +362,14 @@ func (s Set[T]) Union(sets ...Set[T]) {
 			s[v] = struct{}{}
 		}
 	}
+}
+
+// Keys returns the keys of the map m.
+// The keys will be in an indeterminate order.
+func Keys[M ~map[K]V, K comparable, V any](m M) []K {
+	r := make([]K, 0, len(m))
+	for k := range m {
+		r = append(r, k)
+	}
+	return r
 }

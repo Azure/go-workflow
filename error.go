@@ -158,10 +158,10 @@ func (e ErrWorkflow) AllSucceededOrSkipped() bool {
 
 var ErrWorkflowIsRunning = fmt.Errorf("Workflow is running, please wait for it terminated")
 
-// Step status is not Pending when Workflow starts to run.
-type ErrUnexpectStepInitStatus map[Steper]StepStatus
+// ErrUnexpectedStepInitStatus is Step status not Pending when Workflow starts to run.
+type ErrUnexpectedStepInitStatus map[Steper]StepStatus
 
-func (e ErrUnexpectStepInitStatus) Error() string {
+func (e ErrUnexpectedStepInitStatus) Error() string {
 	var builder strings.Builder
 	builder.WriteString("Unexpected Step Initial Status:")
 	for step, status := range e {
@@ -174,7 +174,7 @@ func (e ErrUnexpectStepInitStatus) Error() string {
 	return builder.String()
 }
 
-// There is a cycle-dependency in your Workflow!!!
+// ErrCycleDependency means there is a cycle-dependency in your Workflow!!!
 type ErrCycleDependency map[Steper][]Steper
 
 func (e ErrCycleDependency) Error() string {

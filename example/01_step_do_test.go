@@ -7,7 +7,14 @@ import (
 	flow "github.com/Azure/go-workflow"
 )
 
-// `workflow` has two core concepts:
+// Examples are a good place to ramp-up and have a quick look at this package's features.
+//
+// for basic usage,	   please go to 01 - 08
+// for advanced usage, please go to 09 - ..
+
+// # Step and Workflow
+//
+// Introduce two core concepts:
 //
 //   - Step
 //   - Workflow
@@ -17,7 +24,7 @@ import (
 //
 // They cooperate to provide features:
 //
-//   - Steps are easy to implement, just implement interface `Steper`
+//   - Steps are easy to implement, just a trivial interface `Steper`
 //   - Declare dependencies between Steps to form a Workflow
 //   - Workflow executes Steps in a topological order
 //
@@ -28,25 +35,13 @@ import (
 //	type Steper interface {
 //		Do(context.Context) error
 //	}
-type Foo struct{}
-
-func (f *Foo) Do(ctx context.Context) error {
-	fmt.Println("Foo")
-	return nil
-}
-
-type Bar struct{}
-
-func (b *Bar) Do(context.Context) error {
-	fmt.Println("Bar")
-	return nil
-}
-
-func ExampleSimple() {
+func ExampleStepAndWorkflow() {
 	// Create a Workflow
 	workflow := new(flow.Workflow)
 
 	// Create Steps
+	// Notice we normally use pointer to struct as Step,
+	// internally Steps are stored in Workflow as map keys, so Steps need to be comparable.
 	foo := new(Foo)
 	bar := new(Bar)
 
@@ -63,4 +58,18 @@ func ExampleSimple() {
 	// Output:
 	// Bar
 	// Foo
+}
+
+type Foo struct{}
+
+func (f *Foo) Do(ctx context.Context) error {
+	fmt.Println("Foo")
+	return nil
+}
+
+type Bar struct{}
+
+func (b *Bar) Do(context.Context) error {
+	fmt.Println("Bar")
+	return nil
 }

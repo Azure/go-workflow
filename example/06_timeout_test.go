@@ -10,60 +10,56 @@ import (
 	"github.com/benbjohnson/clock"
 )
 
-// `flow` provides different levels of timeout:
+// # Step Timeout and Per-Try Timeout
 //
-//   - Retry level timeout
-//   - Step level timeout
-
-// WaitDone will be pending until the context is done.
-type WaitDone struct {
-	StartDo chan<- struct{} // signal it everytime start Do()
-}
-
-func (p *WaitDone) Do(ctx context.Context) error {
-	p.StartDo <- struct{}{}
-	<-ctx.Done()
-	fmt.Println("done")
-	return ctx.Err()
-}
-
-func (p *WaitDone) String() string { return "WaitDone" }
-
+// Workflow can manages the timeout of each Step in different granularity.
+//
+//	       ┌────────────────Step Timeout──────────────┐
+//	       │                                          │
+//	       │ ┌─────────┐       ┌─────────┐            │
+//	START ─┴─► Step.Do ├─retry┌► Step.Do ├┐retry─►...─┴─► EXIT
+//	         └─────────┘      │┬─────────┼│
+//	                          └───────────┘
+//	                         Per-Try Timeout
+//
+//	workflow.Add(
+//		Step(a).
+//		Timeout(/* Step Timeout */).
+//		Retry(func(ro *flow.RetryOption) {
+//			ro.TimeoutPerTry = /* Per-Try Timeout */
+//		}),
+//	)
 func ExampleTimeout() {
-	// use mock clock
-	mock := clock.NewMock()
-
-	workflow := new(flow.Workflow).
-		Options(flow.WithClock(mock))
-
-	started := make(chan struct{})
-
-	workflow.Add(
-		flow.Steps(&WaitDone{
-			StartDo: started,
-		}).Retry(func(ro *flow.RetryOption) {
-			ro.Attempts = 5
-			ro.Timer = new(testTimer)
-			ro.Timeout = 1000 * time.Millisecond // Retry level timeout
-		}).Timeout(1500 * time.Millisecond), // Step level timeout
+	var (
+		mock     = clock.NewMock() // use mock clock
+		workflow = &flow.Workflow{Clock: mock}
+		started  = make(chan struct{})
+		waitDone = &WaitDone{StartDo: started}
 	)
 
-	// Step level timeout is checked after retry returned.
-	// |---------|----|----|
-	// 0         1   1.5   2
-	// done      done canceled
+	workflow.Add(
+		flow.Steps(waitDone).
+			Timeout(15 * time.Minute).
+			Retry(func(ro *flow.RetryOption) {
+				ro.TimeoutPerTry = 10 * time.Minute
+				ro.Attempts = 2
+				ro.Timer = new(testTimer)
+			}),
+	)
 
 	var err error
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		// you can, actually, pass a context with timeout to set a Workflow level timeout
-		err = workflow.Do(context.Background())
-		wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Hour)
+		defer cancel()
+		err = workflow.Do(ctx)
 	}()
 	go func() {
 		for range started {
-			mock.Add(time.Second) // tick forward 1 second
+			mock.Add(10 * time.Minute) // tick forward 10 minute
 		}
 	}()
 	wg.Wait()
@@ -74,6 +70,19 @@ func ExampleTimeout() {
 	// done
 	// WaitDone: [Canceled]
 	//	context deadline exceeded
+}
+
+// WaitDone will be pending until the context is done.
+type WaitDone struct {
+	StartDo chan<- struct{} // signal it each time start Do()
+}
+
+func (p *WaitDone) String() string { return "WaitDone" }
+func (p *WaitDone) Do(ctx context.Context) error {
+	p.StartDo <- struct{}{}
+	<-ctx.Done()
+	fmt.Println("done")
+	return ctx.Err()
 }
 
 // testTimer is a Timer that all retry intervals are immediate (0).

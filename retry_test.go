@@ -13,8 +13,9 @@ import (
 func TestRetry(t *testing.T) {
 	t.Run("Attempts until succeeded", func(t *testing.T) {
 		mockClock := clock.NewMock()
-		workflow := new(Workflow).
-			Options(WithClock(mockClock))
+		workflow := &Workflow{
+			Clock: mockClock,
+		}
 		retryOpt := &RetryOption{
 			Backoff:  backoff.NewExponentialBackOff(),
 			Attempts: 3,

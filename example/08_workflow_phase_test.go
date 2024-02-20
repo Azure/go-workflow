@@ -7,38 +7,52 @@ import (
 	flow "github.com/Azure/go-workflow"
 )
 
-// Workflow supports a concept called "Phase", which is a convient way to group steps.
+// # Phase
+//
+// Workflow supports grouping Steps into different phases.
+//
 // The built-in phases are:
 //   - Init
 //   - Run
 //   - Defer
 //
-// We choose the above phases respectively because this common go pattern:
+// You can customize the phases by add / remove / reorder new Phase to WorkflowPhases.
+//
+//	var WorkflowPhases = []Phase{PhaseInit, PhaseMain, /* YOUR NEW PHASE */, PhaseDefer}
+//
+// We choose the above phases respectively because the below common go pattern:
 //
 //	func init() {}
 //	func main() {
 //		defer func() {}
 //	}
 func ExamplePhase() {
-	workflow := new(flow.Workflow)
-	workflow.Init(flow.Step(
-		flow.Func("init", func(ctx context.Context) error {
+	var (
+		workflow = new(flow.Workflow)
+
+		preparation = flow.Func("init", func(ctx context.Context) error {
 			fmt.Println("Do preparation here")
 			return nil
-		}),
-	))
-	workflow.Add(flow.Steps(
-		flow.Func("run", func(ctx context.Context) error {
+		})
+		main = flow.Func("run", func(ctx context.Context) error {
 			fmt.Println("Do main logic here")
 			return nil
-		}),
-		new(FailedStep), // even one phase failed, the next phase will still be executed
-	))
-	workflow.Defer(flow.Step(
-		flow.Func("defer", func(ctx context.Context) error {
+		})
+		failed  = new(FailedStep)
+		cleanup = flow.Func("defer", func(ctx context.Context) error {
 			fmt.Println("Do cleanup here")
 			return nil
-		}),
+		})
+	)
+	workflow.Init(flow.Step(
+		preparation,
+	))
+	workflow.Add(flow.Steps(
+		main,
+		failed, // even one phase failed, the next phase will still be executed
+	))
+	workflow.Defer(flow.Step(
+		cleanup,
 	))
 	_ = workflow.Do(context.Background())
 	// Output:

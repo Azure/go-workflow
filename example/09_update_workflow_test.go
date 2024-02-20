@@ -7,32 +7,87 @@ import (
 	flow "github.com/Azure/go-workflow"
 )
 
-// After a Workflow is constructed, you can still update the Workflow.
-// Get the Steps in Workflow, via `workflow.Steps()`, then `Add()` them back to update the Step.
+// [STOP HERE FOR BASIC USAGE]
+
+// # Adding a Step to Workflow is idempotent
+//
+// After a Workflow is constructed, you can still update the Steps in Workflow.
+//
+// Get the Steps in Workflow:
+//
+//	workflow.Steps()
+//
+// Adding a Step to Workflow is idempotent, so you can add the same Step multiple times,
+// the configurations of the Step will be **merged**.
+//
+// So it's up to you to choose the pattern of declaring Steps.
+//
+//	a. declare a step with all its configurations together.
+//
+//	workflow.Add(
+//		flow.Step(step).
+//			DependsOn(...).
+//			Input(...).
+//			Timeout(...).
+//			Retry(...),
+//	)
+//
+//	b. declare a step multiple times, and each time configure different things.
+//
+//	workflow.Add(
+//		// dependency
+//		flow.Step(step).
+//			DependsOn(...),
+//		// ...
+//		// input
+//		flow.Step(step).
+//			Input(...),
+//	)
+//	// or even in another Add()
+//	workflow.Add(
+//		flow.Step(step).
+//			Timeout(...),
+//	)
+//
+// So it's possible to update the Steps in Workflow, for example, to add a Retry to a Step,
+// get the Steps in Workflow, via `workflow.Steps()`, then `Add()` them back to update the Step.
 //
 //	for _, step := range workflow.Steps() {
 //		workflow.Add(
 //			flow.Steps(step).Retry(...), // update the Step
 //		)
 //	}
+func ExampleUpdateWorkflow() {
+	workflow := &flow.Workflow{}
+	{ // scope foo and bar
+		var (
+			foo = &Foo{}
+			bar = &Bar{}
+		)
+		workflow.Add(
+			flow.Step(bar).DependsOn(foo),
+		)
+	}
+
+	// from now on, we've lose reference to foo, bar
+	// but still possible to update them (like add dependency)
+	helloWorld := &SayHello{Who: "World!"}
+	for _, step := range workflow.Steps() {
+		workflow.Add(flow.Step(step).DependsOn(helloWorld))
+	}
+
+	_ = workflow.Do(context.Background())
+	// Output:
+	// Hello World!
+	// Foo
+	// Bar
+}
+
+// # Decorate a Step via "Wrapping"
 //
-// However, the `step` here has a type of interface `Steper`, we're losing its concrete type information!
-// So we cannot use strongly typed `Step()` to update the Step's Input callbacks.
+// Step implementations can be reusable and composable.
 //
-// A very common proposal here, is to type assert the `step` to its concrete type.
-//
-//	for _, step := range workflow.Steps() {
-//		switch typedStep := step.(type) {
-//		case *SomeStep:
-//			workflow.Add(
-//				flow.Step(typedStep).Input(...), // update the typed Step
-//			)
-//		}
-//	}
-//
-// The above proposal works for most cases, but from the perspective of framework, we have to think twice.
-// Notice that, `flow` only requires an interface to be acceptable into Workflow, we're not requiring a concrete type.
-// Thus when implementing a Step, it's very common to wrap (decorate) a Step to add more features.
+// For example, you may have a "DecorateStep" that wraps another Step to alter its behavior:
 //
 //	type DecorateStep struct {
 //		BaseStep flow.Steper
@@ -42,18 +97,51 @@ import (
 //		// do something before
 //		err := d.BaseStep.Do(ctx)
 //		// do something after
-//		return err
 //	}
 //
 // Here, you may notice we're having following problem:
 //
-//	How to retrieve the concrete type from an interface that may be wrapped?
+// What if add a "DecorateStep" and its "BaseStep" to a Workflow simultaneously?
+// Will `BaseStep.Do` being called twice?
 //
-// Kindly remind you that in standard package `errors`, you can use `errors.Is` and `errors.As` to check or get the concrete type of error,
-// and `Unwrap() error` method to unwrap the error.
+//	base := &BaseStep{}
+//	decorate := &DecorateStep{BaseStep: base}
+//	workflow.Add(
+//		Steps(base, decorate),
+//	)
 //
-// In `flow`, we provide similar functions `flow.Is` and `flow.As` to check or get the concrete type of Step,
-// and user can implements a `Unwrap() Steper` method for decorating step type to allow `flow` unwraping it.
+// The answer is NO, Workflow will only call `DecorateStep.Do`, so the `BaseStep.Do` will be called only once.
+// While requiring the step implementation to have `Unwrap() Steper` method.
+//
+//	func (d *DecorateStep) Unwrap() Steper { return d.BaseStep }
+//
+// Maybe this will remind you of Go builtin package `errors`,
+// for detail document, please check `Is` and `As` functions and `StepTree` type.
+//
+// Basically, the principal is
+//
+//	Workflow will only orchestrate the top-level Steps, and leave them to manage their inner Steps.
+//
+// Top-level Steps are the Steps that no other Steps wrap them.
+func ExampleWrapStep() {
+	var (
+		w    = new(flow.Workflow)
+		foo  = new(Foo)
+		bar  = new(Bar)
+		wbar = &WrapStep{bar}
+	)
+	w.Add(
+		flow.Step(bar).DependsOn(foo),
+		flow.Step(wbar), // wrap bar
+	)
+	_ = w.Do(context.Background())
+	// Output:
+	// Foo
+	// WRAP: BEFORE
+	// Bar
+	// WRAP: AFTER
+}
+
 type WrapStep struct{ flow.Steper }
 
 func (w *WrapStep) Unwrap() flow.Steper { return w.Steper }
@@ -62,44 +150,6 @@ func (w *WrapStep) Do(ctx context.Context) error {
 	err := w.Steper.Do(ctx)
 	fmt.Println("WRAP: AFTER")
 	return err
-}
-
-func ExampleUpdateWorkflow() {
-	foo := &Foo{}
-	bar := &Bar{}
-
-	workflow := new(flow.Workflow)
-	workflow.Add(
-		flow.Step(bar).DependsOn(foo),
-	)
-
-	// assume since here, we lost the reference of stepA and stepB
-	// and we could have additional steps to inject
-	sayHello := &SayHello{}
-	workflow.Add(flow.Step(sayHello).Input(func(ctx context.Context, sh *SayHello) error {
-		sh.Who = "World!"
-		return nil
-	}))
-
-	// update the original Steps
-	for _, step := range workflow.Steps() {
-		switch {
-		case flow.Is[*Foo](step):
-			workflow.Add(flow.Step(step).DependsOn(sayHello))
-		case flow.Is[*Bar](step):
-			workflow.Add(flow.Step(
-				&WrapStep{step},
-			))
-		}
-	}
-
-	_ = workflow.Do(context.Background())
-	// Output:
-	// Hello World!
-	// Foo
-	// WRAP: BEFORE
-	// Bar
-	// WRAP: AFTER
 }
 
 // Since Go1.21, errors package support unwraping multiple errors, `flow` also supports this feature.
@@ -119,22 +169,26 @@ func (m *MultiWrapStep) Do(ctx context.Context) error {
 }
 
 func ExampleMultiWrap() {
-	step := &MultiWrapStep{
+	fooBar := &MultiWrapStep{
 		Steps: []flow.Steper{
 			new(Foo),
 			new(Bar),
 		},
 	}
-	fmt.Println(flow.Is[*Foo](step)) // true
-	fmt.Println(flow.Is[*Bar](step)) // true
+	fmt.Println(flow.Is[*Foo](fooBar)) // true
+	fmt.Println(flow.Is[*Bar](fooBar)) // true
 
 	// actually Workflow itself also implements `Unwrap() []Steper` method
-	workflow := new(flow.Workflow)
-	workflow.Add(flow.Step(step).DependsOn(new(SayHello)))
+	workflow := new(flow.Workflow).
+		Add(
+			flow.Step(fooBar).
+				DependsOn(new(SayHello)),
+		)
 
+	// use As to unwrap specific type from Step
 	for _, sayHello := range flow.As[*SayHello](workflow) {
 		workflow.Add(flow.Step(sayHello).Input(func(ctx context.Context, sh *SayHello) error {
-			sh.Who = "you can unwrap workflow!"
+			sh.Who = "you can unwrap step!"
 			return nil
 		}))
 	}
@@ -143,7 +197,7 @@ func ExampleMultiWrap() {
 	// Output:
 	// true
 	// true
-	// Hello you can unwrap workflow!
+	// Hello you can unwrap step!
 	// MULTI: BEFORE
 	// MULTI: STEP 0
 	// Foo
