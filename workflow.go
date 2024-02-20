@@ -37,7 +37,7 @@ import (
 // Workflow supports Nested Steps,				     check Is(), As() and StepTree for details.
 type Workflow struct {
 	MaxConcurrency int         // MaxConcurrency limits the max concurrency of running Steps
-	DontPanic      bool        // DontPanic press panics, instead return it as error
+	DontPanic      bool        // DontPanic suppress panics, instead return it as error
 	OKToSkip       bool        // OKToSkip returns nil if all Steps succeeded or skipped, otherwise only return nil if all Steps succeeded
 	Clock          clock.Clock // Clock for unit test
 
