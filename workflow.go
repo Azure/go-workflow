@@ -12,25 +12,36 @@ import (
 
 // Workflow represents a collection of connected Steps that form a directed acyclic graph (DAG).
 //
-// The Steps are connected via dependency, use Step(), Steps() or Pipe() to add Steps into Workflow.
+// The Steps are connected via dependency, use Step(), Steps() or Pipe(), BatchPipe() to add Steps into Workflow.
 //
 //	workflow.Add(
 //		Step(a),
 //		Steps(b, c).DependsOn(a),	// a -> b, c
 //		Pipe(d, e, f),              // d -> e -> f
+//		BatchPipe(
+//			Steps(g, h),
+//			Steps(i, j),
+//		),                          // g, h -> i, j
 //	)
 //
 // Workflow will execute Steps in a topological order, each Step will be executed in a separate goroutine.
+//
 // Workflow guarantees that
 //
-//	Before a Step goroutine starts, all its Upstream Steps are terminated, and registered Input callbacks are called.
+//	Before a Step goroutine starts, all its Upstream Steps are `terminated`.
+//
+// Check `StepStatus` and `Condition` for details.
 //
 // Workflow supports Step-level configuration,       check Step(), Steps() and Pipe() for details.
-// Workflow supports Workflow-level configuration,   check WorkflowOption for details.
 // Workflow supports executing Steps phase in phase, check Phase for details.
 // Workflow supports Nested Steps,				     check Is(), As() and StepTree for details.
 type Workflow struct {
-	tree  StepTree              // tree of Nested / Wrapped Steps, only root Steps are used in the below fields
+	MaxConcurrency int         // MaxConcurrency limits the max concurrency of running Steps
+	DontPanic      bool        // DontPanic press panics, instead return it as error
+	OKToSkip       bool        // OKToSkip returns nil if all Steps succeeded or skipped, otherwise only return nil if all Steps succeeded
+	Clock          clock.Clock // Clock for unit test
+
+	tree  StepTree              // tree of Steps, only root Steps are used in `state` and `steps`
 	state map[Steper]*State     // the internal states of Steps
 	steps map[Phase]Set[Steper] // all Steps grouped in phases
 
@@ -38,10 +49,6 @@ type Workflow struct {
 	waitGroup         sync.WaitGroup // to prevent goroutine leak
 	isRunning         sync.Mutex     // indicate whether the Workflow is running
 	oneStepTerminated chan struct{}  // signals for next tick
-	clock             clock.Clock    // clock for unit test
-
-	DontPanic bool // whether recover panic from Step(s)
-	OkToSkip  bool // whether returns nil when some Steps are skipped
 }
 
 // Add Steps into Workflow in phase Main.
@@ -82,14 +89,17 @@ func (w *Workflow) addStep(phase Phase, step Steper, config *StepConfig) {
 	if step == nil {
 		return
 	}
+	if stepToBuild, ok := step.(interface{ Build() }); ok {
+		stepToBuild.Build()
+	}
 	if w.StateOf(step) == nil {
 		// the step is new, it becomes a new root
 		w.state[step] = new(State)
-		// add the new root (and all its descendant steps) to the tree,
-		// tree.Add() returns all old roots in descendant steps.
+		// add the new root (and all its nested steps) to the tree,
+		// tree.Add() returns all old roots in nested steps.
 		// we need to replace them with the new root.
 		// workflow will only orchestrate the root Steps,
-		// and leave the descendant Steps being managed by the root Steps.
+		// and leave the nested Steps being managed by the root Steps.
 		for old := range w.tree.Add(step) {
 			w.state[step].MergeConfig(w.state[old].Config)
 			delete(w.state, old)
@@ -128,15 +138,16 @@ func (w *Workflow) setUpstream(phase Phase, step, up Steper) {
 			RootOf(Steper) Steper
 		}); ok {
 			if s.StateOf(up) != nil {
-				s.StateOf(s.RootOf(origin)).AddUpstream(s.RootOf(up))
+				s.StateOf(s.RootOf(origin)).AddUpstream(up)
 				return
 			}
 		}
 	}
 	// otherwise, add the upstream to the root state
-	w.StateOf(w.RootOf(origin)).AddUpstream(w.RootOf(up))
+	w.StateOf(w.RootOf(origin)).AddUpstream(up)
 }
 
+// Empty returns true if the Workflow don't have any Step.
 func (w *Workflow) Empty() bool {
 	return w == nil || len(w.tree) == 0 || len(w.state) == 0 || len(w.steps) == 0
 }
@@ -147,11 +158,7 @@ func (w *Workflow) Unwrap() []Steper {
 	if w.Empty() {
 		return nil
 	}
-	rv := []Steper{}
-	for step := range w.state {
-		rv = append(rv, step)
-	}
-	return rv
+	return Keys(w.state)
 }
 
 // RootOf returns the root Step of the given Step.
@@ -169,13 +176,13 @@ func (w *Workflow) StateOf(step Steper) *State {
 		return nil
 	}
 	origin := step
-	for w.tree[step] != step { // the step is not a root
+	for w.tree[step] != step { // the step is not root and != nil
 		step = w.tree[step]
 		// check whether the lowest ancestor implements StateOf().
 		// normally, the ancestor should be a nested Workflow managing the step.
 		// returning the state of the step is useful when
-		// 1. we could know the exact status or error
-		// 2. we could update the input to the step directly instead of its wrapped Workflow
+		// 1. we could know the exact status or error from the lowest workflow
+		// 2. we could update the input to the step that managed by the lowest workflow
 		if s, ok := step.(interface{ StateOf(Steper) *State }); ok {
 			return s.StateOf(origin)
 		}
@@ -191,16 +198,14 @@ func (w *Workflow) PhaseOf(step Steper) Phase {
 	}
 	root := w.RootOf(step)
 	for _, phase := range WorkflowPhases {
-		if steps := w.steps[phase]; steps != nil {
-			if steps.Has(root) {
-				return phase
-			}
+		if steps := w.steps[phase]; steps != nil && steps.Has(root) {
+			return phase
 		}
 	}
 	return PhaseUnknown
 }
 
-// UpstreamOf returns all upstream Steps and their status / error of the Step.
+// UpstreamOf returns all upstream Steps and their status and error.
 func (w *Workflow) UpstreamOf(step Steper) map[Steper]StatusError {
 	if w.Empty() {
 		return nil
@@ -222,6 +227,8 @@ func (w *Workflow) IsTerminated() bool {
 	}
 	return true
 }
+
+// IsPhaseTerminated returns true if all Steps in the phase terminated.
 func (w *Workflow) IsPhaseTerminated(phase Phase) bool {
 	if w.Empty() {
 		return true
@@ -253,10 +260,19 @@ func (w *Workflow) Do(ctx context.Context) error {
 		return err
 	}
 	// new fields for ready to tick
-	if w.clock == nil {
-		w.clock = clock.New()
+	if w.Clock == nil {
+		w.Clock = clock.New()
 	}
-	w.oneStepTerminated = make(chan struct{}, len(w.state)+1) // need one more for the first tick
+	if w.MaxConcurrency > 0 {
+		// use buffered channel as a sized bucket
+		// a Step needs to create a lease in the bucket to run,
+		// and remove the lease from the bucket when it's done.
+		w.leaseBucket = make(chan struct{}, w.MaxConcurrency)
+	}
+	// oneStepTerminated is a signal when each Step terminated,
+	// then workflow needs to tick once.
+	w.oneStepTerminated = make(chan struct{}, len(w.state)+1) // +1 for the first tick
+	defer close(w.oneStepTerminated)
 	// signal for the first tick
 	w.signalTick()
 	// each time one Step terminated, tick forward
@@ -272,10 +288,10 @@ func (w *Workflow) Do(ctx context.Context) error {
 	for step, state := range w.state {
 		err[step] = state.GetStatusError()
 	}
-	if w.OkToSkip && err.AllSucceededOrSkipped() {
+	if w.OKToSkip && err.AllSucceededOrSkipped() {
 		return nil
 	}
-	if !w.OkToSkip && err.AllSucceeded() {
+	if !w.OKToSkip && err.AllSucceeded() {
 		return nil
 	}
 	return err
@@ -300,7 +316,7 @@ func isAnyUpstreamNotTerminated(ups map[Steper]StatusError) bool {
 }
 func (w *Workflow) preflight() error {
 	// assert all Steps' status start with Pending
-	unexpectStatusSteps := make(ErrUnexpectStepInitStatus)
+	unexpectStatusSteps := make(ErrUnexpectedStepInitStatus)
 	for step, state := range w.state {
 		if status := state.GetStatus(); status != Pending {
 			unexpectStatusSteps[step] = status
@@ -310,7 +326,7 @@ func (w *Workflow) preflight() error {
 		return unexpectStatusSteps
 	}
 	// assert all dependency would not form a cycle
-	// start scanning, mark Step as Scanned only when its all depdencies are Scanned
+	// start scanning, mark Step as Scanned only when its all dependencies are Scanned
 	for {
 		hasNewScanned := false // whether a new Step being marked as Scanned this turn
 		for step, state := range w.state {
@@ -356,7 +372,7 @@ func (w *Workflow) signalTick() { w.oneStepTerminated <- struct{}{} }
 func (w *Workflow) tick(ctx context.Context) bool {
 	var steps Set[Steper]
 	for _, phase := range WorkflowPhases {
-		if !w.IsPhaseTerminated(phase) {
+		if !w.IsPhaseTerminated(phase) { // find the first phase that is not terminated
 			steps = w.steps[phase]
 			break
 		}
@@ -366,11 +382,11 @@ func (w *Workflow) tick(ctx context.Context) bool {
 	}
 	for step := range steps {
 		state := w.StateOf(step)
-		// continue if the Step is not Pending
+		// we only process pending Steps
 		if state.GetStatus() != Pending {
 			continue
 		}
-		// continue if any Upstream is not terminated
+		// we only process Steps whose all upstreams are terminated
 		ups := w.UpstreamOf(step)
 		if isAnyUpstreamNotTerminated(ups) {
 			continue
@@ -385,7 +401,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			w.signalTick()
 			continue
 		}
-		// start the Step
+		// kick off the Step
 		w.lease()
 		state.SetStatus(Running)
 		w.waitGroup.Add(1)
@@ -428,9 +444,9 @@ func (w *Workflow) runStep(ctx context.Context, step Steper, state *State) error
 	var notAfter time.Time
 	option := state.Option()
 	if option != nil && option.Timeout != nil {
-		notAfter = w.clock.Now().Add(*option.Timeout)
+		notAfter = w.Clock.Now().Add(*option.Timeout)
 		var cancel func()
-		ctx, cancel = w.clock.WithDeadline(ctx, notAfter)
+		ctx, cancel = w.Clock.WithDeadline(ctx, notAfter)
 		defer cancel()
 	}
 	// run the Step with or without retry

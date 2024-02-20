@@ -7,17 +7,17 @@ import (
 	flow "github.com/Azure/go-workflow"
 )
 
-// In a workflow, it's common to have debug callbacks that you want to
-// execute only when some steps are failed.
+// # How to debug a failed Step?
 //
-// The debug step needs the result of the previous steps, it can be achieved by hack When.
-
+// A debug callback can be executed only when the target Steps are failed.
+//
+// If the debug step needs the result of the upstream steps, it can be achieved by hacking When.
 type DebugStep struct {
 	Upstreams map[flow.Steper]flow.StatusError
 }
 
 func (d *DebugStep) When(ctx context.Context, ups map[flow.Steper]flow.StatusError) flow.StepStatus {
-	// save the upstreams for Do
+	// save the upstreams for debug
 	d.Upstreams = ups
 	return flow.AnyFailed(ctx, ups)
 }
@@ -26,27 +26,28 @@ func (d *DebugStep) Do(ctx context.Context) error {
 		switch {
 		case flow.Is[*FailedStep](up):
 			// handle the error
-			fmt.Println(statusErr.Status, statusErr.Err)
+			fmt.Printf("[%s] %s", statusErr.Status, statusErr.Err)
 		}
 	}
 	return nil
 }
 
 func ExampleDebugStep() {
-	workflow := new(flow.Workflow)
-
-	debug := new(DebugStep)
-	failed := new(FailedStep)
-
-	workflow.Add(flow.Step(failed))
-
+	var (
+		debug    = new(DebugStep)
+		failed   = new(FailedStep)
+		workflow = new(flow.Workflow).Add(
+			flow.Step(failed),
+		)
+	)
 	// register the debug step
-	workflow.Add(flow.Step(debug).
-		DependsOn(failed).
-		When(debug.When),
+	workflow.Add(
+		flow.Step(debug).
+			DependsOn(failed).
+			When(debug.When),
 	)
 
 	_ = workflow.Do(context.Background())
 	// Output:
-	// Failed failed!
+	// [Failed] failed!
 }

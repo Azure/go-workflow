@@ -1,6 +1,6 @@
 package flow
 
-// Phase clusters Steps into different execution phases.
+// Phase groups Steps into different execution phases.
 //
 // Workflow supports three built-in phases: Init, Main and Defer.
 // It derives from the below common go pattern:
@@ -11,8 +11,8 @@ package flow
 //	}
 //
 // - Only all Steps in previous phase terminated, the next phase will start.
-// - Even if the steps in previous phase are not successful, the next phase will still start.
-// - The order of steps in the same phase is not guaranteed. (defer is not stack!)
+// - Even if the steps in previous phase are not successful, the next phase will always start.
+// - The order of steps in the same phase is not guaranteed. (defer here is not stack!)
 //
 // Customized phase can be added to WorkflowPhases.
 type Phase string

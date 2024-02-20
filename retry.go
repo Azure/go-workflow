@@ -14,12 +14,12 @@ var DefaultRetryOption = RetryOption{
 
 // RetryOption customizes retry behavior of a Step in Workflow.
 type RetryOption struct {
-	Timeout  time.Duration // 0 means no timeout, it's per-retry timeout
-	Attempts uint64        // 0 means no limit
-	StopIf   func(ctx context.Context, attempt uint64, since time.Duration, err error) bool
-	Backoff  backoff.BackOff
-	Notify   backoff.Notify
-	Timer    backoff.Timer
+	TimeoutPerTry time.Duration // 0 means no timeout
+	Attempts      uint64        // 0 means no limit
+	StopIf        func(ctx context.Context, attempt uint64, since time.Duration, err error) bool
+	Backoff       backoff.BackOff
+	Notify        backoff.Notify
+	Timer         backoff.Timer
 }
 
 // retry constructs a do function with retry enabled according to the option.
@@ -40,30 +40,25 @@ func (w *Workflow) retry(opt *RetryOption) func(
 			backOff = backoff.WithMaxRetries(backOff, opt.Attempts)
 		}
 		attempt := uint64(0)
-		start := w.clock.Now()
+		start := w.Clock.Now()
 		return backoff.RetryNotifyWithTimer(
 			func() error {
 				defer func() { attempt++ }()
-				ctx := ctx
-				var cancel func()
-
-				if opt.Timeout > 0 {
-					ctx, cancel = w.clock.WithTimeout(ctx, opt.Timeout)
-				} else {
-					ctx, cancel = context.WithCancel(ctx)
+				if opt.TimeoutPerTry > 0 {
+					var cancel func()
+					ctx, cancel = w.Clock.WithTimeout(ctx, opt.TimeoutPerTry)
+					defer cancel()
 				}
-				defer cancel()
-				err := fn(ctx)
-				if err == nil {
-					return nil
+				if err := fn(ctx); err != nil {
+					switch {
+					case !notAfter.IsZero() && w.Clock.Now().After(notAfter), // Step level timeout
+						opt.StopIf != nil && opt.StopIf(ctx, attempt, w.Clock.Since(start), err):
+						return backoff.Permanent(err)
+					default:
+						return err
+					}
 				}
-				if !notAfter.IsZero() && w.clock.Now().After(notAfter) { // Step level timeouted
-					err = backoff.Permanent(err)
-				}
-				if opt.StopIf != nil && opt.StopIf(ctx, attempt, w.clock.Since(start), err) {
-					err = backoff.Permanent(err)
-				}
-				return err
+				return nil
 			},
 			backOff,
 			opt.Notify,

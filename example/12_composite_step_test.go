@@ -7,19 +7,20 @@ import (
 	flow "github.com/Azure/go-workflow"
 )
 
-// Writing a Step with only a few operations is easy, but writing a Step that contains multiple steps
-// (where inner Steps could even have dependencies) is a real challenge.
-
-// In the real world, it is a good practice to reuse implemented Steps. We can build a composite step
-// by combining a set of steps to achieve complex goals.
-
-// BTW, this composite step is feasible in the this framework, but it has a few drawbacks:
-//	- it's not testable
-//	- the inner steps are invisible to the workflow if not implement Unwrap() method
-//	- only one error returned in Do() will be showed in the final error message
+// # Composite Step
+//
+// Writing a Step with only a few operations is easy,
+// but writing a Step that contains multiple and complex operations is challenging.
+//
+// We can reuse and compose simple Steps to form a composite Step.
+//
+// However, composite step still has few drawbacks:
+//	- it's not unit-test-able
+//	- the inner steps are invisible to the workflow if composite step not implement Unwrap() method
+//	- only one error returned from Do(), lose detailed inner step error
 //	- when add input callbacks to the inner steps, the callbacks will be called before the composite step's Do()
 //
-// Thus, we recommend to use the another pattern to build a composite step, see example 13.
+// Thus, we recommend to use Workflow-in-Workflow to build a composite step.
 
 type Bootstrap struct{}
 type Cleanup struct{}
@@ -71,4 +72,42 @@ func ExampleCompositeStep() {
 	// Cleanup
 	// CompositeStep: [Failed]
 	// 	SimpleStep Failed!
+}
+
+func ExampleCompositeViaWorkflow() {
+	var (
+		composite = &CompositeViaWorkflow{SimpleStep: SimpleStep{
+			Value: "Action!",
+		}}
+		w = new(flow.Workflow).Add(
+			flow.Step(composite),
+		)
+	)
+	_ = w.Do(context.Background())
+	// Output:
+	// Bootstrap
+	// SimpleStep: Action!
+	// Cleanup
+}
+
+type CompositeViaWorkflow struct {
+	SimpleStep
+	w flow.Workflow
+}
+
+func (c *CompositeViaWorkflow) Unwrap() flow.Steper          { return &c.w }
+func (c *CompositeViaWorkflow) Do(ctx context.Context) error { return c.w.Do(ctx) }
+func (c *CompositeViaWorkflow) Build() { // Workflow can recognize Build() to be called when Add()
+	c.w = flow.Workflow{}
+	var (
+		bootstrap = new(Bootstrap)
+		cleanup   = new(Cleanup)
+		simple    = &c.SimpleStep
+	)
+	c.w.Add(
+		flow.Pipe(bootstrap, simple),
+	)
+	c.w.Defer(
+		flow.Step(cleanup),
+	)
 }
