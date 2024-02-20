@@ -75,6 +75,19 @@ func AllSucceeded(ctx context.Context, ups map[Steper]StatusError) StepStatus {
 	return Running
 }
 
+// AllSucceededOrSkipped: all Upstreams are Succeeded or Skipped
+func AllSucceededOrSkipped(ctx context.Context, ups map[Steper]StatusError) StepStatus {
+	if DefaultIsCanceled(ctx.Err()) {
+		return Canceled
+	}
+	for _, up := range ups {
+		if up.Status != Succeeded && up.Status != Skipped {
+			return Skipped
+		}
+	}
+	return Running
+}
+
 // BeCanceled: only run when the workflow is canceled
 func BeCanceled(ctx context.Context, ups map[Steper]StatusError) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
