@@ -89,9 +89,6 @@ func (w *Workflow) addStep(phase Phase, step Steper, config *StepConfig) {
 	if step == nil {
 		return
 	}
-	if stepToBuild, ok := step.(interface{ Build() }); ok {
-		stepToBuild.Build()
-	}
 	if w.StateOf(step) == nil {
 		// the step is new, it becomes a new root
 		w.state[step] = new(State)
