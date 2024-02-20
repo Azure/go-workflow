@@ -13,13 +13,14 @@ import (
 //
 //	// RetryOption customizes retry behavior of a Step in Workflow.
 //	type RetryOption struct {
-//		TimeoutPerRetry time.Duration // 0 means no timeout
-//		Attempts        uint64        // 0 means no limit
-//		StopIf          func(ctx context.Context, attempt uint64, since time.Duration, err error) bool
-//		Backoff         backoff.BackOff
-//		Notify          backoff.Notify
-//		Timer           backoff.Timer
+//		TimeoutPerTry time.Duration // 0 means no timeout
+//		Attempts      uint64        // 0 means no limit
+//		StopIf        func(ctx context.Context, attempt uint64, since time.Duration, err error) bool
+//		Backoff       backoff.BackOff
+//		Notify        backoff.Notify
+//		Timer         backoff.Timer
 //	}
+
 func ExampleRetry() {
 	var (
 		workflow   = new(flow.Workflow)
