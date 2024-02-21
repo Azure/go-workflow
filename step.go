@@ -94,7 +94,7 @@ func Step[S Steper](steps ...S) AddStep[S] {
 //		Step(c).DependsOn(b),
 //	)
 func Pipe(steps ...Steper) AddSteps {
-	as := Steps()
+	as := Steps(steps...)
 	for i := 0; i < len(steps)-1; i++ {
 		as.Merge(Steps(steps[i+1]).DependsOn(steps[i]))
 	}
