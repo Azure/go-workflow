@@ -19,6 +19,10 @@ type Steper interface {
 //	type StepImpl struct {}
 //	func (s *StepImpl) Do(ctx context.Context) error { /* ... */ }
 //	func (s *StepImpl) BuildStep() { /* build internal steps */ }
+//
+//	workflow.Add(
+//		flow.Step(new(StepImpl)), // here will call StepImpl.BuildStep() implicitly
+//	)
 type StepBuilder interface {
 	BuildStep()
 }
