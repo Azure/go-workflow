@@ -156,6 +156,7 @@ func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 		step := step // capture range variable
 		for _, fn := range fns {
 			if fn != nil {
+				fn := fn // capture range variable
 				as.AddSteps[step].AddBefore(func(ctx context.Context, _ Steper) (context.Context, error) {
 					return ctx, fn(ctx, step)
 				})
@@ -325,10 +326,10 @@ func (sc *StepConfig) AddBefore(before BeforeStep) {
 	default:
 		old := sc.Before
 		sc.Before = func(ctx context.Context, s Steper) (context.Context, error) {
-			if newCtx, err := before(ctx, s); err != nil {
+			if newCtx, err := old(ctx, s); err != nil {
 				return newCtx, err
 			} else {
-				return old(newCtx, s)
+				return before(newCtx, s)
 			}
 		}
 	}
