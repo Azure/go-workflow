@@ -325,10 +325,10 @@ func (sc *StepConfig) AddBefore(before BeforeStep) {
 	default:
 		old := sc.Before
 		sc.Before = func(ctx context.Context, s Steper) (context.Context, error) {
-			if newCtx, err := old(ctx, s); err != nil {
+			if newCtx, err := before(ctx, s); err != nil {
 				return newCtx, err
 			} else {
-				return before(newCtx, s)
+				return old(newCtx, s)
 			}
 		}
 	}
