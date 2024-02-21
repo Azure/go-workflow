@@ -320,6 +320,25 @@ func (st StepTree) traverse(root, step Steper) (oldRoots Set[Steper]) {
 func Name(step Steper, name string) WorkflowAdder {
 	return Step(&NamedStep{Name: name, Steper: step})
 }
+
+// Names can rename multiple Steps.
+//
+//	workflow.Add(
+//		Names(map[Steper]string{
+//			stepA: "A",
+//			stepB: "B",
+//		},
+//	)
+func Names(m map[Steper]string) WorkflowAdder {
+	as := AddSteps{}
+	for step, name := range m {
+		as[&NamedStep{name, step}] = nil
+	}
+	return as
+}
+
+// NameStringer can rename a Step with a fmt.Stringer,
+// which allows String() method to be called at runtime.
 func NameStringer(step Steper, name fmt.Stringer) WorkflowAdder {
 	return Step(&StringerNamedStep{Name: name, Steper: step})
 }
