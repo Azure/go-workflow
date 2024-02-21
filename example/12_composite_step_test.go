@@ -76,9 +76,9 @@ func ExampleCompositeStep() {
 
 func ExampleCompositeViaWorkflow() {
 	var (
-		composite = (&CompositeViaWorkflow{SimpleStep: SimpleStep{
+		composite = &CompositeViaWorkflow{SimpleStep: SimpleStep{
 			Value: "Action!",
-		}}).Build()
+		}}
 		w = new(flow.Workflow).Add(
 			flow.Step(composite),
 		)
@@ -92,13 +92,13 @@ func ExampleCompositeViaWorkflow() {
 
 type CompositeViaWorkflow struct {
 	SimpleStep
-	w flow.Workflow
+	w *flow.Workflow
 }
 
-func (c *CompositeViaWorkflow) Unwrap() flow.Steper          { return &c.w }
+func (c *CompositeViaWorkflow) Unwrap() flow.Steper          { return c.w }
 func (c *CompositeViaWorkflow) Do(ctx context.Context) error { return c.w.Do(ctx) }
-func (c *CompositeViaWorkflow) Build() *CompositeViaWorkflow {
-	c.w = flow.Workflow{}
+func (c *CompositeViaWorkflow) BuildStep() {
+	c.w = &flow.Workflow{}
 	var (
 		bootstrap = new(Bootstrap)
 		cleanup   = new(Cleanup)
@@ -110,5 +110,4 @@ func (c *CompositeViaWorkflow) Build() *CompositeViaWorkflow {
 	c.w.Defer(
 		flow.Step(cleanup),
 	)
-	return c
 }

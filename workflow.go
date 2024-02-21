@@ -84,11 +84,37 @@ func (w *Workflow) PhaseAdd(phase Phase, was ...WorkflowAdder) *Workflow {
 	return w
 }
 
+// [EXPERIMENTIAL] call BuildStep() method for the Step and its all wrapped Steps before being added into Workflow.
+func buildStep(step Steper) {
+	for {
+		if step == nil {
+			return
+		}
+		if builder, ok := step.(StepBuilder); ok {
+			builder.BuildStep()
+		}
+		switch u := step.(type) {
+		case interface{ Unwrap() Steper }:
+			step = u.Unwrap()
+		case *Workflow: // for a nested Workflow, do not call BuildStep() for Steps in it again
+			return
+		case interface{ Unwrap() []Steper }:
+			for _, s := range u.Unwrap() {
+				buildStep(s)
+			}
+			return
+		default:
+			return
+		}
+	}
+}
+
 // AddStep adds a Step into Workflow with the given phase and config.
 func (w *Workflow) addStep(phase Phase, step Steper, config *StepConfig) {
 	if step == nil {
 		return
 	}
+	buildStep(step)
 	if w.StateOf(step) == nil {
 		// the step is new, it becomes a new root
 		w.state[step] = new(State)

@@ -7,10 +7,20 @@ import (
 
 // Steper describes the requirement for a Step, which is basic unit of a Workflow.
 //
-// Implement this interface to allow the power of Workflow to orchestrate your Steps.
-// Notice your implementation should be a pointer type.
+// Implement this interface to allow Workflow orchestrating your Steps.
+//
+// Notice Steper will be saved in Workflow as map key, so it's supposed to be 'comparable'.
 type Steper interface {
 	Do(context.Context) error
+}
+
+// StepBuilder allows to build the internal Steps when adding into Workflow.
+//
+//	type StepImpl struct {}
+//	func (s *StepImpl) Do(ctx context.Context) error { /* ... */ }
+//	func (s *StepImpl) BuildStep() { /* build internal steps */ }
+type StepBuilder interface {
+	BuildStep()
 }
 
 // WorkflowAdder is addable into Workflow!
