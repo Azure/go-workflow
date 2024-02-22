@@ -38,7 +38,7 @@ import (
 type Workflow struct {
 	MaxConcurrency int         // MaxConcurrency limits the max concurrency of running Steps
 	DontPanic      bool        // DontPanic suppress panics, instead return it as error
-	OKToSkip       bool        // OKToSkip returns nil if all Steps succeeded or skipped, otherwise only return nil if all Steps succeeded
+	SkipAsError    bool        // SkipAsError=true will only return nil error when all Steps succeeded, default to false, allowing some Steps skipped
 	Clock          clock.Clock // Clock for unit test
 
 	tree  StepTree              // tree of Steps, only root Steps are used in `state` and `steps`
@@ -311,10 +311,10 @@ func (w *Workflow) Do(ctx context.Context) error {
 	for step, state := range w.state {
 		err[step] = state.GetStatusError()
 	}
-	if w.OKToSkip && err.AllSucceededOrSkipped() {
+	if w.SkipAsError && err.AllSucceeded() {
 		return nil
 	}
-	if !w.OKToSkip && err.AllSucceeded() {
+	if !w.SkipAsError && err.AllSucceededOrSkipped() {
 		return nil
 	}
 	return err

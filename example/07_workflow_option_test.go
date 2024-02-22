@@ -94,10 +94,10 @@ func ExampleDontPanic() {
 func ExampleOKToSkip() {
 	var (
 		workflow1 = &flow.Workflow{
-			OKToSkip: false,
+			SkipAsError: true,
 		}
 		workflow2 = &flow.Workflow{
-			OKToSkip: true,
+			SkipAsError: false,
 		}
 
 		skipped = flow.Func("skipped", func(context.Context) error {
