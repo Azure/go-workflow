@@ -309,38 +309,6 @@ func (st StepTree) traverse(root, step Steper) (oldRoots Set[Steper]) {
 	}
 }
 
-// Name can rename a Step.
-//
-//	workflow.Add(
-//		Step(a),
-//		Name(a, "StepA"),
-//	)
-//
-// Attention: Name will wrap the original Step
-func Name(step Steper, name string) WorkflowAdder {
-	return Step(&NamedStep{Name: name, Steper: step})
-}
-func NameStringer(step Steper, name fmt.Stringer) WorkflowAdder {
-	return Step(&StringerNamedStep{Name: name, Steper: step})
-}
-
-// NamedStep is a wrapper of Steper, it gives your step a name by overriding String() method.
-type NamedStep struct {
-	Name string
-	Steper
-}
-
-func (ns *NamedStep) String() string { return ns.Name }
-func (ns *NamedStep) Unwrap() Steper { return ns.Steper }
-
-type StringerNamedStep struct {
-	Name fmt.Stringer
-	Steper
-}
-
-func (sns *StringerNamedStep) String() string { return sns.Name.String() }
-func (sns *StringerNamedStep) Unwrap() Steper { return sns.Steper }
-
 // String unwraps step and returns a proper string representation.
 func String(step Steper) string {
 	if step == nil {

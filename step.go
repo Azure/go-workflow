@@ -94,7 +94,7 @@ func Step[S Steper](steps ...S) AddStep[S] {
 //		Step(c).DependsOn(b),
 //	)
 func Pipe(steps ...Steper) AddSteps {
-	as := Steps()
+	as := Steps(steps...)
 	for i := 0; i < len(steps)-1; i++ {
 		as.Merge(Steps(steps[i+1]).DependsOn(steps[i]))
 	}
@@ -156,6 +156,7 @@ func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 		step := step // capture range variable
 		for _, fn := range fns {
 			if fn != nil {
+				fn := fn // capture range variable
 				as.AddSteps[step].AddBefore(func(ctx context.Context, _ Steper) (context.Context, error) {
 					return ctx, fn(ctx, step)
 				})

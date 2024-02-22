@@ -529,4 +529,20 @@ func TestBeforeAfter(t *testing.T) {
 		)
 		assert.Error(t, w.Do(context.TODO()))
 	})
+	t.Run("input should also respect the order", func(t *testing.T) {
+		defer reset()
+		w := new(Workflow).Add(
+			Step(&NonOpStep{}).Input(
+				func(ctx context.Context, nos *NonOpStep) error {
+					assert.EqualValues(t, 1, i.Add(1))
+					return nil
+				},
+				func(ctx context.Context, nos *NonOpStep) error {
+					assert.EqualValues(t, 2, i.Add(1))
+					return nil
+				},
+			),
+		)
+		assert.NoError(t, w.Do(context.Background()))
+	})
 }
