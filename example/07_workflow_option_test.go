@@ -91,7 +91,7 @@ func ExampleDontPanic() {
 	//	I'm panicking
 }
 
-func ExampleOKToSkip() {
+func ExampleSkipAsError() {
 	var (
 		workflow1 = &flow.Workflow{
 			SkipAsError: true,
