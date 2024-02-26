@@ -40,8 +40,8 @@ type AfterStep func(context.Context, Steper, error) error
 
 type StepConfig struct {
 	Upstreams Set[Steper]       // Upstreams of the Step, means these Steps should happen-before this Step
-	Before    BeforeStep        // Before callbacks of the Step, will be called before Do
-	After     AfterStep         // After callbacks of the Step, will be called before Do
+	Before    []BeforeStep      // Before callbacks of the Step, will be called before Do
+	After     []AfterStep       // After callbacks of the Step, will be called before Do
 	Option    func(*StepOption) // Option customize the Step settings
 }
 type StepOption struct {
@@ -157,7 +157,7 @@ func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 		for _, fn := range fns {
 			if fn != nil {
 				fn := fn // capture range variable
-				as.AddSteps[step].AddBefore(func(ctx context.Context, _ Steper) (context.Context, error) {
+				as.AddSteps[step].Before = append(as.AddSteps[step].Before, func(ctx context.Context, _ Steper) (context.Context, error) {
 					return ctx, fn(ctx, step)
 				})
 			}
@@ -174,9 +174,7 @@ func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 // The BeforeStep callbacks are executed at runtime and per try.
 func (as AddSteps) BeforeStep(befores ...BeforeStep) AddSteps {
 	for step := range as {
-		for _, before := range befores {
-			as[step].AddBefore(before)
-		}
+		as[step].Before = append(as[step].Before, befores...)
 	}
 	return as
 }
@@ -189,9 +187,7 @@ func (as AddSteps) BeforeStep(befores ...BeforeStep) AddSteps {
 // The AfterStep callbacks are executed at runtime and per try.
 func (as AddSteps) AfterStep(afters ...AfterStep) AddSteps {
 	for step := range as {
-		for _, after := range afters {
-			as[step].AddAfter(after)
-		}
+		as[step].After = append(as[step].After, afters...)
 	}
 	return as
 }
@@ -317,36 +313,6 @@ func (sc *StepConfig) AddOption(opt func(*StepOption)) {
 		}
 	}
 }
-func (sc *StepConfig) AddBefore(before BeforeStep) {
-	switch {
-	case before == nil:
-		return
-	case sc.Before == nil:
-		sc.Before = before
-	default:
-		old := sc.Before
-		sc.Before = func(ctx context.Context, s Steper) (context.Context, error) {
-			if newCtx, err := old(ctx, s); err != nil {
-				return newCtx, err
-			} else {
-				return before(newCtx, s)
-			}
-		}
-	}
-}
-func (sc *StepConfig) AddAfter(after AfterStep) {
-	switch {
-	case after == nil:
-		return
-	case sc.After == nil:
-		sc.After = after
-	default:
-		old := sc.After
-		sc.After = func(ctx context.Context, s Steper, err error) error {
-			return after(ctx, s, old(ctx, s, err))
-		}
-	}
-}
 func (sc *StepConfig) Merge(other *StepConfig) {
 	if other == nil {
 		return
@@ -355,8 +321,8 @@ func (sc *StepConfig) Merge(other *StepConfig) {
 		sc.Upstreams = make(Set[Steper])
 	}
 	sc.Upstreams.Union(other.Upstreams)
-	sc.AddBefore(other.Before)
-	sc.AddAfter(other.After)
+	sc.Before = append(sc.Before, other.Before...)
+	sc.After = append(sc.After, other.After...)
 	sc.AddOption(other.Option)
 }
 

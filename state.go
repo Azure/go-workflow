@@ -54,16 +54,26 @@ func (s *State) Option() *StepOption {
 	return opt
 }
 func (s *State) Before(ctx context.Context, step Steper) (context.Context, error) {
-	if s.Config == nil || s.Config.Before == nil {
+	if s.Config == nil || len(s.Config.Before) == 0 {
 		return ctx, nil
 	}
-	return s.Config.Before(ctx, step)
+	for _, b := range s.Config.Before {
+		var err error
+		ctx, err = b(ctx, step)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
 }
 func (s *State) After(ctx context.Context, step Steper, err error) error {
-	if s.Config == nil || s.Config.After == nil {
+	if s.Config == nil || len(s.Config.After) == 0 {
 		return err
 	}
-	return s.Config.After(ctx, step, err)
+	for _, a := range s.Config.After {
+		err = a(ctx, step, err)
+	}
+	return err
 }
 func (s *State) AddUpstream(up Steper) {
 	if s.Config == nil {
