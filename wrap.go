@@ -80,7 +80,7 @@ import (
 //
 // to expose your inner Steps.
 
-// Is reports whether the any step in step's tree matches target type.
+// Is reports whether there is any step in tree matches target type.
 func Is[T Steper](s Steper) bool {
 	if s == nil {
 		return false
@@ -132,6 +132,37 @@ func As[T Steper](s Steper) []T {
 			return rv
 		default:
 			return rv
+		}
+	}
+}
+
+// IsStep reports whether there is any step matches target step.
+func IsStep(step, target Steper) bool {
+	if step == target {
+		return true
+	}
+	if step == nil || target == nil {
+		return false
+	}
+	for {
+		if step == target {
+			return true
+		}
+		switch u := step.(type) {
+		case interface{ Unwrap() Steper }:
+			step = u.Unwrap()
+			if step == nil {
+				return false
+			}
+		case interface{ Unwrap() []Steper }:
+			for _, s := range u.Unwrap() {
+				if IsStep(s, target) {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
 		}
 	}
 }
