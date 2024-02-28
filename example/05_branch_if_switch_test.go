@@ -16,7 +16,7 @@ import (
 func ExampleIfBranch() {
 	var (
 		item       string
-		checkExist = flow.FuncO("CheckExist", func(ctx context.Context) (bool, error) {
+		isNotEmpty = flow.FuncO("IsNotEmpty", func(ctx context.Context) (bool, error) {
 			return item != "", nil
 		})
 		newIt = flow.Func("NewIt", func(ctx context.Context) error {
@@ -29,8 +29,8 @@ func ExampleIfBranch() {
 		})
 	)
 	w := new(flow.Workflow).Add(
-		flow.If(checkExist, func(ctx context.Context, checkExist *flow.Function[struct{}, bool]) (bool, error) {
-			return checkExist.Output, nil
+		flow.If(isNotEmpty, func(ctx context.Context, f *flow.Function[struct{}, bool]) (bool, error) {
+			return f.Output, nil
 		}).
 			Then(updateIt).
 			Else(newIt),
