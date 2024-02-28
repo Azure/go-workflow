@@ -12,8 +12,7 @@ type BranchCheckFunc[T Steper] func(context.Context, T) (bool, error)
 //
 //	If(someStep, func(ctx context.Context, someStep *SomeStep) (bool, error) {
 //		// branch condition here, true -> Then, false -> Else.
-//		// if error is returned, then skip both Then and Else.
-//		// the error will be showed as Then and Else steps' error.
+//		// if error is returned, then fail the selected branch step.
 //	}).
 //	Then(thenStep).
 //	Else(elseStep)
