@@ -9,8 +9,8 @@ import (
 
 // Examples are a good place to ramp-up and have a quick look at this package's features.
 //
-// for basic usage,	   please go to 01 - 08
-// for advanced usage, please go to 09 - ..
+// for basic usage,	   please go to 01 - 09
+// for advanced usage, please go to 10 - ..
 
 // # Step and Workflow
 //

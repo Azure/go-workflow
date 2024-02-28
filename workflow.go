@@ -264,6 +264,25 @@ func (w *Workflow) IsPhaseTerminated(phase Phase) bool {
 	return true
 }
 
+// Reset resets the Workflow to ready for a new run.
+func (w *Workflow) Reset() {
+	for _, state := range w.state {
+		state.SetStatus(Pending)
+	}
+	if w.Clock == nil {
+		w.Clock = clock.New()
+	}
+	if w.MaxConcurrency > 0 {
+		// use buffered channel as a sized bucket
+		// a Step needs to create a lease in the bucket to run,
+		// and remove the lease from the bucket when it's done.
+		w.leaseBucket = make(chan struct{}, w.MaxConcurrency)
+	}
+	// oneStepTerminated is a signal when each Step terminated,
+	// then workflow needs to tick once.
+	w.oneStepTerminated = make(chan struct{}, len(w.state)+1) // +1 for the first tick
+}
+
 // Do starts the Step execution in topological order,
 // and waits until all Steps terminated.
 //
@@ -278,24 +297,12 @@ func (w *Workflow) Do(ctx context.Context) error {
 	if w.Empty() {
 		return nil
 	}
+	w.Reset()
+	defer close(w.oneStepTerminated)
 	// preflight check
 	if err := w.preflight(); err != nil {
 		return err
 	}
-	// new fields for ready to tick
-	if w.Clock == nil {
-		w.Clock = clock.New()
-	}
-	if w.MaxConcurrency > 0 {
-		// use buffered channel as a sized bucket
-		// a Step needs to create a lease in the bucket to run,
-		// and remove the lease from the bucket when it's done.
-		w.leaseBucket = make(chan struct{}, w.MaxConcurrency)
-	}
-	// oneStepTerminated is a signal when each Step terminated,
-	// then workflow needs to tick once.
-	w.oneStepTerminated = make(chan struct{}, len(w.state)+1) // +1 for the first tick
-	defer close(w.oneStepTerminated)
 	// signal for the first tick
 	w.signalTick()
 	// each time one Step terminated, tick forward
