@@ -244,12 +244,14 @@ func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 func (as AddSteps) Done() map[Steper]*StepConfig { return as }
 
 // Merge another AddSteps into one.
-func (as AddSteps) Merge(other AddSteps) AddSteps {
-	for k, v := range other {
-		if as[k] == nil {
-			as[k] = new(StepConfig)
+func (as AddSteps) Merge(others ...AddSteps) AddSteps {
+	for _, other := range others {
+		for k, v := range other {
+			if as[k] == nil {
+				as[k] = new(StepConfig)
+			}
+			as[k].Merge(v)
 		}
-		as[k].Merge(v)
 	}
 	return as
 }
@@ -343,6 +345,13 @@ func (s Set[T]) Union(sets ...Set[T]) {
 			s[v] = struct{}{}
 		}
 	}
+}
+func (s Set[T]) Flatten() []T {
+	r := make([]T, 0, len(s))
+	for v := range s {
+		r = append(r, v)
+	}
+	return r
 }
 
 // Keys returns the keys of the map m.

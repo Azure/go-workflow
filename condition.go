@@ -75,6 +75,19 @@ func AllSucceeded(ctx context.Context, ups map[Steper]StatusError) StepStatus {
 	return Running
 }
 
+// AnySucceeded: any Upstream is Succeeded
+func AnySucceeded(ctx context.Context, ups map[Steper]StatusError) StepStatus {
+	if DefaultIsCanceled(ctx.Err()) {
+		return Canceled
+	}
+	for _, up := range ups {
+		if up.Status == Succeeded {
+			return Running
+		}
+	}
+	return Skipped
+}
+
 // AllSucceededOrSkipped: all Upstreams are Succeeded or Skipped
 func AllSucceededOrSkipped(ctx context.Context, ups map[Steper]StatusError) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
@@ -107,4 +120,14 @@ func AnyFailed(ctx context.Context, ups map[Steper]StatusError) StepStatus {
 		}
 	}
 	return Skipped
+}
+
+// ConditionOrDefault will use DefaultCondition if cond is nil.
+func ConditionOrDefault(cond Condition) func(context.Context, map[Steper]StatusError) StepStatus {
+	return func(ctx context.Context, ups map[Steper]StatusError) StepStatus {
+		if cond == nil {
+			return DefaultCondition(ctx, ups)
+		}
+		return cond(ctx, ups)
+	}
 }

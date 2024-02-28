@@ -211,3 +211,32 @@ func TestStepTree(t *testing.T) {
 		})
 	})
 }
+
+func TestIsStep(t *testing.T) {
+	t.Run("nil", func(t *testing.T) {
+		assert.True(t, IsStep(nil, nil))
+		assert.False(t, IsStep(nil, &someStep{}))
+		assert.False(t, IsStep(&someStep{}, nil))
+	})
+	t.Run("single wrap", func(t *testing.T) {
+		var (
+			s = &someStep{value: "1"}
+			w = &wrappedStep{s}
+		)
+		assert.True(t, IsStep(w, s))
+		assert.False(t, IsStep(s, w))
+	})
+	t.Run("multi wrap", func(t *testing.T) {
+		var (
+			s1 = &someStep{value: "1"}
+			s2 = &someStep{value: "2"}
+			m  = &multiStep{steps: []Steper{s1, s2}}
+		)
+		assert.True(t, IsStep(m, s1))
+		assert.True(t, IsStep(m, s2))
+		assert.False(t, IsStep(s1, s2))
+		assert.False(t, IsStep(s2, s1))
+		assert.False(t, IsStep(s1, m))
+		assert.False(t, IsStep(s2, m))
+	})
+}
