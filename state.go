@@ -11,6 +11,7 @@ import (
 // The status could be read / write from different goroutines, so use RWMutex to protect it.
 type State struct {
 	StatusError
+	Span   *Span
 	Config *StepConfig
 	sync.RWMutex
 }

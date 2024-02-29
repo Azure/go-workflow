@@ -39,6 +39,7 @@ type Workflow struct {
 	MaxConcurrency int         // MaxConcurrency limits the max concurrency of running Steps
 	DontPanic      bool        // DontPanic suppress panics, instead return it as error
 	SkipAsError    bool        // SkipAsError=true will only return nil error when all Steps succeeded, default to false, allowing some Steps skipped
+	EnableSpan     bool        // EnableSpan will record the start and end time of each Step, default to false
 	Clock          clock.Clock // Clock for unit test
 
 	tree  StepTree              // tree of Steps, only root Steps are used in `state` and `steps`
@@ -485,6 +486,12 @@ func (w *Workflow) makeDoForStep(step Steper, state *State) func(ctx context.Con
 			do = catchPanicAsError
 		}
 		return do(func() error {
+			if w.EnableSpan {
+				span := new(Span)
+				span.StartSpan(w.Clock)
+				defer span.EndSpan(w.Clock)
+				state.Span = span
+			}
 			// call Before callbacks
 			if errBefore := do(func() error {
 				ctxBefore, errBefore := state.Before(ctx, step)
