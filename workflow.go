@@ -265,7 +265,16 @@ func (w *Workflow) IsPhaseTerminated(phase Phase) bool {
 }
 
 // Reset resets the Workflow to ready for a new run.
-func (w *Workflow) Reset() {
+func (w *Workflow) Reset() error {
+	if !w.isRunning.TryLock() {
+		return ErrWorkflowIsRunning
+	}
+	defer w.isRunning.Unlock()
+	w.reset()
+	return nil
+}
+
+func (w *Workflow) reset() {
 	for _, state := range w.state {
 		state.SetStatus(Pending)
 	}
@@ -297,7 +306,7 @@ func (w *Workflow) Do(ctx context.Context) error {
 	if w.Empty() {
 		return nil
 	}
-	w.Reset()
+	w.reset()
 	defer close(w.oneStepTerminated)
 	// preflight check
 	if err := w.preflight(); err != nil {
@@ -345,16 +354,6 @@ func isAnyUpstreamNotTerminated(ups map[Steper]StatusError) bool {
 	return false
 }
 func (w *Workflow) preflight() error {
-	// assert all Steps' status start with Pending
-	unexpectStatusSteps := make(ErrUnexpectedStepInitStatus)
-	for step, state := range w.state {
-		if status := state.GetStatus(); status != Pending {
-			unexpectStatusSteps[step] = status
-		}
-	}
-	if len(unexpectStatusSteps) > 0 {
-		return unexpectStatusSteps
-	}
 	// assert all dependency would not form a cycle
 	// start scanning, mark Step as Scanned only when its all dependencies are Scanned
 	for {

@@ -55,13 +55,6 @@ func TestErrWorkflow(t *testing.T) {
 	assert.Equal(t, `{"*flow.fakeStep(\u0026{})":{"status":"Failed","error":"mock err random msg"}}`, string(j))
 }
 
-func TestErrUnexpectedStepInitStatus(t *testing.T) {
-	errUnexpectedStepInitStatus := ErrUnexpectedStepInitStatus{
-		&fakeStep{}: Failed,
-	}
-	assert.Equal(t, "Unexpected Step Initial Status:\n*flow.fakeStep(&{}) [Failed]", errUnexpectedStepInitStatus.Error())
-}
-
 func TestErrCycleDependency(t *testing.T) {
 	errCycleDependency := ErrCycleDependency{
 		&fakeStep{Name: "step2"}: {
