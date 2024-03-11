@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -537,6 +539,9 @@ func catchPanicAsError(f func() error) error {
 				default:
 					*err = fmt.Errorf("%s", r)
 				}
+				*err = WithStackTraces(4, 32, func(f runtime.Frame) bool {
+					return strings.HasPrefix(f.Function, "github.com/Azure/go-workflow")
+				})(*err)
 				*err = ErrPanic{*err}
 			}
 		}()

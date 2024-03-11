@@ -272,6 +272,18 @@ func TestWorkflowWillRecover(t *testing.T) {
 		err := workflow.Do(context.Background())
 		assert.ErrorContains(t, err, "panic in flow")
 	})
+	t.Run("panic will have stack traces", func(t *testing.T) {
+		t.Parallel()
+		workflow := &Workflow{DontPanic: true}
+		panicStep := Func("panic", func(ctx context.Context) error {
+			panic("panic in step")
+		})
+		workflow.Add(
+			Step(panicStep),
+		)
+		err := workflow.Do(context.Background())
+		assert.ErrorContains(t, err, "panic in step")
+	})
 }
 
 func TestWorkflowErr(t *testing.T) {
@@ -297,7 +309,7 @@ func TestWorkflowErr(t *testing.T) {
 		for step, stepErr := range errWorkflow {
 			switch fmt.Sprint(step) {
 			case "A":
-				assert.NoError(t, stepErr.Err)
+				assert.NoError(t, stepErr.Unwrap())
 			case "B":
 				assert.ErrorContains(t, stepErr, "B")
 			}
@@ -424,8 +436,8 @@ func TestSkip(t *testing.T) {
 			assert.False(t, errWorkflow.AllSucceeded())
 			assert.True(t, errWorkflow.AllSucceededOrSkipped())
 			assert.Equal(t, Skipped, errWorkflow[skipMe].Status)
-			assert.NotErrorIs(t, errWorkflow[skipMe].Err, ErrSkip{})
-			assert.ErrorContains(t, errWorkflow[skipMe].Err, "skip me")
+			assert.NotErrorIs(t, errWorkflow[skipMe].Unwrap(), ErrSkip{})
+			assert.ErrorContains(t, errWorkflow[skipMe].Unwrap(), "skip me")
 		}
 	})
 	t.Run("should cancel skip if return ErrCancel", func(t *testing.T) {
@@ -440,8 +452,8 @@ func TestSkip(t *testing.T) {
 			assert.False(t, errWorkflow.AllSucceeded())
 			assert.False(t, errWorkflow.AllSucceededOrSkipped())
 			assert.Equal(t, Canceled, errWorkflow[cancelMe].Status)
-			assert.NotErrorIs(t, errWorkflow[cancelMe].Err, ErrCancel{})
-			assert.ErrorContains(t, errWorkflow[cancelMe].Err, "cancel me")
+			assert.NotErrorIs(t, errWorkflow[cancelMe].Unwrap(), ErrCancel{})
+			assert.ErrorContains(t, errWorkflow[cancelMe].Unwrap(), "cancel me")
 		}
 	})
 	t.Run("should succeeded when return ErrSucceed", func(t *testing.T) {
