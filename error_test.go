@@ -1,58 +1,55 @@
 package flow
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-type errWithMarshalJSON struct{ Err error }
-
-func (e errWithMarshalJSON) Error() string { return e.Err.Error() }
-func (e errWithMarshalJSON) Unwrap() error { return e.Err }
-func (e errWithMarshalJSON) MarshalJSON() ([]byte, error) {
-	return []byte(`{"msg":"err already has MarshalJSON msg"}`), nil
-}
-
-func TestStatusError(t *testing.T) {
-	statusErrRandom := StatusError{
-		Status: Failed,
-		Err:    errors.New("mock err random msg"),
-	}
-	j, err := statusErrRandom.MarshalJSON()
-	assert.Nil(t, err)
-	assert.Equal(t, `{"status":"Failed","error":"mock err random msg"}`, string(j))
-
-	statusErrSkip := StatusError{
-		Status: Skipped,
-		Err:    ErrSkip{errors.New("mock err skip msg")},
-	}
-	j, err = statusErrSkip.MarshalJSON()
-	assert.Nil(t, err)
-	assert.Equal(t, `{"status":"Skipped","error":"mock err skip msg"}`, string(j))
-
-	statusErrWithMarshalJSON := StatusError{
-		Status: Failed,
-		Err:    errWithMarshalJSON{errors.New("")},
-	}
-	j, err = statusErrWithMarshalJSON.MarshalJSON()
-	assert.Nil(t, err)
-	assert.Equal(t, `{"status":"Failed","error":{"msg":"err already has MarshalJSON msg"}}`, string(j))
-}
-
-func TestErrWorkflow(t *testing.T) {
-	errWorkflow := ErrWorkflow{
-		&fakeStep{}: StatusError{
+func TestDecorateErrorJSON(t *testing.T) {
+	someError := errors.New("some error")
+	t.Run("plain error will have a error field", func(t *testing.T) {
+		j, err := json.Marshal(StatusError{
 			Status: Failed,
-			Err:    errors.New("mock err random msg"),
-		},
-	}
-	assert.Equal(t, "*flow.fakeStep(&{}): [Failed]\n\tmock err random msg\n", errWorkflow.Error())
-	assert.Equal(t, errors.New("mock err random msg"), errWorkflow.Unwrap()[0])
-	j, err := errWorkflow.MarshalJSON()
-	assert.Nil(t, err)
-	assert.Equal(t, `{"*flow.fakeStep(\u0026{})":{"status":"Failed","error":"mock err random msg"}}`, string(j))
+			Err:    someError,
+		})
+		assert.NoError(t, err)
+		assert.JSONEq(t, `{"status":"Failed","error":"some error"}`, string(j))
+	})
+	t.Run("error with MarshalJSON will be called", func(t *testing.T) {
+		j, err := json.Marshal(StatusError{
+			Status: Failed,
+			Err:    WithStackTraces(3, 32)(someError),
+		})
+		assert.NoError(t, err)
+		m := map[string]interface{}{}
+		if assert.NoError(t, json.Unmarshal(j, &m)) {
+			assert.Equal(t, "Failed", m["status"])
+			assert.Equal(t, "some error", m["error"])
+			assert.Less(t, 0, len(m["stack_traces"].([]interface{})))
+		}
+	})
+	t.Run("skip cancel errors are transparent", func(t *testing.T) {
+		j, err := json.Marshal(StatusError{
+			Status: Skipped,
+			Err:    Skip(someError),
+		})
+		assert.NoError(t, err)
+		assert.JSONEq(t, `{"status":"Skipped","error":"some error"}`, string(j))
+		j, err = json.Marshal(StatusError{
+			Status: Failed,
+			Err:    WithStackTraces(3, 32)(someError),
+		})
+		assert.NoError(t, err)
+		m := map[string]interface{}{}
+		if assert.NoError(t, json.Unmarshal(j, &m)) {
+			assert.Equal(t, "Failed", m["status"])
+			assert.Equal(t, "some error", m["error"])
+			assert.Less(t, 0, len(m["stack_traces"].([]interface{})))
+		}
+	})
 }
 
 func TestErrCycleDependency(t *testing.T) {
