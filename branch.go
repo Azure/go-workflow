@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"slices"
 	"sync"
 )
 
@@ -67,9 +68,7 @@ func (i *IfBranch[T]) Done() map[Steper]*StepConfig {
 		}),
 		Steps(i.ThenStep...).When(i.isThen(true)),
 		Steps(i.ElseStep...).When(i.isThen(false)),
-		Steps(append(append([]Steper{},
-			i.ThenStep...), i.ElseStep...,
-		)...).
+		Steps(slices.Concat(i.ThenStep, i.ElseStep)...).
 			DependsOn(i.Target).
 			BeforeStep(func(ctx context.Context, s Steper) (context.Context, error) {
 				if i.BranchCheck.Error != nil {

@@ -12,7 +12,7 @@ func TestName(t *testing.T) {
 	t.Run("Name can rename a step", func(t *testing.T) {
 		var (
 			w = new(flow.Workflow)
-			s = flow.Func("oldName", func(context.Context) error { return nil })
+			s = flow.NoOp("oldName")
 		)
 		w.Add(
 			flow.Step(s),
@@ -26,9 +26,9 @@ func TestName(t *testing.T) {
 	t.Run("Names can rename multiple steps", func(t *testing.T) {
 		var (
 			w = new(flow.Workflow)
-			a = flow.Func("a", func(context.Context) error { return nil })
-			b = flow.Func("b", func(context.Context) error { return nil })
-			c = flow.Func("c", func(context.Context) error { return nil })
+			a = flow.NoOp("a")
+			b = flow.NoOp("b")
+			c = flow.NoOp("c")
 		)
 		w.Add(
 			flow.Steps(a, b, c),

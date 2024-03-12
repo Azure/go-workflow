@@ -38,15 +38,14 @@ func TestIf(t *testing.T) {
 		defer m.AssertExpectations(t)
 		w := new(flow.Workflow).Add(
 			flow.If(m.Target, func(ctx context.Context, s flow.Steper) (bool, error) {
-				m.AssertCalled(t, "Target")
-				m.AssertNotCalled(t, "Then")
-				m.AssertNotCalled(t, "Else")
+				m.MethodCalled("Check")
 				return false, nil
 			}).Then(m.Then).Else(m.Else),
 		)
 		var (
 			mTarget = m.On("Target")
-			_       = m.On("Else").NotBefore(mTarget)
+			mCheck  = m.On("Check").NotBefore(mTarget)
+			_       = m.On("Else").NotBefore(mTarget, mCheck)
 		)
 		assert.NoError(t, w.Do(context.Background()))
 	})
@@ -105,6 +104,23 @@ func TestIf(t *testing.T) {
 			assert.Equal(t, flow.Succeeded, w.StateOf(m.Target).Status)
 			assert.Equal(t, flow.Skipped, w.StateOf(m.Then).Status)
 			assert.Equal(t, flow.Failed, w.StateOf(m.Else).Status)
+		}
+	})
+	t.Run("when can change then and else condition", func(t *testing.T) {
+		m := newMockIf()
+		defer m.AssertExpectations(t)
+		w := new(flow.Workflow).Add(
+			flow.If(m.Target, func(ctx context.Context, s flow.Steper) (bool, error) {
+				return true, nil
+			}).Then(m.Then).Else(m.Else).When(flow.AnyFailed),
+		)
+		m.On("Target")
+		if assert.NoError(t, w.Do(context.Background())) {
+			m.AssertNotCalled(t, "Then")
+			m.AssertNotCalled(t, "Else")
+			assert.Equal(t, flow.Succeeded, w.StateOf(m.Target).Status)
+			assert.Equal(t, flow.Skipped, w.StateOf(m.Then).Status)
+			assert.Equal(t, flow.Skipped, w.StateOf(m.Else).Status)
 		}
 	})
 	t.Run("still works even the original step is replaced", func(t *testing.T) {
@@ -236,7 +252,6 @@ func TestSwitch(t *testing.T) {
 		if assert.NoError(t, w.Do(context.Background())) {
 			m.AssertNotCalled(t, "Case1")
 			m.AssertNotCalled(t, "Case2")
-			m.AssertCalled(t, "Default")
 			assert.Equal(t, flow.Succeeded, w.StateOf(m.Target).Status)
 			assert.Equal(t, flow.Skipped, w.StateOf(m.Case1).Status)
 			assert.Equal(t, flow.Skipped, w.StateOf(m.Case2).Status)
@@ -259,7 +274,25 @@ func TestSwitch(t *testing.T) {
 			assert.ErrorIs(t, err[m.Case1].Err, assert.AnError)
 		}
 	})
-	t.Run("still works even the original step is replaced", func(t *testing.T) {
+	t.Run("cases will select multiple cases at the same time", func(t *testing.T) {
+		m := newMockSwitch()
+		defer m.AssertExpectations(t)
+		w := new(flow.Workflow).Add(
+			flow.Switch(m.Target).
+				Cases([]flow.Steper{m.Case1, m.Case2}, func(ctx context.Context, s flow.Steper) (bool, error) {
+					return true, nil
+				}),
+		)
+		target := m.On("Target")
+		m.On("Case1").NotBefore(target)
+		m.On("Case2").NotBefore(target)
+		if assert.NoError(t, w.Do(context.Background())) {
+			assert.Equal(t, flow.Succeeded, w.StateOf(m.Target).Status)
+			assert.Equal(t, flow.Succeeded, w.StateOf(m.Case1).Status)
+			assert.Equal(t, flow.Succeeded, w.StateOf(m.Case2).Status)
+		}
+	})
+	t.Run("when will set condition for all cases and default", func(t *testing.T) {
 		m := newMockSwitch()
 		defer m.AssertExpectations(t)
 		w := new(flow.Workflow).Add(
@@ -270,46 +303,73 @@ func TestSwitch(t *testing.T) {
 				Case(m.Case2, func(ctx context.Context, s flow.Steper) (bool, error) {
 					return false, nil
 				}).
-				Default(m.Default),
-			flow.Names(map[flow.Steper]string{
-				m.Target:  "Target",
-				m.Case1:   "Case1",
-				m.Case2:   "Case2",
-				m.Default: "Default",
-			}),
+				Default(m.Default).
+				When(flow.AnyFailed),
 		)
-		var (
-			mTarget = m.On("Target")
-			_       = m.On("Case1").NotBefore(mTarget)
-		)
+		m.On("Target")
 		if assert.NoError(t, w.Do(context.Background())) {
-			m.AssertCalled(t, "Case1")
+			m.AssertNotCalled(t, "Case1")
 			m.AssertNotCalled(t, "Case2")
 			m.AssertNotCalled(t, "Default")
 			assert.Equal(t, flow.Succeeded, w.StateOf(m.Target).Status)
-			assert.Equal(t, flow.Succeeded, w.StateOf(m.Case1).Status)
+			assert.Equal(t, flow.Skipped, w.StateOf(m.Case1).Status)
 			assert.Equal(t, flow.Skipped, w.StateOf(m.Case2).Status)
 			assert.Equal(t, flow.Skipped, w.StateOf(m.Default).Status)
 		}
 	})
-	t.Run("still fail the case if check returns error", func(t *testing.T) {
-		m := newMockSwitch()
-		defer m.AssertExpectations(t)
-		w := new(flow.Workflow).Add(
-			flow.Switch(m.Target).
-				Case(m.Case1, func(ctx context.Context, s flow.Steper) (bool, error) {
-					return true, assert.AnError
-				}).
-				Default(m.Default),
-			flow.Name(m.Case1, "Case1"),
-		)
-		m.On("Target")
-		if assert.Error(t, w.Do(context.Background())) {
-			m.AssertNotCalled(t, "Case1")
-			m.AssertNotCalled(t, "Default")
-			assert.Equal(t, flow.Succeeded, w.StateOf(m.Target).Status)
-			assert.Equal(t, flow.Failed, w.StateOf(m.Case1).Status)
-			assert.Equal(t, flow.Skipped, w.StateOf(m.Default).Status)
-		}
+	t.Run("replace original step", func(t *testing.T) {
+		t.Run("still works", func(t *testing.T) {
+			m := newMockSwitch()
+			defer m.AssertExpectations(t)
+			w := new(flow.Workflow).Add(
+				flow.Switch(m.Target).
+					Case(m.Case1, func(ctx context.Context, s flow.Steper) (bool, error) {
+						return true, nil
+					}).
+					Case(m.Case2, func(ctx context.Context, s flow.Steper) (bool, error) {
+						return false, nil
+					}).
+					Default(m.Default),
+				flow.Names(map[flow.Steper]string{
+					m.Target:  "Target",
+					m.Case1:   "Case1",
+					m.Case2:   "Case2",
+					m.Default: "Default",
+				}),
+			)
+			var (
+				mTarget = m.On("Target")
+				_       = m.On("Case1").NotBefore(mTarget)
+			)
+			if assert.NoError(t, w.Do(context.Background())) {
+				m.AssertCalled(t, "Case1")
+				m.AssertNotCalled(t, "Case2")
+				m.AssertNotCalled(t, "Default")
+				assert.Equal(t, flow.Succeeded, w.StateOf(m.Target).Status)
+				assert.Equal(t, flow.Succeeded, w.StateOf(m.Case1).Status)
+				assert.Equal(t, flow.Skipped, w.StateOf(m.Case2).Status)
+				assert.Equal(t, flow.Skipped, w.StateOf(m.Default).Status)
+			}
+		})
+		t.Run("still fail the case if check returns error", func(t *testing.T) {
+			m := newMockSwitch()
+			defer m.AssertExpectations(t)
+			w := new(flow.Workflow).Add(
+				flow.Switch(m.Target).
+					Case(m.Case1, func(ctx context.Context, s flow.Steper) (bool, error) {
+						return true, assert.AnError
+					}).
+					Default(m.Default),
+				flow.Name(m.Case1, "Case1"),
+			)
+			m.On("Target")
+			if assert.Error(t, w.Do(context.Background())) {
+				m.AssertNotCalled(t, "Case1")
+				m.AssertNotCalled(t, "Default")
+				assert.Equal(t, flow.Succeeded, w.StateOf(m.Target).Status)
+				assert.Equal(t, flow.Failed, w.StateOf(m.Case1).Status)
+				assert.Equal(t, flow.Skipped, w.StateOf(m.Default).Status)
+			}
+		})
 	})
 }

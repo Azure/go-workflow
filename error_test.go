@@ -1,27 +1,29 @@
-package flow
+package flow_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
 
+	flow "github.com/Azure/go-workflow"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestDecorateErrorJSON(t *testing.T) {
 	someError := errors.New("some error")
 	t.Run("plain error will have a error field", func(t *testing.T) {
-		j, err := json.Marshal(StatusError{
-			Status: Failed,
+		j, err := json.Marshal(flow.StatusError{
+			Status: flow.Failed,
 			Err:    someError,
 		})
 		assert.NoError(t, err)
 		assert.JSONEq(t, `{"status":"Failed","error":"some error"}`, string(j))
 	})
 	t.Run("error with MarshalJSON will be called", func(t *testing.T) {
-		j, err := json.Marshal(StatusError{
-			Status: Failed,
-			Err:    WithStackTraces(3, 32)(someError),
+		j, err := json.Marshal(flow.StatusError{
+			Status: flow.Failed,
+			Err:    flow.WithStackTraces(3, 32)(someError),
 		})
 		assert.NoError(t, err)
 		m := map[string]interface{}{}
@@ -32,15 +34,15 @@ func TestDecorateErrorJSON(t *testing.T) {
 		}
 	})
 	t.Run("skip cancel errors are transparent", func(t *testing.T) {
-		j, err := json.Marshal(StatusError{
-			Status: Skipped,
-			Err:    Skip(someError),
+		j, err := json.Marshal(flow.StatusError{
+			Status: flow.Skipped,
+			Err:    flow.Skip(someError),
 		})
 		assert.NoError(t, err)
 		assert.JSONEq(t, `{"status":"Skipped","error":"some error"}`, string(j))
-		j, err = json.Marshal(StatusError{
-			Status: Failed,
-			Err:    WithStackTraces(3, 32)(someError),
+		j, err = json.Marshal(flow.StatusError{
+			Status: flow.Failed,
+			Err:    flow.WithStackTraces(3, 32)(someError),
 		})
 		assert.NoError(t, err)
 		m := map[string]interface{}{}
@@ -53,10 +55,11 @@ func TestDecorateErrorJSON(t *testing.T) {
 }
 
 func TestErrCycleDependency(t *testing.T) {
-	errCycleDependency := ErrCycleDependency{
-		&fakeStep{Name: "step2"}: {
-			&fakeStep{Name: "step1"},
-		},
+	w := new(flow.Workflow).Add(
+		flow.Step(succeededStep).DependsOn(succeededStep),
+	)
+	var errCycle flow.ErrCycleDependency
+	if assert.ErrorAs(t, w.Do(context.Background()), &errCycle) {
+		assert.ErrorContains(t, errCycle, "Succeeded: [Succeeded]")
 	}
-	assert.Equal(t, "Cycle Dependency Error:\n*flow.fakeStep(&{step2}): [*flow.fakeStep(&{step1})]", errCycleDependency.Error())
 }

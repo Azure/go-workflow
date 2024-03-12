@@ -37,7 +37,7 @@ func (w *Workflow) retry(opt *RetryOption) func(
 		backOff := opt.Backoff
 		backOff = backoff.WithContext(backOff, ctx)
 		if opt.Attempts > 0 {
-			backOff = backoff.WithMaxRetries(backOff, opt.Attempts)
+			backOff = backoff.WithMaxRetries(backOff, opt.Attempts-1)
 		}
 		attempt := uint64(0)
 		start := w.Clock.Now()
