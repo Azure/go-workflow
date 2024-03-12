@@ -109,7 +109,7 @@ func Is[T Steper](s Steper) bool {
 }
 
 // As finds all steps in the tree of step that matches target type, and returns them.
-// The sequence of the returned steps is preorder traversal.
+// The sequence of the returned steps is pre-order traversal.
 func As[T Steper](s Steper) []T {
 	if s == nil {
 		return nil

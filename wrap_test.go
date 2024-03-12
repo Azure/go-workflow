@@ -2,89 +2,102 @@ package flow
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-type someStep struct{ value string }
 type wrappedStep struct{ Steper }
 type multiStep struct{ steps []Steper }
 
-func (s *someStep) Do(ctx context.Context) error  { return nil }
+func wrap(s Steper) *wrappedStep                  { return &wrappedStep{s} }
+func multi(ss ...Steper) *multiStep               { return &multiStep{steps: ss} }
 func (w *wrappedStep) Unwrap() Steper             { return w.Steper }
+func (w *wrappedStep) String() string             { return strings.ToUpper(String(w.Steper)) }
 func (m *multiStep) Unwrap() []Steper             { return m.steps }
 func (m *multiStep) Do(ctx context.Context) error { return nil }
 
 func TestIs(t *testing.T) {
-	step1 := &someStep{value: "1"}
-	step2 := &someStep{value: "2"}
-	wStep1 := &wrappedStep{Steper: step1}
-	mStep := &multiStep{steps: []Steper{step1, step2}}
-	assert.True(t, Is[*someStep](step1))
-	assert.True(t, Is[*someStep](step2))
-	assert.True(t, Is[*someStep](wStep1))
-	assert.True(t, Is[*someStep](mStep))
+	var (
+		a  = NoOp("a")
+		b  = NoOp("b")
+		A  = wrap(a)
+		ab = multi(a, b)
+	)
+	assert.True(t, Is[*NoOpStep](a))
+	assert.True(t, Is[*NoOpStep](b))
+	assert.True(t, Is[*NoOpStep](A))
+	assert.True(t, Is[*NoOpStep](ab))
 
-	assert.False(t, Is[*wrappedStep](step1))
-	assert.False(t, Is[*wrappedStep](step2))
-	assert.True(t, Is[*wrappedStep](wStep1))
-	assert.False(t, Is[*wrappedStep](mStep))
+	assert.False(t, Is[*wrappedStep](a))
+	assert.False(t, Is[*wrappedStep](b))
+	assert.True(t, Is[*wrappedStep](A))
+	assert.False(t, Is[*wrappedStep](ab))
 
-	assert.False(t, Is[*multiStep](step1))
-	assert.False(t, Is[*multiStep](step2))
-	assert.False(t, Is[*multiStep](wStep1))
-	assert.True(t, Is[*multiStep](mStep))
+	assert.False(t, Is[*multiStep](a))
+	assert.False(t, Is[*multiStep](b))
+	assert.False(t, Is[*multiStep](A))
+	assert.True(t, Is[*multiStep](ab))
 
 	t.Run("is nil", func(t *testing.T) {
-		assert.False(t, Is[*someStep](nil))
+		assert.False(t, Is[*NoOpStep](nil))
 		assert.False(t, Is[*wrappedStep](nil))
 		assert.False(t, Is[*multiStep](nil))
-		assert.False(t, Is[*someStep](&wrappedStep{nil}))
-		assert.False(t, Is[*someStep](&multiStep{nil}))
-		assert.False(t, Is[*someStep](&multiStep{steps: []Steper{nil}}))
+		assert.False(t, Is[*NoOpStep](wrap(nil)))
+		assert.False(t, Is[*NoOpStep](multi(nil, nil)))
+		assert.False(t, Is[*NoOpStep](multi()))
 	})
 }
 
 func TestAs(t *testing.T) {
-	step1 := &someStep{value: "1"}
-	step2 := &someStep{value: "2"}
-	wStep1 := &wrappedStep{Steper: step1}
-	mStep := &multiStep{steps: []Steper{step1, step2}}
+	var (
+		a  = NoOp("a")
+		b  = NoOp("b")
+		A  = wrap(a)
+		ab = multi(a, b)
+	)
 
 	t.Run("no wrap", func(t *testing.T) {
-		assert.Nil(t, As[*multiStep](step1))
+		assert.Nil(t, As[*multiStep](a))
 	})
 	t.Run("single wrap", func(t *testing.T) {
-		steps := As[*someStep](wStep1)
+		steps := As[*NoOpStep](A)
 		if assert.Len(t, steps, 1) {
-			assert.True(t, step1 == steps[0])
+			assert.True(t, a == steps[0])
 		}
 	})
 	t.Run("multi wrap", func(t *testing.T) {
-		steps := As[*someStep](mStep)
-		assert.ElementsMatch(t, []Steper{step1, step2}, steps)
+		steps := As[*NoOpStep](ab)
+		assert.ElementsMatch(t, []Steper{a, b}, steps)
 	})
 	t.Run("nil step", func(t *testing.T) {
-		assert.Nil(t, As[*someStep](nil))
+		assert.Nil(t, As[*NoOpStep](nil))
 	})
 	t.Run("unwrap nil", func(t *testing.T) {
-		steps := As[*someStep](&wrappedStep{nil})
+		steps := As[*NoOpStep](&wrappedStep{nil})
 		assert.Nil(t, steps)
 	})
 	t.Run("multi unwrap nil", func(t *testing.T) {
-		assert.Nil(t, As[*someStep](&multiStep{nil}))
-		assert.Nil(t, As[*someStep](&multiStep{steps: []Steper{nil}}))
+		assert.Nil(t, As[*NoOpStep](&multiStep{nil}))
+		assert.Nil(t, As[*NoOpStep](&multiStep{steps: []Steper{nil}}))
 	})
 }
 
 func TestStepTree(t *testing.T) {
-	a := &someStep{value: "a"}
-	b := &someStep{value: "b"}
-	A := &wrappedStep{Steper: a}
-	ab := &multiStep{steps: []Steper{a, b}}
-	Ab := &multiStep{steps: []Steper{A, b}}
+	var (
+		a  = NoOp("a")
+		b  = NoOp("b")
+		A  = wrap(a)
+		ab = multi(a, b)
+		Ab = multi(A, b)
+	)
 
+	t.Run("nil", func(t *testing.T) {
+		tree := make(StepTree)
+		assert.False(t, tree.IsRoot(nil))
+		assert.Nil(t, tree.RootOf(nil))
+	})
 	t.Run("no wrap", func(t *testing.T) {
 		t.Run("add one step", func(t *testing.T) {
 			tree := make(StepTree)
@@ -132,16 +145,11 @@ func TestStepTree(t *testing.T) {
 			assert.Len(t, tree, 2)
 			assert.Equal(t, A, tree[A])
 			assert.Equal(t, A, tree[a])
+			assert.Len(t, tree.Roots(), 1)
 		})
 		t.Run("long chain", func(t *testing.T) {
 			tree := make(StepTree)
-			w := &wrappedStep{
-				&wrappedStep{
-					&wrappedStep{
-						a,
-					},
-				},
-			}
+			w := wrap(wrap(wrap(a)))
 			tree.Add(w)
 			assert.Len(t, tree, 4)
 			assert.Equal(t, w, tree[w])
@@ -181,7 +189,7 @@ func TestStepTree(t *testing.T) {
 			assert.Equal(t, ab, tree[ab])
 		})
 		t.Run("single wrap multi", func(t *testing.T) {
-			wab := &wrappedStep{ab}
+			wab := wrap(ab)
 			tree := make(StepTree)
 			tree.Add(ab)
 			tree.Add(wab)
@@ -193,14 +201,21 @@ func TestStepTree(t *testing.T) {
 		})
 	})
 	t.Run("conflict", func(t *testing.T) {
-		B := &wrappedStep{b}
-		aB := &multiStep{steps: []Steper{a, B}}
+		B := wrap(b)
+		aB := multi(a, B)
 		t.Run("add", func(t *testing.T) {
 			tree := make(StepTree)
 			tree.Add(Ab)
-			assert.Panics(t, func() {
+			err := ErrWrappedStepAlreadyInTree{
+				StepAlreadyThere: b,
+				NewAncestor:      B,
+				OldAncestor:      Ab,
+			}
+			assert.PanicsWithValue(t, err, func() {
 				tree.Add(B)
 			})
+			assert.ErrorContains(t, err,
+				`add step "B" failed: inner step "b" already has an ancestor "[A, b]"`)
 		})
 		t.Run("add multi", func(t *testing.T) {
 			tree := make(StepTree)
@@ -215,28 +230,39 @@ func TestStepTree(t *testing.T) {
 func TestIsStep(t *testing.T) {
 	t.Run("nil", func(t *testing.T) {
 		assert.True(t, IsStep(nil, nil))
-		assert.False(t, IsStep(nil, &someStep{}))
-		assert.False(t, IsStep(&someStep{}, nil))
+		assert.False(t, IsStep(nil, &NoOpStep{}))
+		assert.False(t, IsStep(&NoOpStep{}, nil))
 	})
 	t.Run("single wrap", func(t *testing.T) {
 		var (
-			s = &someStep{value: "1"}
-			w = &wrappedStep{s}
+			a = NoOp("a")
+			A = wrap(a)
 		)
-		assert.True(t, IsStep(w, s))
-		assert.False(t, IsStep(s, w))
+		assert.True(t, IsStep(A, a))
+		assert.False(t, IsStep(a, A))
 	})
 	t.Run("multi wrap", func(t *testing.T) {
 		var (
-			s1 = &someStep{value: "1"}
-			s2 = &someStep{value: "2"}
-			m  = &multiStep{steps: []Steper{s1, s2}}
+			a  = NoOp("a")
+			b  = NoOp("b")
+			ab = multi(a, b)
 		)
-		assert.True(t, IsStep(m, s1))
-		assert.True(t, IsStep(m, s2))
-		assert.False(t, IsStep(s1, s2))
-		assert.False(t, IsStep(s2, s1))
-		assert.False(t, IsStep(s1, m))
-		assert.False(t, IsStep(s2, m))
+		assert.True(t, IsStep(ab, a))
+		assert.True(t, IsStep(ab, b))
+		assert.False(t, IsStep(a, b))
+		assert.False(t, IsStep(b, a))
+		assert.False(t, IsStep(a, ab))
+		assert.False(t, IsStep(b, ab))
 	})
+}
+
+func TestString(t *testing.T) {
+	var (
+		a  = NoOp("a")
+		b  = NoOp("b")
+		ab = multi(a, b)
+	)
+	assert.Equal(t, "<nil>", String(nil))
+	assert.Equal(t, "a", String(a))
+	assert.Equal(t, "[a, b]", String(ab))
 }
