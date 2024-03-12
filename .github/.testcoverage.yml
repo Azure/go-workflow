@@ -10,15 +10,15 @@ local-prefix: "github.com/Azure/go-workflow"
 threshold:
   # (optional; default 0) 
   # The minimum coverage that each file should have
-  file: 70
+  file: 0
 
   # (optional; default 0) 
   # The minimum coverage that each package should have
-  package: 70
+  package: 80
 
   # (optional; default 0) 
   # The minimum total coverage project should have
-  total: 80
+  total: 90
 
 # Holds regexp rules which will override thresholds for matched files or packages using their paths.
 #
