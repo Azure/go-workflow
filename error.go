@@ -40,7 +40,25 @@ func WithStackTraces(skip, depth int, ignores ...func(runtime.Frame) bool) func(
 		pc := make([]uintptr, depth)
 		i := runtime.Callers(skip, pc)
 		pc = pc[:i]
-		return ErrWithStackTraces{err, runtime.CallersFrames(pc), ignores}
+		frames := runtime.CallersFrames(pc)
+		withStackTraces := ErrWithStackTraces{Err: err}
+		for {
+			frame, more := frames.Next()
+			if !more {
+				break
+			}
+			isIgnored := false
+			for _, ignore := range ignores {
+				if ignore(frame) {
+					isIgnored = true
+					break
+				}
+			}
+			if !isIgnored {
+				withStackTraces.Frames = append(withStackTraces.Frames, frame)
+			}
+		}
+		return withStackTraces
 	}
 }
 
@@ -63,10 +81,23 @@ func DecorateErrorJSON(rerr error, marshal func() ([]byte, error)) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	return bytes.Join([][]byte{
-		errBytes[:len(errBytes)-1], // remove the last `}`
-		mBytes[1:],                 // remove the first `{`
-	}, []byte{','}), nil
+	return mergeJSON(errBytes, mBytes), nil
+}
+
+func mergeJSON(objs ...[]byte) []byte {
+	objsNoBrace := make([][]byte, 0, len(objs))
+	for _, obj := range objs {
+		if len(obj) > 1 {
+			if objNoBrace := obj[1 : len(obj)-1]; len(objNoBrace) > 0 {
+				objsNoBrace = append(objsNoBrace, objNoBrace)
+			}
+		}
+	}
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	buf.Write(bytes.Join(objsNoBrace, []byte{','}))
+	buf.WriteByte('}')
+	return buf.Bytes()
 }
 
 // ErrWithStackTraces saves stack frames into error, and prints error into
@@ -76,9 +107,8 @@ func DecorateErrorJSON(rerr error, marshal func() ([]byte, error)) ([]byte, erro
 //	Stack Traces:
 //		file:line
 type ErrWithStackTraces struct {
-	Err     error
-	Frames  *runtime.Frames
-	Ignores []func(runtime.Frame) bool
+	Err    error
+	Frames []runtime.Frame
 }
 
 func (e ErrWithStackTraces) Error() string {
@@ -97,22 +127,9 @@ func (e ErrWithStackTraces) MarshalJSON() ([]byte, error) {
 	})
 }
 func (e ErrWithStackTraces) StackTraces() []string {
-	stacks := []string{}
-	for {
-		frame, more := e.Frames.Next()
-		if !more {
-			break
-		}
-		isIgnored := false
-		for _, ignore := range e.Ignores {
-			if ignore(frame) {
-				isIgnored = true
-				break
-			}
-		}
-		if !isIgnored {
-			stacks = append(stacks, fmt.Sprintf("%s:%d", frame.File, frame.Line))
-		}
+	stacks := make([]string, 0, len(e.Frames))
+	for i := range e.Frames {
+		stacks = append(stacks, fmt.Sprintf("%s:%d", e.Frames[i].File, e.Frames[i].Line))
 	}
 	return stacks
 }

@@ -44,20 +44,20 @@ func TestAdd(t *testing.T) {
 	})
 	t.Run("add new step", func(t *testing.T) {
 		workflow := new(Workflow)
-		a := &someStep{value: "a"}
+		a := NoOp("a")
 		workflow.Add(Step(a))
 		assert.Len(t, workflow.Steps(), 1)
 		assert.Equal(t, a, workflow.Steps()[0])
 	})
 	t.Run("nested workflow with input", func(t *testing.T) {
 		inner := new(Workflow)
-		step := &someStep{value: "inner step"}
+		step := NoOp("inner step")
 		inner.Add(Step(step))
 		outer := new(Workflow)
 		outer.Add(Step(inner))
-		for _, step := range As[*someStep](outer) {
-			outer.Add(Step(step).Input(func(ctx context.Context, ss *someStep) error {
-				ss.value = "modified"
+		for _, step := range As[*NoOpStep](outer) {
+			outer.Add(Step(step).Input(func(ctx context.Context, ss *NoOpStep) error {
+				ss.Name = "modified"
 				return nil
 			}))
 		}
@@ -66,16 +66,16 @@ func TestAdd(t *testing.T) {
 		assert.ObjectsAreEqual(outerState, innerState)
 		_, err := innerState.Before(context.Background(), inner)
 		assert.NoError(t, err)
-		assert.Equal(t, "modified", step.value)
+		assert.Equal(t, "modified", step.Name)
 	})
 	t.Run("nested multi step in nested workflow", func(t *testing.T) {
 		inner, outer := new(Workflow), new(Workflow)
-		a, b := &someStep{value: "a"}, &someStep{value: "b"}
-		multi := &multiStep{steps: []Steper{a, b}}
-		inner.Add(Step(multi))
+		a, b := NoOp("a"), NoOp("b")
+		ab := multi(a, b)
+		inner.Add(Step(ab))
 		outer.Add(Step(inner))
-		outer.Add(Step(a).Input(func(ctx context.Context, ss *someStep) error {
-			ss.value += "_updated"
+		outer.Add(Step(a).Input(func(ctx context.Context, ss *NoOpStep) error {
+			ss.Name += "_updated"
 			return nil
 		}))
 		outerState := outer.StateOf(a)
@@ -83,23 +83,23 @@ func TestAdd(t *testing.T) {
 		assert.ObjectsAreEqual(outerState, innerState)
 		_, err := innerState.Before(context.TODO(), inner)
 		assert.NoError(t, err)
-		assert.Equal(t, "a_updated", a.value)
+		assert.Equal(t, "a_updated", a.Name)
 
 	})
 	t.Run("inner depends on new", func(t *testing.T) {
 		inner := new(Workflow)
 		outer := new(Workflow)
 		{
-			a := &someStep{value: "a"}
+			a := NoOp("a")
 			inner.Add(Step(a))
 			outer.Add(Step(inner))
 		}
 
-		var a *someStep
-		for _, step := range As[*someStep](outer) {
+		var a *NoOpStep
+		for _, step := range As[*NoOpStep](outer) {
 			a = step
 		}
-		b := &someStep{value: "b"}
+		b := NoOp("b")
 		outer.Add(Step(a).DependsOn(b))
 		assert.Contains(t, outer.state[inner].Config.Upstreams, b,
 			"b is new, so the dependency should be added to root of a")
@@ -110,21 +110,21 @@ func TestAdd(t *testing.T) {
 		inner := new(Workflow)
 		outer := new(Workflow)
 		{
-			a := &someStep{value: "a"}
-			b := &someStep{value: "b"}
+			a := NoOp("a")
+			b := NoOp("b")
 			inner.Add(Steps(a, b))
 			outer.Add(Step(inner))
 		}
 
-		var b *someStep
-		for _, step := range As[*someStep](outer) {
-			if step.value == "b" {
+		var b *NoOpStep
+		for _, step := range As[*NoOpStep](outer) {
+			if step.Name == "b" {
 				b = step
 			}
 		}
-		var a *someStep
-		for _, step := range As[*someStep](outer) {
-			if step.value == "a" {
+		var a *NoOpStep
+		for _, step := range As[*NoOpStep](outer) {
+			if step.Name == "a" {
 				a = step
 			}
 		}
@@ -372,31 +372,33 @@ func keys[K comparable, V any](m map[K]V) []K {
 }
 
 func TestWorkflowTree(t *testing.T) {
-	step1 := &someStep{value: "1"}
-	step2 := &someStep{value: "2"}
-	wStep1 := &wrappedStep{step1}
-	mStep := &multiStep{steps: []Steper{wStep1, step2}}
+	var (
+		a  = NoOp("a")
+		b  = NoOp("b")
+		A  = wrap(a)
+		Ab = multi(A, b)
+	)
 
 	t.Run("add from leaf to root", func(t *testing.T) {
 		workflow := new(Workflow)
-		workflow.Add(Step(step1))
+		workflow.Add(Step(a))
 		assert.Len(t, workflow.tree, 1)
 		assert.Len(t, workflow.steps[PhaseMain], 1)
 		assert.Len(t, workflow.state, 1)
 
-		workflow.Add(Step(wStep1))
+		workflow.Add(Step(A))
 		assert.Len(t, workflow.tree, 2)
 		assert.Len(t, workflow.steps[PhaseMain], 1, "the previous root should be replaced")
 		assert.Len(t, workflow.state, 1)
 
-		workflow.Add(Step(mStep))
+		workflow.Add(Step(Ab))
 		assert.Len(t, workflow.tree, 4)
 		assert.Len(t, workflow.steps[PhaseMain], 1, "the previous root should be replaced")
 		assert.Len(t, workflow.state, 1)
 	})
 	t.Run("add from root to leaf", func(t *testing.T) {
 		workflow := new(Workflow)
-		workflow.Add(Step(mStep))
+		workflow.Add(Step(Ab))
 		assert.Len(t, workflow.tree, 4)
 		assert.Len(t, workflow.steps[PhaseMain], 1)
 		assert.Len(t, workflow.state, 1)
@@ -404,22 +406,24 @@ func TestWorkflowTree(t *testing.T) {
 }
 
 func TestWorkflowTreeWithPhase(t *testing.T) {
-	step1 := &someStep{value: "1"}
-	step2 := &someStep{value: "2"}
-	wStep1 := &wrappedStep{step1}
+	var (
+		a = NoOp("a")
+		b = NoOp("b")
+		A = wrap(a)
+	)
 
 	w := new(Workflow)
-	w.Init(Step(step1))
-	w.Add(Step(step2).DependsOn(step1))
-	w.Init(Step(wStep1))
+	w.Init(Step(a))
+	w.Add(Step(b).DependsOn(a))
+	w.Init(Step(A))
 
 	assert.Len(t, w.tree, 3)
 	assert.Len(t, w.steps[PhaseInit], 1)
-	assert.Contains(t, w.steps[PhaseInit], wStep1)
-	assert.NotContains(t, w.steps[PhaseInit], w.state[step1])
+	assert.Contains(t, w.steps[PhaseInit], A)
+	assert.NotContains(t, w.steps[PhaseInit], w.state[a])
 	assert.Len(t, w.steps[PhaseMain], 2)
-	assert.Contains(t, w.steps[PhaseMain], wStep1)
-	assert.NotContains(t, w.steps[PhaseMain], w.state[step1])
+	assert.Contains(t, w.steps[PhaseMain], A)
+	assert.NotContains(t, w.steps[PhaseMain], w.state[a])
 }
 
 func TestSkip(t *testing.T) {
