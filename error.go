@@ -111,6 +111,7 @@ type ErrWithStackTraces struct {
 	Frames []runtime.Frame
 }
 
+func (e ErrWithStackTraces) Unwrap() error { return e.Err }
 func (e ErrWithStackTraces) Error() string {
 	if st := e.StackTraces(); len(st) > 0 {
 		return fmt.Sprintf("%s\n\nStack Traces:\n\t%s\n", e.Err, strings.Join(st, "\n\t"))
