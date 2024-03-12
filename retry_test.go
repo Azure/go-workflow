@@ -1,59 +1,147 @@
-package flow
+package flow_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	flow "github.com/Azure/go-workflow"
 	"github.com/benbjohnson/clock"
-	"github.com/cenkalti/backoff/v4"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
+type MockStep struct {
+	mock.Mock
+	Started chan struct{}
+}
+
+func (m *MockStep) Do(ctx context.Context) error {
+	var (
+		done = make(chan struct{})
+	)
+	var args mock.Arguments
+	go func() {
+		defer close(done)
+		m.Started <- struct{}{}
+		args = m.MethodCalled("Do", ctx)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return args.Error(0)
+	}
+}
+
 func TestRetry(t *testing.T) {
-	t.Run("Attempts until succeeded", func(t *testing.T) {
-		mockClock := clock.NewMock()
-		workflow := &Workflow{
-			Clock: mockClock,
-		}
-		retryOpt := &RetryOption{
-			Backoff:  backoff.NewExponentialBackOff(),
-			Attempts: 3,
-		}
-		retryOpt.Timer = new(testTimer)
-		retryFunc := workflow.retry(retryOpt)
-		retryTimes := 0
-		var notAfter time.Time
-		err := retryFunc(
-			context.Background(),
-			func(ctx context.Context) error {
-				if retryTimes < 3 {
-					retryTimes++
-					return assert.AnError
-				}
-				return nil
-			},
-			notAfter,
+	type Mock struct {
+		w     *flow.Workflow
+		clock *clock.Mock
+		*MockStep
+	}
+	newMock := func() *Mock {
+		var (
+			mockClock = clock.NewMock()
+			w         = &flow.Workflow{Clock: mockClock}
+			mockStep  = &MockStep{Started: make(chan struct{})}
 		)
-		assert.NoError(t, err)
+		w.Add(flow.Step(mockStep).Retry(func(ro *flow.RetryOption) {
+			ro.Timer = newTestTimer()
+		}))
+		return &Mock{
+			w:        w,
+			clock:    mockClock,
+			MockStep: mockStep,
+		}
+	}
+	start := func(m *Mock) <-chan error {
+		done := make(chan error)
+		go func() {
+			var errW flow.ErrWorkflow
+			err := m.w.Do(context.Background())
+			switch {
+			case err == nil:
+				done <- nil
+			case errors.As(err, &errW):
+				done <- errW[m.MockStep]
+			}
+		}()
+		return done
+	}
+	t.Run("TimeoutPerTry", func(t *testing.T) {
+		t.Parallel()
+		m := newMock()
+		defer m.AssertExpectations(t)
+		m.w.Add(
+			flow.Step(m.MockStep).Retry(func(ro *flow.RetryOption) {
+				ro.TimeoutPerTry = time.Second
+				ro.Attempts = 1
+			}),
+		)
+		m.On("Do", mock.Anything).
+			Return(nil).
+			WaitUntil(m.clock.After(2 * time.Second))
+		done := start(m)
+		<-m.Started
+		m.clock.Add(time.Second)
+		assert.ErrorIs(t, <-done, context.DeadlineExceeded)
 	})
-	t.Run("Attempt but still fail", func(t *testing.T) {
-		w := new(Workflow)
-		w.Add(
-			Step(Func("", func(ctx context.Context) error {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-					return assert.AnError
-				}
-			})).Retry(func(ro *RetryOption) {
-				ro.Timer = new(testTimer)
+	t.Run("Attempts", func(t *testing.T) {
+		t.Parallel()
+		m := newMock()
+		defer m.AssertExpectations(t)
+		m.w.Add(
+			flow.Step(m.MockStep).Retry(func(ro *flow.RetryOption) {
 				ro.Attempts = 3
 			}),
 		)
-		assert.ErrorIs(t, w.Do(context.Background()), assert.AnError)
+		var (
+			failTwice = m.On("Do", mock.Anything).Return(assert.AnError).Times(2)
+			_         = m.On("Do", mock.Anything).Return(nil).NotBefore(failTwice)
+		)
+		done := start(m)
+		<-m.Started
+		<-m.Started
+		<-m.Started
+		assert.NoError(t, <-done)
 	})
+	t.Run("StopIf", func(t *testing.T) {
+		t.Parallel()
+		m := newMock()
+		defer m.AssertExpectations(t)
+		m.w.Add(
+			flow.Step(m.MockStep).Retry(func(ro *flow.RetryOption) {
+				ro.StopIf = func(ctx context.Context, attempt uint64, since time.Duration, err error) bool {
+					return attempt > 1
+				}
+			}),
+		)
+		m.On("Do", mock.Anything).Return(assert.AnError).Times(3)
+		done := start(m)
+		<-m.Started
+		<-m.Started
+		<-m.Started
+		assert.ErrorIs(t, <-done, assert.AnError)
+	})
+	t.Run("Step Level Timeout", func(t *testing.T) {
+		t.Parallel()
+		m := newMock()
+		defer m.AssertExpectations(t)
+		m.w.Add(
+			flow.Step(m.MockStep).Timeout(time.Second),
+		)
+		m.On("Do", mock.Anything).Return(nil).WaitUntil(m.clock.After(2 * time.Second))
+		done := start(m)
+		<-m.Started
+		m.clock.Add(time.Second)
+		assert.ErrorIs(t, <-done, context.DeadlineExceeded)
+	})
+}
+
+func newTestTimer() *testTimer {
+	return &testTimer{time.NewTimer(0)}
 }
 
 // testTimer is a Timer that all retry intervals are immediate (0).
@@ -66,7 +154,7 @@ func (t *testTimer) C() <-chan time.Time {
 }
 
 func (t *testTimer) Start(duration time.Duration) {
-	t.timer = time.NewTimer(0)
+	t.timer.Reset(duration)
 }
 
 func (t *testTimer) Stop() {

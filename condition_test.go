@@ -1,94 +1,114 @@
-package flow
+package flow_test
 
 import (
 	"context"
 	"testing"
 
+	flow "github.com/Azure/go-workflow"
 	"github.com/stretchr/testify/assert"
 )
 
-type fakeStep struct {
-	Name string `json:"name"`
-}
+var (
+	failedStep        = flow.Func("Failed", func(ctx context.Context) error { return assert.AnError })
+	succeededStep     = flow.Func("Succeeded", func(ctx context.Context) error { return nil })
+	canceledStep      = flow.Func("Canceled", func(ctx context.Context) error { return flow.Cancel(assert.AnError) })
+	skippedStep       = flow.Func("Skipped", func(ctx context.Context) error { return flow.Skip(assert.AnError) })
+	canceledNoErrStep = flow.Func("CanceledNoErr", func(ctx context.Context) error { return flow.Cancel(nil) })
+	skippedNoErrStep  = flow.Func("SkippedNoErr", func(ctx context.Context) error { return flow.Skip(nil) })
+)
 
-func (fakeStep) Do(context.Context) error {
-	return nil
-}
+func TestCondition(t *testing.T) {
+	var (
+		make = func(ctx context.Context, cond flow.Condition) func(*testing.T, flow.StepStatus, ...flow.Steper) {
+			return func(t *testing.T, expect flow.StepStatus, steps ...flow.Steper) {
+				t.Helper()
+				ups := make(map[flow.Steper]flow.StatusError)
+				for _, s := range steps {
+					err := s.Do(ctx)
+					ups[s] = flow.StatusError{
+						Status: flow.StatusFromError(err),
+						Err:    err,
+					}
+				}
+				assert.Equal(t, expect, cond(ctx, ups))
+			}
+		}
 
-func TestAlways(t *testing.T) {
-	stepStatus := Always(context.Background(), map[Steper]StatusError{
-		fakeStep{}: {},
+		ctx      = context.Background()
+		allSteps = []flow.Steper{failedStep, succeededStep, canceledStep, skippedStep, canceledNoErrStep, skippedNoErrStep}
+	)
+	t.Run("Always", func(t *testing.T) {
+		v := make(ctx, flow.Always)
+		v(t, flow.Running, allSteps...)
 	})
-	assert.Equal(t, Running, stepStatus)
-}
-
-func TestAllSucceeded(t *testing.T) {
-	stepStatus := AllSucceeded(context.Background(), map[Steper]StatusError{
-		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Succeeded},
+	t.Run("AllSucceeded", func(t *testing.T) {
+		v := make(ctx, flow.AllSucceeded)
+		v(t, flow.Skipped, allSteps...)
+		v(t, flow.Running, succeededStep)
 	})
-	assert.Equal(t, Running, stepStatus)
-
-	stepStatus = AllSucceeded(context.Background(), map[Steper]StatusError{
-		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Failed},
+	t.Run("AnySucceeded", func(t *testing.T) {
+		v := make(ctx, flow.AnySucceeded)
+		v(t, flow.Running, allSteps...)
+		v(t, flow.Skipped, failedStep, skippedStep, canceledStep)
+		v(t, flow.Running, succeededStep)
 	})
-	assert.Equal(t, Skipped, stepStatus)
+	t.Run("AllSucceededOrSkipped", func(t *testing.T) {
+		v := make(ctx, flow.AllSucceededOrSkipped)
+		v(t, flow.Skipped, allSteps...)
+		v(t, flow.Skipped, failedStep, canceledStep)
+		v(t, flow.Running, succeededStep, skippedStep, skippedNoErrStep)
+	})
+	t.Run("BeCanceled", func(t *testing.T) {
+		v := make(ctx, flow.BeCanceled)
+		v(t, flow.Skipped, allSteps...)
+		v(t, flow.Skipped, canceledStep, canceledNoErrStep)
+	})
+	t.Run("AnyFailed", func(t *testing.T) {
+		v := make(ctx, flow.AnyFailed)
+		v(t, flow.Running, allSteps...)
+		v(t, flow.Running, failedStep, canceledStep, skippedStep)
+		v(t, flow.Skipped, succeededStep, skippedStep, canceledStep)
+	})
+	t.Run("ConditionOrDefault", func(t *testing.T) {
+		v := make(ctx, flow.ConditionOrDefault(nil))
+		v(t, flow.Skipped, allSteps...)
+		v = make(ctx, flow.ConditionOrDefault(flow.Always))
+		v(t, flow.Running, allSteps...)
+	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	stepStatus = AllSucceeded(ctx, map[Steper]StatusError{
-		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Succeeded},
+	t.Run("Canceled Context", func(t *testing.T) {
+		t.Run("Always", func(t *testing.T) {
+			v := make(canceledCtx, flow.Always)
+			v(t, flow.Running, allSteps...)
+		})
+		t.Run("AllSucceeded", func(t *testing.T) {
+			v := make(canceledCtx, flow.AllSucceeded)
+			v(t, flow.Canceled, allSteps...)
+			v(t, flow.Canceled, succeededStep)
+			v(t, flow.Canceled, succeededStep, skippedNoErrStep)
+		})
+		t.Run("AnySucceeded", func(t *testing.T) {
+			v := make(canceledCtx, flow.AnySucceeded)
+			v(t, flow.Canceled, allSteps...)
+			v(t, flow.Canceled, succeededStep, skippedStep, failedStep)
+		})
+		t.Run("AllSucceededOrSkipped", func(t *testing.T) {
+			v := make(canceledCtx, flow.AllSucceededOrSkipped)
+			v(t, flow.Canceled, allSteps...)
+			v(t, flow.Canceled, succeededStep, skippedStep)
+		})
+		t.Run("BeCanceled", func(t *testing.T) {
+			v := make(canceledCtx, flow.BeCanceled)
+			v(t, flow.Running, allSteps...)
+			v(t, flow.Running, succeededStep)
+			v(t, flow.Running, skippedStep, canceledStep)
+		})
+		t.Run("AnyFailed", func(t *testing.T) {
+			v := make(canceledCtx, flow.AnyFailed)
+			v(t, flow.Canceled, allSteps...)
+			v(t, flow.Canceled, succeededStep)
+		})
 	})
-	assert.Equal(t, Canceled, stepStatus)
-}
-
-func TestBeCanceled(t *testing.T) {
-	stepStatus := BeCanceled(context.Background(), map[Steper]StatusError{
-		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Succeeded},
-	})
-	assert.Equal(t, Skipped, stepStatus)
-
-	stepStatus = BeCanceled(context.Background(), map[Steper]StatusError{
-		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Canceled},
-		fakeStep{}: {Status: Failed},
-	})
-	assert.Equal(t, Skipped, stepStatus)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	stepStatus = BeCanceled(ctx, map[Steper]StatusError{
-		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Succeeded},
-	})
-	assert.Equal(t, Running, stepStatus)
-}
-
-func TestAnyFailed(t *testing.T) {
-	stepStatus := AnyFailed(context.Background(), map[Steper]StatusError{
-		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Succeeded},
-	})
-	assert.Equal(t, Skipped, stepStatus)
-
-	stepStatus = AnyFailed(context.Background(), map[Steper]StatusError{
-		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Skipped},
-		fakeStep{}: {Status: Pending},
-		fakeStep{}: {Status: StepStatus("unknown")},
-		fakeStep{}: {Status: Failed},
-	})
-	assert.Equal(t, Running, stepStatus)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	stepStatus = AnyFailed(ctx, map[Steper]StatusError{
-		fakeStep{}: {Status: Succeeded},
-		fakeStep{}: {Status: Failed},
-	})
-	assert.Equal(t, Canceled, stepStatus)
 }

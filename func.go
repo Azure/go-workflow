@@ -6,7 +6,7 @@ import (
 
 // Func constructs a Step from an arbitrary function
 func Func(name string, do func(context.Context) error) *Function[struct{}, struct{}] {
-	return FuncIO[struct{}, struct{}](name, func(ctx context.Context, _ struct{}) (struct{}, error) {
+	return FuncIO(name, func(ctx context.Context, _ struct{}) (struct{}, error) {
 		return struct{}{}, do(ctx)
 	})
 }
@@ -15,12 +15,12 @@ func FuncIO[I, O any](name string, do func(context.Context, I) (O, error)) *Func
 	return f
 }
 func FuncI[I any](name string, do func(context.Context, I) error) *Function[I, struct{}] {
-	return FuncIO[I, struct{}](name, func(ctx context.Context, i I) (struct{}, error) {
+	return FuncIO(name, func(ctx context.Context, i I) (struct{}, error) {
 		return struct{}{}, do(ctx, i)
 	})
 }
 func FuncO[O any](name string, do func(context.Context) (O, error)) *Function[struct{}, O] {
-	return FuncIO[struct{}, O](name, func(ctx context.Context, _ struct{}) (O, error) {
+	return FuncIO(name, func(ctx context.Context, _ struct{}) (O, error) {
 		return do(ctx)
 	})
 }

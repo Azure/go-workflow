@@ -204,13 +204,6 @@ func (e ErrWorkflow) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(rv)
 }
-func (e ErrWorkflow) Unwrap() []error {
-	rv := []error{}
-	for _, v := range e {
-		rv = append(rv, v.Err)
-	}
-	return rv
-}
 func (e ErrWorkflow) AllSucceeded() bool {
 	for _, sErr := range e {
 		if sErr.Status != Succeeded {

@@ -40,22 +40,10 @@ func ExampleConditionWhen() {
 		canceled  = new(CanceledStep)
 		skipped   = new(SkippedStep)
 
-		allSucceeded = flow.Func("allSucceeded", func(context.Context) error {
-			fmt.Println("AllSucceeded")
-			return nil
-		})
-		always = flow.Func("always", func(context.Context) error {
-			fmt.Println("Always")
-			return nil
-		})
-		anyFailed = flow.Func("anyFailed", func(ctx context.Context) error {
-			fmt.Println("AnyFailed")
-			return nil
-		})
-		beCanceled = flow.Func("beCanceled", func(ctx context.Context) error {
-			fmt.Println("BeCanceled")
-			return nil
-		})
+		allSucceeded = Print("AllSucceeded")
+		always       = Print("Always")
+		anyFailed    = Print("AnyFailed")
+		beCanceled   = Print("BeCanceled")
 	)
 
 	workflow := new(flow.Workflow)
