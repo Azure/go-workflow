@@ -47,10 +47,9 @@ type Workflow struct {
 	state map[Steper]*State     // the internal states of Steps
 	steps map[Phase]Set[Steper] // all Steps grouped in phases
 
-	leaseBucket       chan struct{}  // constraint max concurrency of running Steps
-	waitGroup         sync.WaitGroup // to prevent goroutine leak
-	isRunning         sync.Mutex     // indicate whether the Workflow is running
-	oneStepTerminated chan struct{}  // signals for next tick
+	leaseBucket chan struct{}  // constraint max concurrency of running Steps
+	waitGroup   sync.WaitGroup // to prevent goroutine leak
+	isRunning   sync.Mutex     // indicate whether the Workflow is running
 }
 
 // Add Steps into Workflow in phase Main.
@@ -289,9 +288,6 @@ func (w *Workflow) reset() {
 		// and remove the lease from the bucket when it's done.
 		w.leaseBucket = make(chan struct{}, w.MaxConcurrency)
 	}
-	// oneStepTerminated is a signal when each Step terminated,
-	// then workflow needs to tick once.
-	w.oneStepTerminated = make(chan struct{}, len(w.state)+1) // +1 for the first tick
 }
 
 // Do starts the Step execution in topological order,
@@ -309,15 +305,12 @@ func (w *Workflow) Do(ctx context.Context) error {
 		return nil
 	}
 	w.reset()
-	defer close(w.oneStepTerminated)
 	// preflight check
 	if err := w.preflight(); err != nil {
 		return err
 	}
-	// signal for the first tick
-	w.signalTick()
 	// each time one Step terminated, tick forward
-	for range w.oneStepTerminated {
+	for {
 		if done := w.tick(ctx); done {
 			break
 		}
@@ -396,8 +389,6 @@ func (w *Workflow) preflight() error {
 	return nil
 }
 
-func (w *Workflow) signalTick() { w.oneStepTerminated <- struct{}{} }
-
 // tick will not block, it starts a goroutine for each runnable Step.
 // tick returns true if all steps in all phases are terminated.
 func (w *Workflow) tick(ctx context.Context) bool {
@@ -411,69 +402,60 @@ func (w *Workflow) tick(ctx context.Context) bool {
 	if steps == nil {
 		return true
 	}
-	var wg sync.WaitGroup
 	for step := range steps {
-		wg.Add(1)
-		go func(step Steper) {
-			defer wg.Done()
+		state := w.StateOf(step)
+		// we only process pending Steps
+		if state.GetStatus() != Pending {
+			continue
+		}
+		// we only process Steps whose all upstreams are terminated
+		ups := w.UpstreamOf(step)
+		if isAnyUpstreamNotTerminated(ups) {
+			continue
+		}
+		option := state.Option()
+		cond := DefaultCondition
+		if option != nil && option.Condition != nil {
+			cond = option.Condition
+		}
+		if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
+			state.SetStatus(nextStatus)
+			continue
+		}
+		// kick off the Step
+		w.lease()
+		state.SetStatus(Running)
+		w.waitGroup.Add(1)
+		go func(ctx context.Context, step Steper, state *State) {
+			defer w.waitGroup.Done()
+			defer w.unlease()
 
-			state := w.StateOf(step)
-			// we only process pending Steps
-			if state.GetStatus() != Pending {
+			var (
+				err    error
+				status = Failed
+			)
+			defer func() {
+				state.SetStatus(status)
+				state.SetError(err)
+			}()
+
+			err = w.runStep(ctx, step, state)
+			if err == nil {
+				status = Succeeded
 				return
 			}
-			// we only process Steps whose all upstreams are terminated
-			ups := w.UpstreamOf(step)
-			if isAnyUpstreamNotTerminated(ups) {
-				return
-			}
-			option := state.Option()
-			cond := DefaultCondition
-			if option != nil && option.Condition != nil {
-				cond = option.Condition
-			}
-			if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
-				state.SetStatus(nextStatus)
-				w.signalTick()
-				return
-			}
-			// kick off the Step
-			w.lease()
-			state.SetStatus(Running)
-			w.waitGroup.Add(1)
-			go func(ctx context.Context, step Steper, state *State) {
-				defer w.waitGroup.Done()
-				defer w.signalTick()
-				defer w.unlease()
-
-				var (
-					err    error
-					status StepStatus
-				)
-				defer func() {
-					state.SetStatus(status)
-					state.SetError(err)
-				}()
-
-				err = w.runStep(ctx, step, state)
-				if err == nil {
-					status = Succeeded
-					return
+			status = StatusFromError(err)
+			if status == Failed { // do some extra checks
+				switch {
+				case
+					DefaultIsCanceled(err),
+					errors.Is(err, context.Canceled),
+					errors.Is(err, context.DeadlineExceeded):
+					status = Canceled
 				}
-				status = StatusFromError(err)
-				if status == Failed { // do some extra checks
-					switch {
-					case
-						DefaultIsCanceled(err),
-						errors.Is(err, context.Canceled),
-						errors.Is(err, context.DeadlineExceeded):
-						status = Canceled
-					}
-				}
-			}(ctx, step, state)
-		}(step)
+			}
+		}(ctx, step, state)
 	}
-	wg.Wait()
 	return false
 }
 
