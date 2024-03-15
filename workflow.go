@@ -432,7 +432,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 
 			var (
 				err    error
-				status StepStatus
+				status = Failed
 			)
 			defer func() {
 				state.SetStatus(status)
