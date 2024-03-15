@@ -2,7 +2,6 @@ package flow
 
 import (
 	"context"
-	"sync"
 )
 
 // BranchCheckFunc checks the target and returns true if the branch should be taken.
@@ -100,8 +99,6 @@ type SwitchBranch[T Steper] struct {
 	CasesToCheck map[Steper]*BranchCheck[T]
 	DefaultStep  []Steper
 	Cond         Condition
-
-	wg sync.WaitGroup // default need to wait all cases to finish check
 }
 
 // BranchCheck represents a branch to be checked.
@@ -142,14 +139,12 @@ func (s *SwitchBranch[T]) When(cond Condition) *SwitchBranch[T] {
 	return s
 }
 func (s *SwitchBranch[T]) isCase(c Steper) func(ctx context.Context, ups map[Steper]StatusError) StepStatus {
-	s.wg.Add(1)
 	return func(ctx context.Context, ups map[Steper]StatusError) StepStatus {
 		if status := ConditionOrDefault(s.Cond)(ctx, ups); status != Running {
 			return status
 		}
 		if check, ok := s.CasesToCheck[c]; ok {
 			check.Do(ctx, s.Target)
-			s.wg.Done()
 			if check.OK {
 				return Running
 			}
@@ -158,21 +153,29 @@ func (s *SwitchBranch[T]) isCase(c Steper) func(ctx context.Context, ups map[Ste
 	}
 }
 func (s *SwitchBranch[T]) isDefault(ctx context.Context, ups map[Steper]StatusError) StepStatus {
-	if status := ConditionOrDefault(s.Cond)(ctx, ups); status != Running {
-		return status
-	}
-	s.wg.Wait()
 	for _, check := range s.CasesToCheck {
 		if check.OK {
 			return Skipped
 		}
 	}
+	// default branch ignores the status from cases
+	up := make(map[Steper]StatusError)
+	for step, status := range ups {
+		if _, isCase := s.CasesToCheck[step]; !isCase {
+			up[step] = status
+		}
+	}
+	if status := ConditionOrDefault(s.Cond)(ctx, up); status != Running {
+		return status
+	}
 	return Running
 }
 func (s *SwitchBranch[T]) Done() map[Steper]*StepConfig {
 	steps := Steps()
+	cases := []Steper{}
 	for step := range s.CasesToCheck {
 		step := step
+		cases = append(cases, step)
 		steps.Merge(
 			Steps(step).
 				DependsOn(s.Target).
@@ -189,7 +192,10 @@ func (s *SwitchBranch[T]) Done() map[Steper]*StepConfig {
 	}
 	if s.DefaultStep != nil {
 		steps.Merge(
-			Steps(s.DefaultStep...).DependsOn(s.Target).When(s.isDefault),
+			Steps(s.DefaultStep...).
+				DependsOn(s.Target).
+				DependsOn(cases...).
+				When(s.isDefault),
 		)
 	}
 	return steps.Done()
