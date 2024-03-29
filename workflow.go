@@ -481,20 +481,20 @@ func (w *Workflow) makeDoForStep(step Steper, state *State) func(ctx context.Con
 		if w.DontPanic {
 			do = catchPanicAsError
 		}
+		// call Before callbacks
+		if errBefore := do(func() error {
+			ctxBefore, errBefore := state.Before(ctx, step)
+			ctx = ctxBefore // use the context returned by Before
+			return errBefore
+		}); errBefore != nil {
+			return ErrBefore{errBefore}
+		}
+		err := do(func() error {
+			return step.Do(ctx)
+		})
 		return do(func() error {
-			// call Before callbacks
-			if errBefore := do(func() error {
-				ctxBefore, errBefore := state.Before(ctx, step)
-				ctx = ctxBefore // use the context returned by Before
-				return errBefore
-			}); errBefore != nil {
-				return ErrBefore{errBefore}
-			}
-			err := step.Do(ctx)
 			// call After callbacks
-			return do(func() error {
-				return state.After(ctx, step, err)
-			})
+			return state.After(ctx, step, err)
 		})
 	}
 }
