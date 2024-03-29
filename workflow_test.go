@@ -561,4 +561,16 @@ func TestBeforeAfter(t *testing.T) {
 		)
 		assert.NoError(t, w.Do(context.Background()))
 	})
+	t.Run("should call AfterStep even step panics", func(t *testing.T) {
+		w := &Workflow{DontPanic: true}
+		w.Add(
+			Step(Func("step", func(ctx context.Context) error {
+				panic("panic!")
+			})).AfterStep(func(ctx context.Context, s Steper, err error) error {
+				assert.ErrorContains(t, err, "panic!")
+				return nil
+			}),
+		)
+		assert.NoError(t, w.Do(context.Background()))
+	})
 }
