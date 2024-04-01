@@ -44,6 +44,7 @@ type Workflow struct {
 	Clock          clock.Clock // Clock for unit test
 
 	tree  StepTree              // tree of Steps, only root Steps are used in `state` and `steps`
+	built Set[Steper]           // to prevent BuildStep() being called multiple times
 	state map[Steper]*State     // the internal states of Steps
 	steps map[Phase]Set[Steper] // all Steps grouped in phases
 
@@ -66,6 +67,9 @@ func (w *Workflow) PhaseAdd(phase Phase, was ...WorkflowAdder) *Workflow {
 	if w.tree == nil {
 		w.tree = make(StepTree)
 	}
+	if w.built == nil {
+		w.built = make(Set[Steper])
+	}
 	if w.state == nil {
 		w.state = make(map[Steper]*State)
 	}
@@ -86,13 +90,17 @@ func (w *Workflow) PhaseAdd(phase Phase, was ...WorkflowAdder) *Workflow {
 }
 
 // [EXPERIMENTIAL] call BuildStep() method for the Step and its all wrapped Steps before being added into Workflow.
-func buildStep(step Steper) {
+func (w *Workflow) buildStep(step Steper) {
 	for {
 		if step == nil {
 			return
 		}
+		if w.built.Has(step) {
+			return
+		}
 		if builder, ok := step.(StepBuilder); ok {
 			builder.BuildStep()
+			w.built.Add(step)
 		}
 		switch u := step.(type) {
 		case interface{ Unwrap() Steper }:
@@ -101,7 +109,7 @@ func buildStep(step Steper) {
 			return
 		case interface{ Unwrap() []Steper }:
 			for _, s := range u.Unwrap() {
-				buildStep(s)
+				w.buildStep(s)
 			}
 			return
 		default:
@@ -115,7 +123,7 @@ func (w *Workflow) addStep(phase Phase, step Steper, config *StepConfig) {
 	if step == nil {
 		return
 	}
-	buildStep(step)
+	w.buildStep(step)
 	if w.StateOf(step) == nil {
 		// the step is new, it becomes a new root
 		w.state[step] = new(State)

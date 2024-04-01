@@ -133,7 +133,27 @@ func TestAdd(t *testing.T) {
 		assert.Contains(t, inner.state[a].Config.Upstreams, b,
 			"b is known by inner, so it should be added to inner")
 	})
+	t.Run("add twice should not call BuildStep twice", func(t *testing.T) {
+		var i atomic.Int32
+		step := &stepWithBuilder{
+			Builder: func(s *stepWithBuilder) {
+				s.Add(Step(NoOp(fmt.Sprintf("%d", i.Add(1)))))
+			},
+		}
+		_ = new(Workflow).Add(
+			Step(step),
+			Step(step),
+		)
+		assert.EqualValues(t, 1, i.Load())
+	})
 }
+
+type stepWithBuilder struct {
+	Workflow
+	Builder func(*stepWithBuilder)
+}
+
+func (s *stepWithBuilder) BuildStep() { s.Builder(s) }
 
 func TestDep(t *testing.T) {
 	t.Parallel()
