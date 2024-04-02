@@ -87,7 +87,6 @@ func ExampleCompositeViaWorkflow() {
 	// Output:
 	// Bootstrap
 	// SimpleStep: Action!
-	// Cleanup
 }
 
 type CompositeViaWorkflow struct {
@@ -105,9 +104,6 @@ func (c *CompositeViaWorkflow) BuildStep() {
 		simple    = &c.SimpleStep
 	)
 	c.w.Add(
-		flow.Pipe(bootstrap, simple),
-	)
-	c.w.Defer(
-		flow.Step(cleanup),
+		flow.Pipe(bootstrap, simple, cleanup),
 	)
 }

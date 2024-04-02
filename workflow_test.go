@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
 
 func TestNil(t *testing.T) {
@@ -17,7 +16,6 @@ func TestNil(t *testing.T) {
 	t.Run("nil step", func(t *testing.T) {
 		assert.Nil(t, workflow.Steps())
 		assert.Nil(t, workflow.StateOf(nil))
-		assert.Equal(t, PhaseUnknown, workflow.PhaseOf(nil))
 		assert.Nil(t, workflow.UpstreamOf(nil))
 		assert.True(t, workflow.IsTerminated())
 	})
@@ -25,7 +23,6 @@ func TestNil(t *testing.T) {
 		step := Func("step", func(ctx context.Context) error { return nil })
 		assert.Nil(t, workflow.Steps())
 		assert.Nil(t, workflow.StateOf(step))
-		assert.Equal(t, PhaseUnknown, workflow.PhaseOf(step))
 		assert.Nil(t, workflow.UpstreamOf(step))
 	})
 }
@@ -101,9 +98,9 @@ func TestAdd(t *testing.T) {
 		}
 		b := NoOp("b")
 		outer.Add(Step(a).DependsOn(b))
-		assert.Contains(t, outer.state[inner].Config.Upstreams, b,
+		assert.Contains(t, outer.steps[inner].Config.Upstreams, b,
 			"b is new, so the dependency should be added to root of a")
-		assert.NotContains(t, inner.state[a].Config.Upstreams, b,
+		assert.NotContains(t, inner.steps[a].Config.Upstreams, b,
 			"inner workflow doesn't know the existing of b")
 	})
 	t.Run("inner depends on existing inner", func(t *testing.T) {
@@ -130,7 +127,7 @@ func TestAdd(t *testing.T) {
 		}
 		outer.Add(Step(a).DependsOn(b))
 		assert.NotContains(t, outer.UpstreamOf(a), b)
-		assert.Contains(t, inner.state[a].Config.Upstreams, b,
+		assert.Contains(t, inner.steps[a].Config.Upstreams, b,
 			"b is known by inner, so it should be added to inner")
 	})
 	t.Run("add twice should not call BuildStep twice", func(t *testing.T) {
@@ -337,52 +334,6 @@ func TestWorkflowErr(t *testing.T) {
 	})
 }
 
-type MockOrder struct{ mock.Mock }
-
-func (m *MockOrder) Do(s string) { m.Called(s) }
-
-func TestInitDefer(t *testing.T) {
-	t.Run("should in order of init -> step -> defer", func(t *testing.T) {
-		workflow := new(Workflow)
-		mockOrder := new(MockOrder)
-		makeStep := func(s string) Steper {
-			return Func(s, func(ctx context.Context) error {
-				mockOrder.Do(s)
-				return nil
-			})
-		}
-		var (
-			a = makeStep("A")
-			b = makeStep("B")
-			c = makeStep("C")
-			d = makeStep("D")
-		)
-
-		// Init:  B -> A
-		// Run:   C -> A
-		// Defer: D
-		workflow.Init(
-			Step(b).DependsOn(a),
-		).Add(
-			Step(c).DependsOn(a),
-		).Defer(
-			Step(d),
-		)
-
-		// order should be a -> b -> c -> d
-		var (
-			mA = mockOrder.On("Do", "A")
-			mB = mockOrder.On("Do", "B")
-			mC = mockOrder.On("Do", "C")
-			mD = mockOrder.On("Do", "D")
-		)
-		mB.NotBefore(mA)
-		mC.NotBefore(mB)
-		mD.NotBefore(mC)
-		_ = workflow.Do(context.Background())
-	})
-}
-
 func keys[K comparable, V any](m map[K]V) []K {
 	var keys []K
 	for k := range m {
@@ -403,47 +354,22 @@ func TestWorkflowTree(t *testing.T) {
 		workflow := new(Workflow)
 		workflow.Add(Step(a))
 		assert.Len(t, workflow.tree, 1)
-		assert.Len(t, workflow.steps[PhaseMain], 1)
-		assert.Len(t, workflow.state, 1)
+		assert.Len(t, workflow.steps, 1)
 
 		workflow.Add(Step(A))
 		assert.Len(t, workflow.tree, 2)
-		assert.Len(t, workflow.steps[PhaseMain], 1, "the previous root should be replaced")
-		assert.Len(t, workflow.state, 1)
+		assert.Len(t, workflow.steps, 1)
 
 		workflow.Add(Step(Ab))
 		assert.Len(t, workflow.tree, 4)
-		assert.Len(t, workflow.steps[PhaseMain], 1, "the previous root should be replaced")
-		assert.Len(t, workflow.state, 1)
+		assert.Len(t, workflow.steps, 1)
 	})
 	t.Run("add from root to leaf", func(t *testing.T) {
 		workflow := new(Workflow)
 		workflow.Add(Step(Ab))
 		assert.Len(t, workflow.tree, 4)
-		assert.Len(t, workflow.steps[PhaseMain], 1)
-		assert.Len(t, workflow.state, 1)
+		assert.Len(t, workflow.steps, 1)
 	})
-}
-
-func TestWorkflowTreeWithPhase(t *testing.T) {
-	var (
-		a = NoOp("a")
-		b = NoOp("b")
-		A = wrap(a)
-	)
-
-	w := new(Workflow)
-	w.Init(Step(a))
-	w.Add(Step(b).DependsOn(a))
-	w.Init(Step(A))
-
-	assert.Len(t, w.tree, 3)
-	assert.Len(t, w.steps[PhaseInit], 1)
-	assert.Contains(t, w.steps[PhaseInit], A)
-	assert.NotContains(t, w.steps[PhaseInit], w.state[a])
-	assert.Len(t, w.steps[PhaseMain], 2)
-	assert.Contains(t, w.steps[PhaseMain], A)
-	assert.NotContains(t, w.steps[PhaseMain], w.state[a])
 }
 
 func TestSkip(t *testing.T) {
