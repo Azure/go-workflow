@@ -194,6 +194,14 @@ func (e StatusError) MarshalJSON() ([]byte, error) {
 // Keys are root Steps, values are its status and error.
 type ErrWorkflow map[Steper]StatusError
 
+func (e ErrWorkflow) Unwrap() []error {
+	rv := make([]error, 0, len(e))
+	for _, sErr := range e {
+		rv = append(rv, sErr.Err)
+	}
+	return rv
+}
+
 // ErrWorkflow will be printed as:
 //
 //	Step: [Status]
