@@ -1,8 +1,6 @@
 package flow
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"runtime"
 	"strings"
@@ -23,16 +21,11 @@ type ErrSkip struct{ error }
 type ErrPanic struct{ error }
 type ErrBefore struct{ error }
 
-func (e ErrSucceed) Unwrap() error                { return e.error }
-func (e ErrCancel) Unwrap() error                 { return e.error }
-func (e ErrSkip) Unwrap() error                   { return e.error }
-func (e ErrPanic) Unwrap() error                  { return e.error }
-func (e ErrBefore) Unwrap() error                 { return e.error }
-func (e ErrSucceed) MarshalJSON() ([]byte, error) { return DecorateErrorJSON(e.error, nil) }
-func (e ErrCancel) MarshalJSON() ([]byte, error)  { return DecorateErrorJSON(e.error, nil) }
-func (e ErrSkip) MarshalJSON() ([]byte, error)    { return DecorateErrorJSON(e.error, nil) }
-func (e ErrPanic) MarshalJSON() ([]byte, error)   { return DecorateErrorJSON(e.error, nil) }
-func (e ErrBefore) MarshalJSON() ([]byte, error)  { return DecorateErrorJSON(e.error, nil) }
+func (e ErrSucceed) Unwrap() error { return e.error }
+func (e ErrCancel) Unwrap() error  { return e.error }
+func (e ErrSkip) Unwrap() error    { return e.error }
+func (e ErrPanic) Unwrap() error   { return e.error }
+func (e ErrBefore) Unwrap() error  { return e.error }
 
 // WithStackTraces saves stack frames into error
 func WithStackTraces(skip, depth int, ignores ...func(runtime.Frame) bool) func(error) error {
@@ -62,44 +55,6 @@ func WithStackTraces(skip, depth int, ignores ...func(runtime.Frame) bool) func(
 	}
 }
 
-// DecorateErrorJSON decorates error with extra fields in JSON format.
-func DecorateErrorJSON(rerr error, marshal func() ([]byte, error)) ([]byte, error) {
-	var errBytes []byte
-	if errMarshal, ok := rerr.(json.Marshaler); ok {
-		var err error
-		errBytes, err = errMarshal.MarshalJSON()
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		errBytes = []byte(fmt.Sprintf(`{"error":"%s"}`, rerr.Error()))
-	}
-	if marshal == nil {
-		return errBytes, nil
-	}
-	mBytes, err := marshal()
-	if err != nil {
-		return nil, err
-	}
-	return mergeJSON(errBytes, mBytes), nil
-}
-
-func mergeJSON(objs ...[]byte) []byte {
-	objsNoBrace := make([][]byte, 0, len(objs))
-	for _, obj := range objs {
-		if len(obj) > 1 {
-			if objNoBrace := obj[1 : len(obj)-1]; len(objNoBrace) > 0 {
-				objsNoBrace = append(objsNoBrace, objNoBrace)
-			}
-		}
-	}
-	var buf bytes.Buffer
-	buf.WriteByte('{')
-	buf.Write(bytes.Join(objsNoBrace, []byte{','}))
-	buf.WriteByte('}')
-	return buf.Bytes()
-}
-
 // ErrWithStackTraces saves stack frames into error, and prints error into
 //
 //	error message
@@ -118,15 +73,6 @@ func (e ErrWithStackTraces) Error() string {
 	}
 	return e.Err.Error()
 }
-func (e ErrWithStackTraces) MarshalJSON() ([]byte, error) {
-	return DecorateErrorJSON(e.Err, func() ([]byte, error) {
-		return json.Marshal(struct {
-			StackTraces []string `json:"stack_traces,omitempty"`
-		}{
-			StackTraces: e.StackTraces(),
-		})
-	})
-}
 func (e ErrWithStackTraces) StackTraces() []string {
 	stacks := make([]string, 0, len(e.Frames))
 	for i := range e.Frames {
@@ -140,23 +86,25 @@ func StatusFromError(err error) StepStatus {
 	if err == nil {
 		return Succeeded
 	}
-	switch typedErr := err.(type) {
-	case ErrSucceed:
-		return Succeeded
-	case ErrCancel:
-		return Canceled
-	case ErrSkip:
-		return Skipped
-	case interface{ Unwrap() error }:
-		return StatusFromError(typedErr.Unwrap())
-	default:
-		return Failed
+	for {
+		switch typedErr := err.(type) {
+		case ErrSucceed:
+			return Succeeded
+		case ErrCancel:
+			return Canceled
+		case ErrSkip:
+			return Skipped
+		case interface{ Unwrap() error }:
+			err = typedErr.Unwrap()
+		default:
+			return Failed
+		}
 	}
 }
 
-// StatusError contains the status and error of a Step.
-type StatusError struct {
-	Status StepStatus `json:"status"`
+// StepResult contains the status and error of a Step.
+type StepResult struct {
+	Status StepStatus
 	Err    error
 }
 
@@ -164,35 +112,19 @@ type StatusError struct {
 //
 //	[Status]
 //		error message
-func (e StatusError) Error() string {
+func (e StepResult) Error() string {
 	rv := fmt.Sprintf("[%s]", e.Status)
 	if e.Err != nil {
 		rv += "\n\t" + strings.ReplaceAll(e.Err.Error(), "\n", "\n\t")
 	}
 	return rv
 }
-func (e StatusError) Unwrap() error { return e.Err }
-
-// MarshalJSON allows us to marshal StatusError to json.
-//
-//	{
-//		"status": "Status",
-//		"error": "error message"
-//	}
-func (e StatusError) MarshalJSON() ([]byte, error) {
-	return DecorateErrorJSON(e.Err, func() ([]byte, error) {
-		return json.Marshal(struct {
-			Status StepStatus `json:"status"`
-		}{
-			Status: e.Status,
-		})
-	})
-}
+func (e StepResult) Unwrap() error { return e.Err }
 
 // ErrWorkflow contains all errors reported from terminated Steps in Workflow.
 //
 // Keys are root Steps, values are its status and error.
-type ErrWorkflow map[Steper]StatusError
+type ErrWorkflow map[Steper]StepResult
 
 func (e ErrWorkflow) Unwrap() []error {
 	rv := make([]error, 0, len(e))
@@ -215,21 +147,6 @@ func (e ErrWorkflow) Error() string {
 	return builder.String()
 }
 
-// MarshalJSON allows us to marshal ErrWorkflow to json.
-//
-//	{
-//		"Step": {
-//			"status": "Status",
-//			"error": "error message"
-//		}
-//	}
-func (e ErrWorkflow) MarshalJSON() ([]byte, error) {
-	rv := make(map[string]StatusError)
-	for step, sErr := range e {
-		rv[String(step)] = sErr
-	}
-	return json.Marshal(rv)
-}
 func (e ErrWorkflow) AllSucceeded() bool {
 	for _, sErr := range e {
 		if sErr.Status != Succeeded {

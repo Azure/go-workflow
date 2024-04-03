@@ -372,6 +372,7 @@ func LogValue(step Steper) logValue { return logValue{Steper: step} }
 
 type logValue struct{ Steper }
 
+func (lv logValue) String() string       { return String(lv.Steper) }
 func (lv logValue) LogValue() slog.Value { return slog.StringValue(String(lv.Steper)) }
 func (lv logValue) MarshalJSON() ([]byte, error) {
 	return []byte(fmt.Sprintf("%q", String(lv.Steper))), nil

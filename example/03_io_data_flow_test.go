@@ -120,7 +120,7 @@ func ExampleBeforeAfterStepCallback() {
 
 	var errWorkflow flow.ErrWorkflow
 	if errors.As(workflow.Do(context.TODO()), &errWorkflow) {
-		fmt.Println(errWorkflow[foo].Err)
+		fmt.Println(errWorkflow[foo].Unwrap())
 	}
 	// Output:
 	// Bar

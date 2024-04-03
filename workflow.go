@@ -201,11 +201,11 @@ func (w *Workflow) StateOf(step Steper) *State {
 }
 
 // UpstreamOf returns all upstream Steps and their status and error.
-func (w *Workflow) UpstreamOf(step Steper) map[Steper]StatusError {
+func (w *Workflow) UpstreamOf(step Steper) map[Steper]StepResult {
 	if w.Empty() {
 		return nil
 	}
-	rv := make(map[Steper]StatusError)
+	rv := make(map[Steper]StepResult)
 	for up := range w.StateOf(w.RootOf(step)).Upstreams() {
 		up = w.RootOf(up)
 		rv[up] = w.StateOf(up).GetStatusError()
@@ -293,7 +293,7 @@ func (w *Workflow) Do(ctx context.Context) error {
 }
 
 const scanned StepStatus = "scanned" // a private status for preflight
-func isAllUpstreamScanned(ups map[Steper]StatusError) bool {
+func isAllUpstreamScanned(ups map[Steper]StepResult) bool {
 	for _, up := range ups {
 		if up.Status != scanned {
 			return false
@@ -301,7 +301,7 @@ func isAllUpstreamScanned(ups map[Steper]StatusError) bool {
 	}
 	return true
 }
-func isAnyUpstreamNotTerminated(ups map[Steper]StatusError) bool {
+func isAnyUpstreamNotTerminated(ups map[Steper]StepResult) bool {
 	for _, up := range ups {
 		if !up.Status.IsTerminated() {
 			return true

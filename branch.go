@@ -47,8 +47,8 @@ func (i *IfBranch[T]) When(cond Condition) *IfBranch[T] {
 	i.Cond = cond
 	return i
 }
-func (i *IfBranch[T]) isThen(isThen bool) func(ctx context.Context, ups map[Steper]StatusError) StepStatus {
-	return func(ctx context.Context, ups map[Steper]StatusError) StepStatus {
+func (i *IfBranch[T]) isThen(isThen bool) func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
+	return func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 		if status := ConditionOrDefault(i.Cond)(ctx, ups); status != Running {
 			return status
 		}
@@ -138,8 +138,8 @@ func (s *SwitchBranch[T]) When(cond Condition) *SwitchBranch[T] {
 	s.Cond = cond
 	return s
 }
-func (s *SwitchBranch[T]) isCase(c Steper) func(ctx context.Context, ups map[Steper]StatusError) StepStatus {
-	return func(ctx context.Context, ups map[Steper]StatusError) StepStatus {
+func (s *SwitchBranch[T]) isCase(c Steper) func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
+	return func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 		if status := ConditionOrDefault(s.Cond)(ctx, ups); status != Running {
 			return status
 		}
@@ -152,14 +152,14 @@ func (s *SwitchBranch[T]) isCase(c Steper) func(ctx context.Context, ups map[Ste
 		return Skipped
 	}
 }
-func (s *SwitchBranch[T]) isDefault(ctx context.Context, ups map[Steper]StatusError) StepStatus {
+func (s *SwitchBranch[T]) isDefault(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	for _, check := range s.CasesToCheck {
 		if check.OK {
 			return Skipped
 		}
 	}
 	// default branch ignores the status from cases
-	up := make(map[Steper]StatusError)
+	up := make(map[Steper]StepResult)
 	for step, status := range ups {
 		if _, isCase := s.CasesToCheck[step]; !isCase {
 			up[step] = status
