@@ -35,16 +35,15 @@ import (
 // Check `StepStatus` and `Condition` for details.
 //
 // Workflow supports Step-level configuration,       check Step(), Steps() and Pipe() for details.
-// Workflow supports executing Steps phase in phase, check Phase for details.
-// Workflow supports Nested Steps,				     check Is(), As() and StepTree for details.
+// Workflow supports Composite Steps,				 check Has(), As() and HasStep() for details.
 type Workflow struct {
 	MaxConcurrency int         // MaxConcurrency limits the max concurrency of running Steps
 	DontPanic      bool        // DontPanic suppress panics, instead return it as error
-	SkipAsError    bool        // SkipAsError=true will only return nil error when all Steps succeeded, default to false, allowing some Steps skipped
-	Clock          clock.Clock // Clock for unit test
+	SkipAsError    bool        // SkipAsError marks skipped Steps as an error if true, otherwise ignore them
+	Clock          clock.Clock // Clock for retry and unit test
 
-	tree  StepTree          // tree of Steps, only root Steps are used in `state` and `steps`
-	built Set[Steper]       // to prevent BuildStep() being called multiple times
+	StepBuilder // StepBuilder to call BuildStep() for Steps
+
 	steps map[Steper]*State // the internal states of Steps
 
 	leaseBucket chan struct{}  // constraint max concurrency of running Steps
@@ -54,18 +53,12 @@ type Workflow struct {
 
 // Add Steps into Workflow in phase Main.
 func (w *Workflow) Add(was ...WorkflowAdder) *Workflow {
-	if w.tree == nil {
-		w.tree = make(StepTree)
-	}
-	if w.built == nil {
-		w.built = make(Set[Steper])
-	}
 	if w.steps == nil {
 		w.steps = make(map[Steper]*State)
 	}
 	for _, wa := range was {
 		if wa != nil {
-			for step, config := range wa.Done() {
+			for step, config := range wa.AddToWorkflow() {
 				w.addStep(step, config)
 			}
 		}
@@ -73,53 +66,37 @@ func (w *Workflow) Add(was ...WorkflowAdder) *Workflow {
 	return w
 }
 
-// [EXPERIMENTIAL] call BuildStep() method for the Step and its all wrapped Steps before being added into Workflow.
-func (w *Workflow) buildStep(step Steper) {
-	for {
-		if step == nil {
-			return
-		}
-		if w.built.Has(step) {
-			return
-		}
-		if builder, ok := step.(StepBuilder); ok {
-			builder.BuildStep()
-			w.built.Add(step)
-		}
-		switch u := step.(type) {
-		case interface{ Unwrap() Steper }:
-			step = u.Unwrap()
-		case *Workflow: // for a nested Workflow, do not call BuildStep() for Steps in it again
-			return
-		case interface{ Unwrap() []Steper }:
-			for _, s := range u.Unwrap() {
-				w.buildStep(s)
-			}
-			return
-		default:
-			return
-		}
-	}
-}
-
 // AddStep adds a Step into Workflow with the given phase and config.
 func (w *Workflow) addStep(step Steper, config *StepConfig) {
 	if step == nil {
 		return
 	}
-	w.buildStep(step)
-	if w.StateOf(step) == nil {
-		// the step is new, it becomes a new root
-		w.steps[step] = new(State)
+	w.BuildStep(step)
+	if !HasStep(w, step) {
+		// the step is new, it becomes a new root.
 		// add the new root (and all its nested steps) to the tree,
-		// tree.Add() returns all old roots in nested steps.
 		// we need to replace them with the new root.
 		// workflow will only orchestrate the root Steps,
 		// and leave the nested Steps being managed by the root Steps.
-		for old := range w.tree.Add(step) {
-			w.steps[step].MergeConfig(w.steps[old].Config)
+		var oldRoots Set[Steper]
+		Traverse(step, func(s Steper, walked []Steper) TraverseDecision {
+			if r := w.RootOf(s); r != nil {
+				if _, isRoot := w.steps[s]; isRoot {
+					oldRoots.Add(r)
+					return TraverseDecision{Continue: false}
+				} else {
+					panic(fmt.Errorf("add step %p(%s) failed, another step %p(%s) already has %p(%s)",
+						step, step, r, r, s, s))
+				}
+			}
+			return TraverseDecision{Continue: true}
+		})
+		state := new(State)
+		for old := range oldRoots {
+			state.MergeConfig(w.steps[old].Config)
 			delete(w.steps, old)
 		}
+		w.steps[step] = state
 	}
 	if config != nil {
 		for up := range config.Upstreams {
@@ -131,35 +108,41 @@ func (w *Workflow) addStep(step Steper, config *StepConfig) {
 	}
 }
 
-// setUpstreams will put the upstreams into proper state.
+// setUpstream will put the upstream into proper state.
 func (w *Workflow) setUpstream(step, up Steper) {
 	if step == nil || up == nil {
 		return
 	}
-	// just add the upstream step to the phase
-	// even upstream already in, we still need add it to the phase
-	w.addStep(up, nil)
-	origin := step
-	for w.tree[step] != step {
-		step = w.tree[step]
-		if s, ok := step.(interface {
+	w.addStep(up, nil) // just add the upstream step
+	var stepWalked, upWalked []Steper
+	Traverse(w, func(s Steper, walked []Steper) TraverseDecision {
+		if s == step {
+			stepWalked = walked
+		}
+		if s == up {
+			upWalked = walked
+		}
+		return TraverseDecision{Continue: len(stepWalked) == 0 || len(upWalked) == 0}
+	})
+	i := 0
+	for ; i < len(stepWalked) && i < len(upWalked); i++ {
+		if stepWalked[i] != upWalked[i] {
+			break
+		}
+	}
+	i--
+	for ; i >= 0; i-- {
+		if s, ok := stepWalked[i].(interface {
 			StateOf(Steper) *State
 			RootOf(Steper) Steper
 		}); ok {
-			if s.StateOf(up) != nil {
-				s.StateOf(s.RootOf(origin)).AddUpstream(up)
-				return
-			}
+			s.StateOf(s.RootOf(step)).AddUpstream(up)
 		}
 	}
-	// otherwise, add the upstream to the root state
-	w.StateOf(w.RootOf(origin)).AddUpstream(up)
 }
 
 // Empty returns true if the Workflow don't have any Step.
-func (w *Workflow) Empty() bool {
-	return w == nil || len(w.tree) == 0 || len(w.steps) == 0
-}
+func (w *Workflow) Empty() bool { return w == nil || len(w.steps) == 0 }
 
 // Steps returns all root Steps in the Workflow.
 func (w *Workflow) Steps() []Steper { return w.Unwrap() }
@@ -175,29 +158,41 @@ func (w *Workflow) RootOf(step Steper) Steper {
 	if w.Empty() {
 		return nil
 	}
-	return w.tree.RootOf(step)
+	for root := range w.steps {
+		if HasStep(root, step) {
+			return root
+		}
+	}
+	return nil
 }
 
 // StateOf returns the internal state of the Step.
 // State includes Step's status, error, input, dependency and config.
 func (w *Workflow) StateOf(step Steper) *State {
-	if w.Empty() || step == nil || w.tree[step] == nil {
+	if w.Empty() || step == nil {
 		return nil
 	}
-	origin := step
-	for w.tree[step] != step { // the step is not root and != nil
-		step = w.tree[step]
-		// check whether the lowest ancestor implements StateOf().
-		// normally, the ancestor should be a nested Workflow managing the step.
-		// returning the state of the step is useful when
-		// 1. we could know the exact status or error from the lowest workflow
-		// 2. we could update the input to the step that managed by the lowest workflow
-		if s, ok := step.(interface{ StateOf(Steper) *State }); ok {
-			return s.StateOf(origin)
+	for root := range w.steps {
+		var find *State
+		Traverse(root, func(s Steper, walked []Steper) TraverseDecision {
+			if step == s {
+				find = w.steps[root]
+				return TraverseDecision{Continue: false}
+			}
+			if sub, ok := s.(interface{ StateOf(Steper) *State }); ok {
+				if state := sub.StateOf(step); state != nil {
+					find = state
+					return TraverseDecision{Continue: false}
+				}
+				return TraverseDecision{Continue: true, StopThisBranch: true}
+			}
+			return TraverseDecision{Continue: true}
+		})
+		if find != nil {
+			return find
 		}
 	}
-	// otherwise, use the root state
-	return w.steps[step]
+	return nil
 }
 
 // UpstreamOf returns all upstream Steps and their status and error.
@@ -206,9 +201,9 @@ func (w *Workflow) UpstreamOf(step Steper) map[Steper]StepResult {
 		return nil
 	}
 	rv := make(map[Steper]StepResult)
-	for up := range w.StateOf(w.RootOf(step)).Upstreams() {
+	for up := range w.StateOf(step).Upstreams() {
 		up = w.RootOf(up)
-		rv[up] = w.StateOf(up).GetStatusError()
+		rv[up] = w.StateOf(up).GetStepResult()
 	}
 	return rv
 }
@@ -281,7 +276,7 @@ func (w *Workflow) Do(ctx context.Context) error {
 	// return the error
 	err := make(ErrWorkflow)
 	for step, state := range w.steps {
-		err[step] = state.GetStatusError()
+		err[step] = state.GetStepResult()
 	}
 	if w.SkipAsError && err.AllSucceeded() {
 		return nil
@@ -441,7 +436,7 @@ func (w *Workflow) makeDoForStep(step Steper, state *State) func(ctx context.Con
 			ctx = ctxBefore // use the context returned by Before
 			return errBefore
 		}); errBefore != nil {
-			return ErrBefore{errBefore}
+			return ErrBeforeStep{errBefore}
 		}
 		err := do(func() error {
 			return step.Do(ctx)

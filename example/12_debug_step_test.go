@@ -24,7 +24,7 @@ func (d *DebugStep) When(ctx context.Context, ups map[flow.Steper]flow.StepResul
 func (d *DebugStep) Do(ctx context.Context) error {
 	for up, statusErr := range d.Upstreams {
 		switch {
-		case flow.Is[*FailedStep](up):
+		case flow.Has[*FailedStep](up):
 			// handle the error
 			fmt.Printf("[%s] %s", statusErr.Status, statusErr.Unwrap())
 		}

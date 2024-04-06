@@ -35,7 +35,7 @@ func (s *State) SetError(err error) {
 	defer s.Unlock()
 	s.Err = err
 }
-func (s *State) GetStatusError() StepResult {
+func (s *State) GetStepResult() StepResult {
 	s.RLock()
 	defer s.RUnlock()
 	return s.StepResult
@@ -49,7 +49,9 @@ func (s *State) Upstreams() Set[Steper] {
 func (s *State) Option() *StepOption {
 	opt := &StepOption{}
 	if s.Config != nil && s.Config.Option != nil {
-		s.Config.Option(opt)
+		for _, o := range s.Config.Option {
+			o(opt)
+		}
 	}
 	return opt
 }

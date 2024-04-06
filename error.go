@@ -19,13 +19,13 @@ type ErrSucceed struct{ error }
 type ErrCancel struct{ error }
 type ErrSkip struct{ error }
 type ErrPanic struct{ error }
-type ErrBefore struct{ error }
+type ErrBeforeStep struct{ error }
 
-func (e ErrSucceed) Unwrap() error { return e.error }
-func (e ErrCancel) Unwrap() error  { return e.error }
-func (e ErrSkip) Unwrap() error    { return e.error }
-func (e ErrPanic) Unwrap() error   { return e.error }
-func (e ErrBefore) Unwrap() error  { return e.error }
+func (e ErrSucceed) Unwrap() error    { return e.error }
+func (e ErrCancel) Unwrap() error     { return e.error }
+func (e ErrSkip) Unwrap() error       { return e.error }
+func (e ErrPanic) Unwrap() error      { return e.error }
+func (e ErrBeforeStep) Unwrap() error { return e.error }
 
 // WithStackTraces saves stack frames into error
 func WithStackTraces(skip, depth int, ignores ...func(runtime.Frame) bool) func(error) error {

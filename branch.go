@@ -4,7 +4,7 @@ import (
 	"context"
 )
 
-// BranchCheckFunc checks the target and returns true if the branch should be taken.
+// BranchCheckFunc checks the target and returns true if the branch should be selected.
 type BranchCheckFunc[T Steper] func(context.Context, T) (bool, error)
 
 // If adds a conditional branch to the workflow.
@@ -47,7 +47,7 @@ func (i *IfBranch[T]) When(cond Condition) *IfBranch[T] {
 	i.Cond = cond
 	return i
 }
-func (i *IfBranch[T]) isThen(isThen bool) func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
+func (i *IfBranch[T]) isThen(isThen bool) Condition {
 	return func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 		if status := ConditionOrDefault(i.Cond)(ctx, ups); status != Running {
 			return status
@@ -58,7 +58,7 @@ func (i *IfBranch[T]) isThen(isThen bool) func(ctx context.Context, ups map[Step
 		return Skipped
 	}
 }
-func (i *IfBranch[T]) Done() map[Steper]*StepConfig {
+func (i *IfBranch[T]) AddToWorkflow() map[Steper]*StepConfig {
 	return Steps().Merge(
 		Steps(i.Target).AfterStep(func(ctx context.Context, s Steper, err error) error {
 			i.BranchCheck.Do(ctx, i.Target)
@@ -76,7 +76,7 @@ func (i *IfBranch[T]) Done() map[Steper]*StepConfig {
 				}
 				return ctx, nil
 			}),
-	).Done()
+	).AddToWorkflow()
 }
 
 // Switch adds a switch branch to the workflow.
@@ -114,15 +114,14 @@ func (bc *BranchCheck[T]) Do(ctx context.Context, target T) {
 
 // Case adds a case to the switch branch.
 func (s *SwitchBranch[T]) Case(step Steper, check BranchCheckFunc[T]) *SwitchBranch[T] {
-	s.CasesToCheck[step] = &BranchCheck[T]{Check: check}
-	return s
+	return s.Cases([]Steper{step}, check)
 }
 
 // Cases adds multiple cases to the switch branch.
 // The check function will be executed for each case step.
 func (s *SwitchBranch[T]) Cases(steps []Steper, check BranchCheckFunc[T]) *SwitchBranch[T] {
 	for _, step := range steps {
-		s.Case(step, check)
+		s.CasesToCheck[step] = &BranchCheck[T]{Check: check}
 	}
 	return s
 }
@@ -170,7 +169,7 @@ func (s *SwitchBranch[T]) isDefault(ctx context.Context, ups map[Steper]StepResu
 	}
 	return Running
 }
-func (s *SwitchBranch[T]) Done() map[Steper]*StepConfig {
+func (s *SwitchBranch[T]) AddToWorkflow() map[Steper]*StepConfig {
 	steps := Steps()
 	cases := []Steper{}
 	for step := range s.CasesToCheck {
@@ -182,7 +181,7 @@ func (s *SwitchBranch[T]) Done() map[Steper]*StepConfig {
 				When(s.isCase(step)).
 				BeforeStep(func(ctx context.Context, step Steper) (context.Context, error) {
 					for c, check := range s.CasesToCheck {
-						if IsStep(step, c) && check.Error != nil {
+						if HasStep(step, c) && check.Error != nil {
 							return ctx, check.Error
 						}
 					}
@@ -198,5 +197,5 @@ func (s *SwitchBranch[T]) Done() map[Steper]*StepConfig {
 				When(s.isDefault),
 		)
 	}
-	return steps.Done()
+	return steps.AddToWorkflow()
 }

@@ -9,27 +9,14 @@ import (
 //
 // Implement this interface to allow Workflow orchestrating your Steps.
 //
-// Notice Steper will be saved in Workflow as map key, so it's supposed to be 'comparable'.
+// Notice Steper will be saved in Workflow as map key, so it's supposed to be 'comparable' type like pointer.
 type Steper interface {
 	Do(context.Context) error
 }
 
-// StepBuilder allows to build the internal Steps when adding into Workflow.
-//
-//	type StepImpl struct {}
-//	func (s *StepImpl) Do(ctx context.Context) error { /* ... */ }
-//	func (s *StepImpl) BuildStep() { /* build internal steps */ }
-//
-//	workflow.Add(
-//		flow.Step(new(StepImpl)), // here will call StepImpl.BuildStep() implicitly
-//	)
-type StepBuilder interface {
-	BuildStep()
-}
-
-// WorkflowAdder is addable into Workflow!
+// WorkflowAdder is addable into Workflow
 type WorkflowAdder interface {
-	Done() map[Steper]*StepConfig
+	AddToWorkflow() map[Steper]*StepConfig
 }
 
 // BeforeStep defines callback being called BEFORE step being executed.
@@ -39,10 +26,10 @@ type BeforeStep func(context.Context, Steper) (context.Context, error)
 type AfterStep func(context.Context, Steper, error) error
 
 type StepConfig struct {
-	Upstreams Set[Steper]       // Upstreams of the Step, means these Steps should happen-before this Step
-	Before    []BeforeStep      // Before callbacks of the Step, will be called before Do
-	After     []AfterStep       // After callbacks of the Step, will be called before Do
-	Option    func(*StepOption) // Option customize the Step settings
+	Upstreams Set[Steper]         // Upstreams of the Step, means these Steps should happen-before this Step
+	Before    []BeforeStep        // Before callbacks of the Step, will be called before Do
+	After     []AfterStep         // After callbacks of the Step, will be called before Do
+	Option    []func(*StepOption) // Option customize the Step settings
 }
 type StepOption struct {
 	RetryOption *RetryOption   // RetryOption customize how the Step should be retried, default (nil) means no retry.
@@ -69,7 +56,7 @@ func Steps(steps ...Steper) AddSteps {
 // Step declares Step ready to be added into Workflow.
 //
 // The main difference between Step() and Steps() is that,
-// Step() allows to add Input and InputDependsOn for the Step.
+// Step() allows to add Input for the Step.
 //
 //	Step(a).Input(func(ctx context.Context, a *A) error {
 //		// fill a
@@ -147,10 +134,10 @@ func (as AddSteps) DependsOn(ups ...Steper) AddSteps {
 //
 //	Step(a).
 //		Input(/* 1. this Input will be called first */).
-//		Input(/* 2. this Input is after up's Output */)
+//		Input(/* 2. this Input will be called after 1. */)
 //	Step(a).Input(/* 3. this Input is after all */)
 //
-// The Input callbacks are executed at runtime and per try.
+// The Input callbacks are executed at runtime and per-try.
 func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 	for _, step := range as.Steps {
 		step := step // capture range variable
@@ -171,7 +158,7 @@ func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 // The BeforeStep callback will be called before Do, and return when first error occurs.
 // The order of execution will respect the order of declarations.
 // The BeforeStep callbacks are able to change the context.Context feed into Do.
-// The BeforeStep callbacks are executed at runtime and per try.
+// The BeforeStep callbacks are executed at runtime and per-try.
 func (as AddSteps) BeforeStep(befores ...BeforeStep) AddSteps {
 	for step := range as {
 		as[step].Before = append(as[step].Before, befores...)
@@ -184,7 +171,7 @@ func (as AddSteps) BeforeStep(befores ...BeforeStep) AddSteps {
 // The AfterStep callback will be called after Do, and pass the error to next AfterStep callback.
 // The order of execution will respect the order of declarations.
 // The AfterStep callbacks are able to change the error returned by Do.
-// The AfterStep callbacks are executed at runtime and per try.
+// The AfterStep callbacks are executed at runtime and per-try.
 func (as AddSteps) AfterStep(afters ...AfterStep) AddSteps {
 	for step := range as {
 		as[step].After = append(as[step].After, afters...)
@@ -195,7 +182,7 @@ func (as AddSteps) AfterStep(afters ...AfterStep) AddSteps {
 // Timeout sets the Step level timeout.
 func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
 	for step := range as {
-		as[step].AddOption(func(so *StepOption) {
+		as[step].Option = append(as[step].Option, func(so *StepOption) {
 			so.Timeout = &timeout
 		})
 	}
@@ -205,7 +192,7 @@ func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
 // When set the Condition for the Step.
 func (as AddSteps) When(cond Condition) AddSteps {
 	for step := range as {
-		as[step].AddOption(func(so *StepOption) {
+		as[step].Option = append(as[step].Option, func(so *StepOption) {
 			so.Condition = cond
 		})
 	}
@@ -225,7 +212,7 @@ func (as AddSteps) When(cond Condition) AddSteps {
 //	)
 func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 	for step := range as {
-		as[step].AddOption(func(so *StepOption) {
+		as[step].Option = append(as[step].Option, func(so *StepOption) {
 			if so.RetryOption == nil {
 				so.RetryOption = new(RetryOption)
 				*so.RetryOption = DefaultRetryOption
@@ -240,8 +227,8 @@ func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 	return as
 }
 
-// Done implements WorkflowAdder
-func (as AddSteps) Done() map[Steper]*StepConfig { return as }
+// AddToWorkflow implements WorkflowAdder
+func (as AddSteps) AddToWorkflow() map[Steper]*StepConfig { return as }
 
 // Merge another AddSteps into one.
 func (as AddSteps) Merge(others ...AddSteps) AddSteps {
@@ -301,20 +288,6 @@ func ToSteps[S Steper](steps []S) []Steper {
 	return rv
 }
 
-func (sc *StepConfig) AddOption(opt func(*StepOption)) {
-	switch {
-	case opt == nil:
-		return
-	case sc.Option == nil:
-		sc.Option = opt
-	default:
-		old := sc.Option
-		sc.Option = func(so *StepOption) {
-			old(so)
-			opt(so)
-		}
-	}
-}
 func (sc *StepConfig) Merge(other *StepConfig) {
 	if other == nil {
 		return
@@ -325,25 +298,29 @@ func (sc *StepConfig) Merge(other *StepConfig) {
 	sc.Upstreams.Union(other.Upstreams)
 	sc.Before = append(sc.Before, other.Before...)
 	sc.After = append(sc.After, other.After...)
-	sc.AddOption(other.Option)
+	sc.Option = append(sc.Option, other.Option...)
 }
 
 type Set[T comparable] map[T]struct{}
 
 func (s Set[T]) Has(v T) bool {
+	if s == nil {
+		return false
+	}
 	_, ok := s[v]
 	return ok
 }
-func (s Set[T]) Add(vs ...T) {
+func (s *Set[T]) Add(vs ...T) {
+	if *s == nil {
+		*s = make(Set[T])
+	}
 	for _, v := range vs {
-		s[v] = struct{}{}
+		(*s)[v] = struct{}{}
 	}
 }
-func (s Set[T]) Union(sets ...Set[T]) {
+func (s *Set[T]) Union(sets ...Set[T]) {
 	for _, set := range sets {
-		for v := range set {
-			s[v] = struct{}{}
-		}
+		s.Add(set.Flatten()...)
 	}
 }
 func (s Set[T]) Flatten() []T {

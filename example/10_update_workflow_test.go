@@ -175,8 +175,8 @@ func ExampleMultiWrap() {
 			new(Bar),
 		},
 	}
-	fmt.Println(flow.Is[*Foo](fooBar)) // true
-	fmt.Println(flow.Is[*Bar](fooBar)) // true
+	fmt.Println(flow.Has[*Foo](fooBar)) // true
+	fmt.Println(flow.Has[*Bar](fooBar)) // true
 
 	// actually Workflow itself also implements `Unwrap() []Steper` method
 	workflow := new(flow.Workflow).
