@@ -22,10 +22,10 @@ func TestCondition(t *testing.T) {
 		make = func(ctx context.Context, cond flow.Condition) func(*testing.T, flow.StepStatus, ...flow.Steper) {
 			return func(t *testing.T, expect flow.StepStatus, steps ...flow.Steper) {
 				t.Helper()
-				ups := make(map[flow.Steper]flow.StatusError)
+				ups := make(map[flow.Steper]flow.StepResult)
 				for _, s := range steps {
 					err := s.Do(ctx)
-					ups[s] = flow.StatusError{
+					ups[s] = flow.StepResult{
 						Status: flow.StatusFromError(err),
 						Err:    err,
 					}

@@ -172,10 +172,10 @@ func TestDep(t *testing.T) {
 			assert.ElementsMatch(t, []Steper{a, b, c, d}, steps)
 		})
 		t.Run("list all upstream of some step", func(t *testing.T) {
-			assert.ElementsMatch(t, []Steper{b, c}, keys(w.UpstreamOf(a)))
-			assert.ElementsMatch(t, []Steper{}, keys(w.UpstreamOf(b)))
-			assert.ElementsMatch(t, []Steper{d}, keys(w.UpstreamOf(c)))
-			assert.ElementsMatch(t, []Steper{}, keys(w.UpstreamOf(d)))
+			assert.ElementsMatch(t, []Steper{b, c}, Keys(w.UpstreamOf(a)))
+			assert.ElementsMatch(t, []Steper{}, Keys(w.UpstreamOf(b)))
+			assert.ElementsMatch(t, []Steper{d}, Keys(w.UpstreamOf(c)))
+			assert.ElementsMatch(t, []Steper{}, Keys(w.UpstreamOf(d)))
 		})
 	})
 	t.Run("cycle stepsendency", func(t *testing.T) {
@@ -194,9 +194,9 @@ func TestDep(t *testing.T) {
 		w.Add(
 			Pipe(a, b, c),
 		)
-		assert.ElementsMatch(t, []Steper{}, keys(w.UpstreamOf(a)))
-		assert.ElementsMatch(t, []Steper{a}, keys(w.UpstreamOf(b)))
-		assert.ElementsMatch(t, []Steper{b}, keys(w.UpstreamOf(c)))
+		assert.ElementsMatch(t, []Steper{}, Keys(w.UpstreamOf(a)))
+		assert.ElementsMatch(t, []Steper{a}, Keys(w.UpstreamOf(b)))
+		assert.ElementsMatch(t, []Steper{b}, Keys(w.UpstreamOf(c)))
 	})
 	t.Run("BatchPipe", func(t *testing.T) {
 		w := new(Workflow)
@@ -206,10 +206,10 @@ func TestDep(t *testing.T) {
 				Steps(c, d),
 			),
 		)
-		assert.ElementsMatch(t, []Steper{}, keys(w.UpstreamOf(a)))
-		assert.ElementsMatch(t, []Steper{}, keys(w.UpstreamOf(b)))
-		assert.ElementsMatch(t, []Steper{a, b}, keys(w.UpstreamOf(c)))
-		assert.ElementsMatch(t, []Steper{a, b}, keys(w.UpstreamOf(d)))
+		assert.ElementsMatch(t, []Steper{}, Keys(w.UpstreamOf(a)))
+		assert.ElementsMatch(t, []Steper{}, Keys(w.UpstreamOf(b)))
+		assert.ElementsMatch(t, []Steper{a, b}, Keys(w.UpstreamOf(c)))
+		assert.ElementsMatch(t, []Steper{a, b}, Keys(w.UpstreamOf(d)))
 	})
 }
 
@@ -334,14 +334,6 @@ func TestWorkflowErr(t *testing.T) {
 	})
 }
 
-func keys[K comparable, V any](m map[K]V) []K {
-	var keys []K
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 func TestWorkflowTree(t *testing.T) {
 	var (
 		a  = NoOp("a")
@@ -349,26 +341,32 @@ func TestWorkflowTree(t *testing.T) {
 		A  = wrap(a)
 		Ab = multi(A, b)
 	)
-
+	t.Run("nil", func(t *testing.T) {
+		w := new(Workflow)
+		assert.Nil(t, w.RootOf(nil))
+	})
+	t.Run("", func(t *testing.T) {})
 	t.Run("add from leaf to root", func(t *testing.T) {
-		workflow := new(Workflow)
-		workflow.Add(Step(a))
-		assert.Len(t, workflow.tree, 1)
-		assert.Len(t, workflow.steps, 1)
+		w := new(Workflow)
+		w.Add(Step(a))
+		assert.Len(t, w.steps, 1)
 
-		workflow.Add(Step(A))
-		assert.Len(t, workflow.tree, 2)
-		assert.Len(t, workflow.steps, 1)
+		w.Add(Step(A))
+		assert.Len(t, w.steps, 1)
 
-		workflow.Add(Step(Ab))
-		assert.Len(t, workflow.tree, 4)
-		assert.Len(t, workflow.steps, 1)
+		w.Add(Step(Ab))
+		assert.Len(t, w.steps, 1)
 	})
 	t.Run("add from root to leaf", func(t *testing.T) {
-		workflow := new(Workflow)
-		workflow.Add(Step(Ab))
-		assert.Len(t, workflow.tree, 4)
-		assert.Len(t, workflow.steps, 1)
+		w := new(Workflow)
+		w.Add(Step(Ab))
+		assert.Len(t, w.steps, 1)
+
+		w.Add(Step(A))
+		assert.Len(t, w.steps, 1)
+
+		w.Add(Step(a))
+		assert.Len(t, w.steps, 1)
 	})
 }
 

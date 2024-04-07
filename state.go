@@ -10,7 +10,7 @@ import (
 // It has the status and the config (dependency, input, retry option, condition, timeout, etc.) of the step.
 // The status could be read / write from different goroutines, so use RWMutex to protect it.
 type State struct {
-	StatusError
+	StepResult
 	Config *StepConfig
 	sync.RWMutex
 }
@@ -35,10 +35,10 @@ func (s *State) SetError(err error) {
 	defer s.Unlock()
 	s.Err = err
 }
-func (s *State) GetStatusError() StatusError {
+func (s *State) GetStepResult() StepResult {
 	s.RLock()
 	defer s.RUnlock()
-	return s.StatusError
+	return s.StepResult
 }
 func (s *State) Upstreams() Set[Steper] {
 	if s.Config == nil {
@@ -49,7 +49,9 @@ func (s *State) Upstreams() Set[Steper] {
 func (s *State) Option() *StepOption {
 	opt := &StepOption{}
 	if s.Config != nil && s.Config.Option != nil {
-		s.Config.Option(opt)
+		for _, o := range s.Config.Option {
+			o(opt)
+		}
 	}
 	return opt
 }

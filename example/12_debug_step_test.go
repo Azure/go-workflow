@@ -13,10 +13,10 @@ import (
 //
 // If the debug step needs the result of the upstream steps, it can be achieved by hacking When.
 type DebugStep struct {
-	Upstreams map[flow.Steper]flow.StatusError
+	Upstreams map[flow.Steper]flow.StepResult
 }
 
-func (d *DebugStep) When(ctx context.Context, ups map[flow.Steper]flow.StatusError) flow.StepStatus {
+func (d *DebugStep) When(ctx context.Context, ups map[flow.Steper]flow.StepResult) flow.StepStatus {
 	// save the upstreams for debug
 	d.Upstreams = ups
 	return flow.AnyFailed(ctx, ups)
@@ -24,9 +24,9 @@ func (d *DebugStep) When(ctx context.Context, ups map[flow.Steper]flow.StatusErr
 func (d *DebugStep) Do(ctx context.Context) error {
 	for up, statusErr := range d.Upstreams {
 		switch {
-		case flow.Is[*FailedStep](up):
+		case flow.Has[*FailedStep](up):
 			// handle the error
-			fmt.Printf("[%s] %s", statusErr.Status, statusErr.Err)
+			fmt.Printf("[%s] %s", statusErr.Status, statusErr.Unwrap())
 		}
 	}
 	return nil
