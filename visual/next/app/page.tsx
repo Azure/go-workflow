@@ -20,14 +20,14 @@ const nodeTypes: NodeTypes = {
   SubFlow
 };
 
-export function Flow() {
+function Flow() {
   const { fitView } = useReactFlow();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [fetchCompleted, setFetchCompleted] = useState(false);
 
   useEffect(() => {
-    fetch('http://localhost:8080').
+    fetch('/flow').
       then(response => response.json()).
       then(data => {
         setNodes(
