@@ -14,51 +14,49 @@ type StaticHandler struct {
 }
 
 func (sh StaticHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
-	resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-	nodes := map[string]Node{}
-	edges := map[string]Edge{}
+	root := &Node{ID: "root"}
+	nodes := map[string]*Node{nodeID(sh.Workflow): root}
+	getNode := func(s flow.Steper) *Node {
+		id := nodeID(s)
+		node, ok := nodes[id]
+		if !ok {
+			node = &Node{ID: id}
+			nodes[id] = node
+		}
+		return node
+	}
 	flow.Traverse(sh.Workflow, func(s flow.Steper, walked []flow.Steper) flow.TraverseDecision {
 		if w, ok := s.(interface {
 			Unwrap() []flow.Steper
 			UpstreamOf(flow.Steper) map[flow.Steper]flow.StepResult
 		}); ok {
 			for _, r := range w.Unwrap() {
-				id := nodeID(r)
-				n := Node{
-					ID:     id,
-					Name:   flow.String(r),
-					ZIndex: len(walked),
-				}
+				n := getNode(r)
+				n.Labels = append(n.Labels, Label{flow.String(r)})
+				parent := s
 				for i := len(walked) - 1; i >= 0; i-- {
 					if _, ok := walked[i].(interface{ Unwrap() []flow.Steper }); ok {
-						if i == len(walked)-1 {
-							n.ParentID = nodeID(s)
-							break
-						} else if i < len(walked)-1 {
-							n.ParentID = nodeID(walked[i+1])
+						if i < len(walked)-1 {
+							parent = walked[i+1]
 							break
 						}
 					}
 				}
-				nodes[id] = n
+				getNode(parent).Children = append(getNode(parent).Children, n)
 
 				for up := range w.UpstreamOf(r) {
 					eid := edgeID(up, r)
-					edges[eid] = Edge{
-						ID:     eid,
-						Source: nodeID(up),
-						Target: nodeID(r),
-						ZIndex: max(nodes[nodeID(up)].ZIndex, nodes[nodeID(r)].ZIndex),
-					}
+					getNode(parent).Edges = append(getNode(parent).Edges, &Edge{
+						ID:      eid,
+						Sources: []string{nodeID(up)},
+						Targets: []string{nodeID(r)},
+					})
 				}
 			}
 		}
 		return flow.TraverseDecision{Continue: true}
 	})
-	b, err := json.Marshal(Flow{
-		Nodes: flow.Values(nodes),
-		Edges: flow.Values(edges),
-	})
+	b, err := json.Marshal(root)
 	if err != nil {
 		resp.WriteHeader(http.StatusInternalServerError)
 		slog.Error("failed to marshal flow", "error", err)
@@ -74,21 +72,22 @@ func (sh StaticHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 func nodeID(s flow.Steper) string    { return fmt.Sprintf("%p", s) }
 func edgeID(s, t flow.Steper) string { return fmt.Sprintf("%p-%p", s, t) }
 
-type Flow struct {
-	Nodes []Node `json:"nodes"`
-	Edges []Edge `json:"edges"`
-}
-
 type Node struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	ParentID string `json:"parentId"`
-	ZIndex   int    `json:"zIndex"`
+	ID       string  `json:"id"`
+	Children []*Node `json:"children,omitempty"`
+	Edges    []*Edge `json:"edges,omitempty"`
+	X        int     `json:"x,omitempty"`
+	Y        int     `json:"y,omitempty"`
+	Width    int     `json:"width,omitempty"`
+	Height   int     `json:"height,omitempty"`
+	Labels   []Label `json:"labels,omitempty"`
+}
+type Label struct {
+	Text string `json:"text,omitempty"`
 }
 
 type Edge struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
-	ZIndex int    `json:"zIndex"`
+	ID      string   `json:"id"`
+	Sources []string `json:"sources"`
+	Targets []string `json:"targets"`
 }

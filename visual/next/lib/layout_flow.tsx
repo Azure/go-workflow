@@ -1,24 +1,22 @@
 'use client';
-import dagre from '@dagrejs/dagre';
+import ELK, { ElkNode } from 'elkjs/lib/elk.bundled.js'
 import { Node, Edge } from 'reactflow';
+import { fromElk, traverseElk } from './util_elk';
 
-const g = new dagre.graphlib.Graph();
+const elk = new ELK();
 
-export function layoutFlow(nodes: Node<any>[], edges: Edge<any>[], direction: string) {
-  g.setGraph({ rankdir: direction, nodesep: 80, marginy: 50, ranksep: 80});
-  g.setDefaultEdgeLabel(() => ({}));
-
-  edges.forEach((edge) => g.setEdge(edge.source, edge.target));
-  nodes.forEach((node) => g.setNode(node.id, node.data));
-
-  dagre.layout(g);
-
-  return {
-    nodes: nodes.map((node) => {
-      const { x, y } = g.node(node.id);
-
-      return { ...node, position: { x, y } };
-    }),
-    edges,
-  };
+export async function layout(g: ElkNode): Promise<{ nodes: Node[], edges: Edge[] }> {
+  traverseElk({ elkNode: g }, ({ elkNode }) => {
+    if (elkNode.children) {
+      elkNode.layoutOptions = {
+        'elk.algorithm': 'layered',
+        'elk.layered.spacing.nodeNodeBetweenLayers': '50',
+        'elk.spacing.labelLabel': '5',
+        'elk.padding': '[top=40,left=15,bottom=15,right=15]',
+        'elk.direction': 'RIGHT',
+        ...elkNode.layoutOptions,
+      }
+    }
+  });
+  return fromElk(await elk.layout(g));
 };

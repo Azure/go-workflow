@@ -1,5 +1,5 @@
 'use client';
-import { useState, useCallback, useEffect } from 'react';
+import { useEffect, Dispatch } from 'react';
 import ReactFlow, {
   Panel,
   Controls,
@@ -12,66 +12,55 @@ import ReactFlow, {
   useReactFlow,
   NodeTypes,
 } from 'reactflow';
-import { layoutFlow } from '../lib/layout_flow'
-import SubFlow from '../components/SubFlow';
 import 'reactflow/dist/style.css';
+import { layout } from '../lib/layout_flow'
+import { initialized_nodes_edges } from '../lib/initialized';
+import Step from '../components/Step';
 
 const nodeTypes: NodeTypes = {
-  SubFlow
+  Step,
 };
+
+async function refresh({ setNodes, setEdges }: { setNodes: Dispatch<any>, setEdges: Dispatch<any> }) {
+  const elkNode = await initialized_nodes_edges('http://localhost:8080/flow');
+  const { nodes, edges } = await layout(elkNode);
+
+  setNodes(nodes.map((node: Node) => {
+    return {
+      className: 'size-fit',
+      deletable: false,
+      connectable: false,
+      extent: node.parentId && 'parent',
+      type: 'Step',
+      expandParent: true, // TODO: remove
+      targetPosition: 'left',
+      sourcePosition: 'right',
+      ...node,
+    }
+  }));
+  setEdges(edges.map((edge: Edge) => {
+    return {
+      animated: true,
+      deletable: false,
+      focusable: false,
+      ...edge,
+    }
+  }));
+  return;
+}
+
 
 function Flow() {
   const { fitView } = useReactFlow();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [fetchCompleted, setFetchCompleted] = useState(false);
 
-  useEffect(() => {
-    fetch('/flow').
-      then(response => response.json()).
-      then(data => {
-        setNodes(
-          Array.from(data.nodes).map((node: any) => {
-            return {
-              data: { label: node.name },
-              position: { x: 0, y: 0 },
-              deletable: false,
-              connectable: false,
-              extent: 'parent',
-              expandParent: true,
-              ...node,
-            }
-          })
-        );
-        setEdges(
-          Array.from(data.edges).map((edge: any) => {
-            return {
-              animated: true,
-              ...edge
-            }
-          })
-        );
-        setFetchCompleted(true);
-      }).
-      catch(error => console.error(error));
-  }, []);
-  useEffect(() => {
-    if (fetchCompleted) {
-      onLayout('TB');
-    }
-  }, [fetchCompleted]);
-  const onLayout = useCallback((direction: string) => {
-      const layouted = layoutFlow(nodes, edges, direction);
-
-      setNodes([...layouted.nodes]);
-      setEdges([...layouted.edges]);
-
-      window.requestAnimationFrame(() => {
-        fitView();
-      });
-    },
-    [nodes, edges]
-  );
+  const onRefresh = () => {
+    const doRefresh = async () => await refresh({ setNodes, setEdges });
+    doRefresh();
+    window.requestAnimationFrame(() => fitView());
+  };
+  useEffect(onRefresh, []);
 
   return (
     <ReactFlow
@@ -84,7 +73,7 @@ function Flow() {
     >
       <Background />
       <Panel position='top-right'>
-      <button onClick={()=>{ onLayout('TB') }}>Refresh</button>
+        <button onClick={onRefresh}>Refresh</button>
       </Panel>
       <Controls />
     </ReactFlow>
