@@ -2,11 +2,11 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 
 	flow "github.com/Azure/go-workflow"
+	"github.com/google/uuid"
 )
 
 type StaticHandler struct {
@@ -14,14 +14,14 @@ type StaticHandler struct {
 }
 
 func (sh StaticHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
+	resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
 	root := &Node{ID: "root"}
-	nodes := map[string]*Node{nodeID(sh.Workflow): root}
+	nodes := map[flow.Steper]*Node{sh.Workflow: root}
 	getNode := func(s flow.Steper) *Node {
-		id := nodeID(s)
-		node, ok := nodes[id]
+		node, ok := nodes[s]
 		if !ok {
-			node = &Node{ID: id}
-			nodes[id] = node
+			node = &Node{ID: uuid.NewString()}
+			nodes[s] = node
 		}
 		return node
 	}
@@ -45,11 +45,11 @@ func (sh StaticHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 				getNode(parent).Children = append(getNode(parent).Children, n)
 
 				for up := range w.UpstreamOf(r) {
-					eid := edgeID(up, r)
+					eid := uuid.NewString()
 					getNode(parent).Edges = append(getNode(parent).Edges, &Edge{
 						ID:      eid,
-						Sources: []string{nodeID(up)},
-						Targets: []string{nodeID(r)},
+						Sources: []string{getNode(up).ID},
+						Targets: []string{getNode(r).ID},
 					})
 				}
 			}
@@ -68,9 +68,6 @@ func (sh StaticHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 }
-
-func nodeID(s flow.Steper) string    { return fmt.Sprintf("%p", s) }
-func edgeID(s, t flow.Steper) string { return fmt.Sprintf("%p-%p", s, t) }
 
 type Node struct {
 	ID       string  `json:"id"`
