@@ -1,4 +1,4 @@
-package server
+package react
 
 import (
 	"encoding/json"
@@ -6,15 +6,18 @@ import (
 	"net/http"
 
 	flow "github.com/Azure/go-workflow"
+	"github.com/Azure/go-workflow/visual/react/out"
 	"github.com/google/uuid"
 )
+
+var UI = out.UI
 
 type StaticHandler struct {
 	Workflow *flow.Workflow
 }
 
 func (sh StaticHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
-	resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+	// resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
 	root := &Node{ID: "root"}
 	nodes := map[flow.Steper]*Node{sh.Workflow: root}
 	getNode := func(s flow.Steper) *Node {
