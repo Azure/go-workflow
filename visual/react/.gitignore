@@ -11,7 +11,7 @@
 
 # next.js
 /.next/
-/out/
+# /out/ # I need this to embed into go
 
 # production
 /build
