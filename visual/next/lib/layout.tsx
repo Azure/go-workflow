@@ -5,7 +5,7 @@ import { fromElk, traverseElk } from './util_elk';
 
 const elk = new ELK();
 
-export async function layout(g: ElkNode): Promise<{ nodes: Node[], edges: Edge[] }> {
+export async function layoutElk(g: ElkNode): Promise<{ nodes: Node[], edges: Edge[] }> {
   traverseElk({ elkNode: g }, ({ elkNode }) => {
     if (elkNode.children) {
       elkNode.layoutOptions = {
