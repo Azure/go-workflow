@@ -1,5 +1,5 @@
 'use client';
-import { useLayoutEffect, useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import ReactFlow, {
   Panel,
   Controls,
@@ -79,7 +79,7 @@ function Flow() {
   };
   const onRefresh = () => {
     const doRefresh = async () => {
-      const elkNode = await initialized_nodes_edges('http://localhost:8080/flow')
+      const elkNode = await initialized_nodes_edges('/flow')
       const { layoutNodes, layoutEdges } = applyConfig(await layoutElk(elkNode))
       setNodes(layoutNodes)
       setEdges(layoutEdges)
