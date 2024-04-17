@@ -505,6 +505,32 @@ func TestBeforeAfter(t *testing.T) {
 		)
 		assert.NoError(t, w.Do(context.Background()))
 	})
+	t.Run("output", func(t *testing.T) {
+		defer reset()
+		step := FuncO("step", func(ctx context.Context) (string, error) {
+			return "hello, world", nil
+		})
+		w := new(Workflow).Add(
+			Step(step).Output(func(ctx context.Context, f *Function[struct{}, string]) error {
+				assert.Equal(t, "hello, world", f.Output)
+				return nil
+			}),
+		)
+		assert.NoError(t, w.Do(context.Background()))
+	})
+	t.Run("output only called when step is successful", func(t *testing.T) {
+		defer reset()
+		step := FuncO("step", func(ctx context.Context) (string, error) {
+			return "hello, world", assert.AnError
+		})
+		w := new(Workflow).Add(
+			Step(step).Output(func(ctx context.Context, f *Function[struct{}, string]) error {
+				assert.FailNow(t, "output should not be called")
+				return nil
+			}),
+		)
+		assert.ErrorIs(t, w.Do(context.Background()), assert.AnError)
+	})
 	t.Run("should call AfterStep even step panics", func(t *testing.T) {
 		w := &Workflow{DontPanic: true}
 		w.Add(

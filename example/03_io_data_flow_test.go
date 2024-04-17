@@ -8,7 +8,7 @@ import (
 	flow "github.com/Azure/go-workflow"
 )
 
-// # Data Flow via `Input`
+// # Data Flow via `Input` and `Output`
 //
 // After connected Steps into Workflow via dependencies,
 // there is a very common scenarios that passing value / data through dependency.
@@ -21,9 +21,12 @@ import (
 //			// fill someTask with data that
 //			// only available at runtime
 //			someTask.Input = upstreamTask.Output
+//		}).Output(func(_ context.Context, someTask *SomeTask) error {
+//			// get output from someTask
+//			use(someTask.Output)
 //		}),
 //
-// Notice the callbacks declares in Input() are executed at runtime, before Do, and per try.
+// Notice the callbacks declares in Input() and Output() are executed at runtime, before Do, and per try.
 func ExampleDataFlow() {
 	// Now, let's connect the Steps into Workflow with data flow.
 	var (
