@@ -153,6 +153,30 @@ func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 	return as
 }
 
+// Output can pass the results of the Step to outer scope.
+// Output is only triggered when the Step is successful (returns nil error).
+//
+// Output actually adds AfterStep callback for the Step(s).
+//
+// The Output callbacks are executed at runtime and per-try.
+func (as AddStep[S]) Output(fns ...func(context.Context, S) error) AddStep[S] {
+	for _, step := range as.Steps {
+		step := step // capture range variable
+		for _, fn := range fns {
+			if fn != nil {
+				fn := fn // capture range variable
+				as.AddSteps[step].After = append(as.AddSteps[step].After, func(ctx context.Context, _ Steper, err error) error {
+					if err == nil {
+						return fn(ctx, step)
+					}
+					return err
+				})
+			}
+		}
+	}
+	return as
+}
+
 // BeforeStep adds BeforeStep callback for the Step(s).
 //
 // The BeforeStep callback will be called before Do, and return when first error occurs.
