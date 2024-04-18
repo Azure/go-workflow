@@ -17,6 +17,18 @@ type RetryOption struct {
 	TimeoutPerTry time.Duration // 0 means no timeout
 	Attempts      uint64        // 0 means no limit
 	// NextBackOff is called after each retry to determine the next backoff duration.
+	//
+	// RetryEvent: the event records attempt, duration since the start, and the error of the last try.
+	// nextBackOff: the next backoff duration calculated by the inner BackOff.
+	//
+	// A common practice would do the check only if `nextBackOff != backoff.Stop`
+	//
+	//	ro.NextBackOff = func(ctx context.Context, re RetryEvent, nextBackOff time.Duration) time.Duration {
+	//		if nextBackOff != backoff.Stop {
+	//			// do you check on re.Attempt, re.Since, re.Error
+	//		}
+	//		return nextBackOff
+	//	}
 	NextBackOff func(ctx context.Context, re RetryEvent, nextBackOff time.Duration) time.Duration
 
 	Backoff backoff.BackOff
@@ -90,11 +102,10 @@ type backOffWithEvent struct {
 }
 
 func (b *backOffWithEvent) NextBackOff() time.Duration {
-	bkof := b.BackOff.NextBackOff()
-	if b.nextBackOff == nil || bkof == backoff.Stop {
+	if b.nextBackOff == nil {
 		return backoff.Stop
 	}
-	return b.nextBackOff(b.ctx, b.e, bkof)
+	return b.nextBackOff(b.ctx, b.e, b.BackOff.NextBackOff())
 }
 func (b *backOffWithEvent) retried(ctx context.Context, e RetryEvent) {
 	b.ctx = ctx
