@@ -114,7 +114,7 @@ func TestRetry(t *testing.T) {
 		defer m.AssertExpectations(t)
 		m.w.Add(
 			flow.Step(m.MockStep).Retry(func(ro *flow.RetryOption) {
-				ro.ShouldRetry = func(ctx context.Context, re flow.RetryEvent, nextBackOff time.Duration) time.Duration {
+				ro.NextBackOff = func(ctx context.Context, re flow.RetryEvent, nextBackOff time.Duration) time.Duration {
 					if re.Attempt > 1 {
 						return backoff.Stop
 					}

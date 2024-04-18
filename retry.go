@@ -16,8 +16,8 @@ var DefaultRetryOption = RetryOption{
 type RetryOption struct {
 	TimeoutPerTry time.Duration // 0 means no timeout
 	Attempts      uint64        // 0 means no limit
-	// ShouldRetry adds a condition to decide if the retry should happen.
-	ShouldRetry func(ctx context.Context, re RetryEvent, nextBackOff time.Duration) time.Duration
+	// NextBackOff is called after each retry to determine the next backoff duration.
+	NextBackOff func(ctx context.Context, re RetryEvent, nextBackOff time.Duration) time.Duration
 
 	Backoff backoff.BackOff
 	Notify  backoff.Notify
@@ -44,14 +44,14 @@ func (w *Workflow) retry(opt *RetryOption) func(
 		backOff := opt.Backoff
 		backOff = backoff.WithContext(backOff, ctx)
 		if !notAfter.IsZero() {
-			backOff = &backoffStopIfStepTimeout{BackOff: backOff, NotAfter: notAfter, Now: w.Clock.Now}
+			backOff = &backOffStopIfTimeout{BackOff: backOff, NotAfter: notAfter, Now: w.Clock.Now}
 		}
 		if opt.Attempts > 0 {
 			backOff = backoff.WithMaxRetries(backOff, opt.Attempts-1)
 		}
 		retried := func(ctx context.Context, e RetryEvent) {}
-		if opt.ShouldRetry != nil {
-			b := &backoffWithShouldRetry{BackOff: backOff, ShouldRetry: opt.ShouldRetry}
+		if opt.NextBackOff != nil {
+			b := &backOffWithEvent{BackOff: backOff, nextBackOff: opt.NextBackOff}
 			retried = b.retried
 			backOff = b
 		}
@@ -81,33 +81,33 @@ func (w *Workflow) retry(opt *RetryOption) func(
 	}
 }
 
-type backoffWithShouldRetry struct {
+type backOffWithEvent struct {
 	backoff.BackOff
-	ShouldRetry func(context.Context, RetryEvent, time.Duration) time.Duration
+	nextBackOff func(context.Context, RetryEvent, time.Duration) time.Duration
 
 	ctx context.Context
 	e   RetryEvent
 }
 
-func (b *backoffWithShouldRetry) NextBackOff() time.Duration {
+func (b *backOffWithEvent) NextBackOff() time.Duration {
 	bkof := b.BackOff.NextBackOff()
-	if b.ShouldRetry == nil || bkof == backoff.Stop {
+	if b.nextBackOff == nil || bkof == backoff.Stop {
 		return backoff.Stop
 	}
-	return b.ShouldRetry(b.ctx, b.e, bkof)
+	return b.nextBackOff(b.ctx, b.e, bkof)
 }
-func (b *backoffWithShouldRetry) retried(ctx context.Context, e RetryEvent) {
+func (b *backOffWithEvent) retried(ctx context.Context, e RetryEvent) {
 	b.ctx = ctx
 	b.e = e
 }
 
-type backoffStopIfStepTimeout struct {
+type backOffStopIfTimeout struct {
 	backoff.BackOff
 	NotAfter time.Time
 	Now      func() time.Time
 }
 
-func (b *backoffStopIfStepTimeout) NextBackOff() time.Duration {
+func (b *backOffStopIfTimeout) NextBackOff() time.Duration {
 	bkof := b.BackOff.NextBackOff()
 	if b.NotAfter.IsZero() || b.Now == nil || bkof == backoff.Stop || b.Now().After(b.NotAfter) {
 		return backoff.Stop
