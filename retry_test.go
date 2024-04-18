@@ -8,6 +8,7 @@ import (
 
 	flow "github.com/Azure/go-workflow"
 	"github.com/benbjohnson/clock"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -107,14 +108,17 @@ func TestRetry(t *testing.T) {
 		<-m.Started
 		assert.NoError(t, <-done)
 	})
-	t.Run("StopIf", func(t *testing.T) {
+	t.Run("ShouldRetry", func(t *testing.T) {
 		t.Parallel()
 		m := newMock()
 		defer m.AssertExpectations(t)
 		m.w.Add(
 			flow.Step(m.MockStep).Retry(func(ro *flow.RetryOption) {
-				ro.StopIf = func(ctx context.Context, attempt uint64, since time.Duration, err error) bool {
-					return attempt > 1
+				ro.NextBackOff = func(ctx context.Context, re flow.RetryEvent, nextBackOff time.Duration) time.Duration {
+					if re.Attempt > 1 {
+						return backoff.Stop
+					}
+					return nextBackOff
 				}
 			}),
 		)
@@ -130,12 +134,17 @@ func TestRetry(t *testing.T) {
 		m := newMock()
 		defer m.AssertExpectations(t)
 		m.w.Add(
-			flow.Step(m.MockStep).Timeout(time.Second),
+			flow.Step(m.MockStep).
+				Retry(func(ro *flow.RetryOption) {
+					ro.TimeoutPerTry = 2 * time.Minute
+					ro.Attempts = 2
+				}).
+				Timeout(time.Minute),
 		)
-		m.On("Do", mock.Anything).Return(nil).WaitUntil(m.clock.After(2 * time.Second))
+		m.On("Do", mock.Anything).Return(nil).WaitUntil(m.clock.After(time.Hour))
 		done := start(m)
 		<-m.Started
-		m.clock.Add(time.Second)
+		m.clock.Add(time.Minute)
 		assert.ErrorIs(t, <-done, context.DeadlineExceeded)
 	})
 }
