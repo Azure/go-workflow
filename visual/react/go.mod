@@ -1,6 +1,6 @@
 module github.com/Azure/go-workflow/visual/react
 
-go 1.22
+go 1.22.2
 
 require (
 	github.com/Azure/go-workflow v0.1.0
