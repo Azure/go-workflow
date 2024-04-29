@@ -3,7 +3,7 @@ module github.com/Azure/go-workflow/visual/react
 go 1.22.2
 
 require (
-	github.com/Azure/go-workflow v0.1.0
+	github.com/Azure/go-workflow v0.1.3
 	github.com/google/uuid v1.6.0
 )
 

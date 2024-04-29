@@ -57,7 +57,7 @@ func (sh StaticHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 				}
 			}
 		}
-		return flow.TraverseDecision{Continue: true}
+		return flow.TraverseContinue
 	})
 	b, err := json.Marshal(root)
 	if err != nil {
