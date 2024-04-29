@@ -80,24 +80,24 @@ import (
 //
 // to expose your inner Steps.
 
-// TraverseDecision is used in Traverse function to determine
-// whether to continue or stop the traversal.
-type TraverseDecision struct {
-	Continue       bool // Continue the traversal
-	StopThisBranch bool // Stop the traversal of this branch, but continue other branches
-}
+type TraverseDecision int
+
+const (
+	TraverseContinue  = iota // TraverseContinue continue the traversal
+	TraverseStop             // TraverseStop stop and exit the traversal immediately
+	TraverseEndBranch        // TraverseEndBranch end the current branch, but continue sibling branches
+)
 
 // Traverse performs a pre-order traversal of the tree of step.
 func Traverse(s Steper, f func(Steper, []Steper) TraverseDecision, walked ...Steper) TraverseDecision {
 	if f == nil {
-		return TraverseDecision{}
+		return TraverseStop
 	}
 	for {
 		if s == nil {
-			return TraverseDecision{}
+			return TraverseEndBranch
 		}
-		dec := f(s, walked)
-		if !dec.Continue || dec.StopThisBranch {
+		if dec := f(s, walked); dec != TraverseContinue {
 			return dec
 		}
 		walked = append(walked, s)
@@ -106,13 +106,13 @@ func Traverse(s Steper, f func(Steper, []Steper) TraverseDecision, walked ...Ste
 			s = u.Unwrap()
 		case interface{ Unwrap() []Steper }:
 			for _, s := range u.Unwrap() {
-				if dec := Traverse(s, f, walked...); !dec.Continue {
+				if dec := Traverse(s, f, walked...); dec == TraverseStop {
 					return dec
 				}
 			}
-			return TraverseDecision{Continue: true, StopThisBranch: false}
+			return TraverseContinue
 		default:
-			return TraverseDecision{Continue: true, StopThisBranch: false}
+			return TraverseContinue
 		}
 	}
 }
@@ -123,9 +123,9 @@ func Has[T Steper](s Steper) bool {
 	Traverse(s, func(s Steper, walked []Steper) TraverseDecision {
 		if _, ok := s.(T); ok {
 			find = true
-			return TraverseDecision{Continue: false}
+			return TraverseStop
 		}
-		return TraverseDecision{Continue: true}
+		return TraverseContinue
 	})
 	return find
 }
@@ -138,7 +138,7 @@ func As[T Steper](s Steper) []T {
 		if v, ok := s.(T); ok {
 			rv = append(rv, v)
 		}
-		return TraverseDecision{Continue: true}
+		return TraverseContinue
 	})
 	return rv
 }
@@ -152,9 +152,9 @@ func HasStep(step, target Steper) bool {
 	Traverse(step, func(s Steper, walked []Steper) TraverseDecision {
 		if s == target {
 			find = true
-			return TraverseDecision{Continue: false}
+			return TraverseStop
 		}
-		return TraverseDecision{Continue: true}
+		return TraverseContinue
 	})
 	return find
 }

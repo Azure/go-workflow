@@ -20,15 +20,16 @@ func (sb *StepBuilder) BuildStep(s Steper) {
 	}
 	Traverse(s, func(s Steper, walked []Steper) TraverseDecision {
 		if sb.built.Has(s) {
-			return TraverseDecision{Continue: false}
+			return TraverseEndBranch // already built
 		}
 		if _, ok := s.(interface{ BuildStep(Steper) }); ok {
-			return TraverseDecision{Continue: false}
+			return TraverseEndBranch // it's a sub-workflow, let it manage its own steps
 		}
 		if b, ok := s.(interface{ BuildStep() }); ok {
 			b.BuildStep()
 			sb.built.Add(s)
+			return TraverseEndBranch // not necessary to go deeper
 		}
-		return TraverseDecision{Continue: true}
+		return TraverseContinue
 	})
 }

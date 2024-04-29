@@ -74,22 +74,22 @@ func (w *Workflow) addStep(step Steper, config *StepConfig) {
 	w.BuildStep(step)
 	if !HasStep(w, step) {
 		// the step is new, it becomes a new root.
-		// add the new root (and all its nested steps) to the tree,
+		// add the new root to the Workflow.
+		// if the step embeds a previous root step,
 		// we need to replace them with the new root.
 		// workflow will only orchestrate the root Steps,
 		// and leave the nested Steps being managed by the root Steps.
 		var oldRoots Set[Steper]
 		Traverse(step, func(s Steper, walked []Steper) TraverseDecision {
 			if r := w.RootOf(s); r != nil {
-				if _, isRoot := w.steps[s]; isRoot {
-					oldRoots.Add(r)
-					return TraverseDecision{Continue: false}
-				} else {
+				if r != s { // s has another root
 					panic(fmt.Errorf("add step %p(%s) failed, another step %p(%s) already has %p(%s)",
 						step, step, r, r, s, s))
 				}
+				oldRoots.Add(r)
+				return TraverseEndBranch
 			}
-			return TraverseDecision{Continue: true}
+			return TraverseContinue
 		})
 		state := new(State)
 		for old := range oldRoots {
@@ -122,7 +122,10 @@ func (w *Workflow) setUpstream(step, up Steper) {
 		if s == up {
 			upWalked = walked
 		}
-		return TraverseDecision{Continue: len(stepWalked) == 0 || len(upWalked) == 0}
+		if len(stepWalked) > 0 && len(upWalked) > 0 {
+			return TraverseStop
+		}
+		return TraverseContinue
 	})
 	i := 0
 	for ; i < len(stepWalked) && i < len(upWalked); i++ {
@@ -177,16 +180,16 @@ func (w *Workflow) StateOf(step Steper) *State {
 		Traverse(root, func(s Steper, walked []Steper) TraverseDecision {
 			if step == s {
 				find = w.steps[root]
-				return TraverseDecision{Continue: false}
+				return TraverseStop // found
 			}
 			if sub, ok := s.(interface{ StateOf(Steper) *State }); ok {
 				if state := sub.StateOf(step); state != nil {
 					find = state
-					return TraverseDecision{Continue: false}
+					return TraverseStop // found in sub-workflow
 				}
-				return TraverseDecision{Continue: true, StopThisBranch: true}
+				return TraverseEndBranch // not found in sub-workflow
 			}
-			return TraverseDecision{Continue: true}
+			return TraverseContinue
 		})
 		if find != nil {
 			return find
