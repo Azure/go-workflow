@@ -39,6 +39,16 @@ func TestAdd(t *testing.T) {
 		workflow.Add(Steps(nil))
 		assert.Nil(t, workflow.Steps())
 	})
+	t.Run("add nil step should not break HasStep", func(t *testing.T) {
+		a := NoOp("a")
+		w := new(Workflow).Add(
+			Step(a),
+			Name(nil, "nil step"),
+		)
+		for i := 0; i < 100; i++ {
+			assert.True(t, HasStep(w, a))
+		}
+	})
 	t.Run("add new step", func(t *testing.T) {
 		workflow := new(Workflow)
 		a := NoOp("a")
