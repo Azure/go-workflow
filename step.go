@@ -14,8 +14,8 @@ type Steper interface {
 	Do(context.Context) error
 }
 
-// WorkflowAdder is addable into Workflow
-type WorkflowAdder interface {
+// Builder builds a Workflow by adding Steps.
+type Builder interface {
 	AddToWorkflow() map[Steper]*StepConfig
 }
 

@@ -10,7 +10,7 @@ import "fmt"
 //	)
 //
 // Attention: Name will wrap the original Step
-func Name(step Steper, name string) WorkflowAdder {
+func Name(step Steper, name string) Builder {
 	return Step(&NamedStep{Name: name, Steper: step})
 }
 
@@ -22,7 +22,7 @@ func Name(step Steper, name string) WorkflowAdder {
 //			stepB: "B",
 //		},
 //	)
-func Names(m map[Steper]string) WorkflowAdder {
+func Names(m map[Steper]string) Builder {
 	as := AddSteps{}
 	for step, name := range m {
 		as[&NamedStep{name, step}] = nil
@@ -31,13 +31,13 @@ func Names(m map[Steper]string) WorkflowAdder {
 }
 
 // NameFunc can rename a Step with a runtime function.
-func NameFunc(step Steper, fn func() string) WorkflowAdder {
+func NameFunc(step Steper, fn func() string) Builder {
 	return NameStringer(step, stringer(fn))
 }
 
 // NameStringer can rename a Step with a fmt.Stringer,
 // which allows String() method to be called at runtime.
-func NameStringer(step Steper, name fmt.Stringer) WorkflowAdder {
+func NameStringer(step Steper, name fmt.Stringer) Builder {
 	return Step(&StringerNamedStep{Name: name, Steper: step})
 }
 

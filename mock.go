@@ -7,7 +7,7 @@ import "context"
 //	w.Add(
 //		flow.Mock(step, func(ctx context.Context) error {}),
 //	)
-func Mock[T Steper](step T, do func(context.Context) error) WorkflowAdder {
+func Mock[T Steper](step T, do func(context.Context) error) Builder {
 	return Step(&MockStep{Step: step, MockDo: do})
 }
 

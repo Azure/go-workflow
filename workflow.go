@@ -52,7 +52,7 @@ type Workflow struct {
 }
 
 // Add Steps into Workflow in phase Main.
-func (w *Workflow) Add(was ...WorkflowAdder) *Workflow {
+func (w *Workflow) Add(was ...Builder) *Workflow {
 	if w.steps == nil {
 		w.steps = make(map[Steper]*State)
 	}
