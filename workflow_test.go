@@ -29,7 +29,7 @@ func TestNil(t *testing.T) {
 
 func TestAdd(t *testing.T) {
 	t.Parallel()
-	t.Run("add nil WorkflowAdder", func(t *testing.T) {
+	t.Run("add nil Builder", func(t *testing.T) {
 		workflow := new(Workflow)
 		workflow.Add(nil)
 		assert.Nil(t, workflow.Steps())
