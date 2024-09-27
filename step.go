@@ -251,7 +251,7 @@ func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 	return as
 }
 
-// AddToWorkflow implements WorkflowAdder
+// AddToWorkflow implements Builder
 func (as AddSteps) AddToWorkflow() map[Steper]*StepConfig { return as }
 
 // Merge another AddSteps into one.
