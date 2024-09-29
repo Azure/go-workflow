@@ -47,7 +47,7 @@ type Workflow struct {
 	steps map[Steper]*State // the internal states of Steps
 
 	statusChange *sync.Cond     // a condition to signal the status change to proceed tick
-	leaseBucket  chan struct{}  // constraint max concurrency of running Steps
+	leaseBucket  chan struct{}  // constraint max concurrency of running Steps, nil means no limit
 	waitGroup    sync.WaitGroup // to prevent goroutine leak
 	isRunning    sync.Mutex     // indicate whether the Workflow is running
 }
@@ -375,55 +375,57 @@ func (w *Workflow) tick(ctx context.Context) bool {
 		if option != nil && option.Condition != nil {
 			cond = option.Condition
 		}
+		// if condition is evaluated to terminate
 		if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
+			state.SetStatus(nextStatus)
 			w.waitGroup.Add(1)
 			go func() {
 				defer w.waitGroup.Done()
-				w.statusChange.L.Lock()
-				state.SetStatus(nextStatus)
-				w.statusChange.Signal()
-				w.statusChange.L.Unlock()
+				w.signalStatusChange() // it locks w.statusChange.L, so we need another goroutine
 			}()
 			continue
 		}
 		// kick off the Step
-		w.lease()
-		state.SetStatus(Running)
-		w.waitGroup.Add(1)
-		go func(ctx context.Context, step Steper, state *State) {
-			defer w.waitGroup.Done()
-			defer w.unlease()
+		if w.lease() {
+			state.SetStatus(Running)
+			w.waitGroup.Add(1)
+			go func(ctx context.Context, step Steper, state *State) {
+				defer w.waitGroup.Done()
+				defer w.unlease()
 
-			var (
-				err    error
-				status = Failed
-			)
-			defer func() {
-				w.statusChange.L.Lock()
-				state.SetStatus(status)
-				w.statusChange.Signal()
-				w.statusChange.L.Unlock()
-				state.SetError(err)
-			}()
+				var err error
+				status := Failed
+				defer func() {
+					state.SetStatus(status)
+					state.SetError(err)
+					w.signalStatusChange()
+				}()
 
-			err = w.runStep(ctx, step, state)
-			if err == nil {
-				status = Succeeded
-				return
-			}
-			status = StatusFromError(err)
-			if status == Failed { // do some extra checks
-				switch {
-				case
-					DefaultIsCanceled(err),
-					errors.Is(err, context.Canceled),
-					errors.Is(err, context.DeadlineExceeded):
-					status = Canceled
+				err = w.runStep(ctx, step, state)
+				if err == nil {
+					status = Succeeded
+					return
 				}
-			}
-		}(ctx, step, state)
+				status = StatusFromError(err)
+				if status == Failed { // do some extra checks
+					switch {
+					case
+						DefaultIsCanceled(err),
+						errors.Is(err, context.Canceled),
+						errors.Is(err, context.DeadlineExceeded):
+						status = Canceled
+					}
+				}
+			}(ctx, step, state)
+		}
 	}
 	return false
+}
+
+func (w *Workflow) signalStatusChange() {
+	w.statusChange.L.Lock()
+	defer w.statusChange.L.Unlock()
+	w.statusChange.Signal()
 }
 
 func (w *Workflow) runStep(ctx context.Context, step Steper, state *State) error {
@@ -465,9 +467,16 @@ func (w *Workflow) makeDoForStep(step Steper, state *State) func(ctx context.Con
 		})
 	}
 }
-func (w *Workflow) lease() {
-	if w.leaseBucket != nil {
-		w.leaseBucket <- struct{}{}
+
+func (w *Workflow) lease() bool {
+	if w.leaseBucket == nil {
+		return true
+	}
+	select {
+	case w.leaseBucket <- struct{}{}:
+		return true
+	default:
+		return false
 	}
 }
 func (w *Workflow) unlease() {
