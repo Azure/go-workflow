@@ -554,3 +554,34 @@ func TestBeforeAfter(t *testing.T) {
 		assert.NoError(t, w.Do(context.Background()))
 	})
 }
+
+func BenchmarkStatusChange(b *testing.B) {
+	// statusChange.Wait could be blocked when it's after all Signals fired
+	//
+	//	w.statusChange.L.Lock()
+	//	for {
+	//		if done := w.tick(ctx); done {	// A: kick step goroutines here
+	//			break
+	//		}
+	//		w.statusChange.Wait()			// B: wait for step goroutines here
+	//	}
+	//	w.statusChange.L.Unlock()
+	//
+	//	====================================
+	//
+	//	go func(ctx context.Context, step Steper, state *State) {
+	//		...
+	//		defer func() {
+	//			state.SetStatus(status)
+	//			w.statusChange.Signal()		// C: signal statusChange here
+	//			state.SetError(err)
+	//		}()
+	//
+	// The deadlock condition is when
+	//	A ----> C ----> B
+	for range b.N {
+		w := new(Workflow)
+		w.Add(Step(NoOp("step")))
+		w.Do(context.Background())
+	}
+}
