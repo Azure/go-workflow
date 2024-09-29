@@ -379,8 +379,10 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			w.waitGroup.Add(1)
 			go func() {
 				defer w.waitGroup.Done()
+				w.statusChange.L.Lock()
 				state.SetStatus(nextStatus)
 				w.statusChange.Signal()
+				w.statusChange.L.Unlock()
 			}()
 			continue
 		}
@@ -397,8 +399,10 @@ func (w *Workflow) tick(ctx context.Context) bool {
 				status = Failed
 			)
 			defer func() {
+				w.statusChange.L.Lock()
 				state.SetStatus(status)
 				w.statusChange.Signal()
+				w.statusChange.L.Unlock()
 				state.SetError(err)
 			}()
 
