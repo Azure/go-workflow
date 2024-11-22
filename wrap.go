@@ -176,7 +176,7 @@ func String(step Steper) string {
 		}
 		return fmt.Sprintf("[%s]", strings.Join(stepStrs, ", "))
 	default:
-		return fmt.Sprintf("%T(%v)", step, step)
+		return fmt.Sprintf("%T(%p)", step, step)
 	}
 }
 
