@@ -267,26 +267,61 @@ func (as AddSteps) Merge(others ...AddSteps) AddSteps {
 	return as
 }
 
+// DependsOn declares dependency on the given Steps.
+//
+//	Step(a).DependsOn(b, c)
+//
+// Then b, c should happen-before a.
 func (as AddStep[S]) DependsOn(ups ...Steper) AddStep[S] {
 	as.AddSteps = as.AddSteps.DependsOn(ups...)
 	return as
 }
+
+// BeforeStep adds BeforeStep callback for the Step(s).
+//
+// The BeforeStep callback will be called before Do, and return when first error occurs.
+// The order of execution will respect the order of declarations.
+// The BeforeStep callbacks are able to change the context.Context feed into Do.
+// The BeforeStep callbacks are executed at runtime and per-try.
 func (as AddStep[S]) BeforeStep(befores ...BeforeStep) AddStep[S] {
 	as.AddSteps = as.AddSteps.BeforeStep(befores...)
 	return as
 }
+
+// AfterStep adds AfterStep callback for the Step(s).
+//
+// The AfterStep callback will be called after Do, and pass the error to next AfterStep callback.
+// The order of execution will respect the order of declarations.
+// The AfterStep callbacks are able to change the error returned by Do.
+// The AfterStep callbacks are executed at runtime and per-try.
 func (as AddStep[S]) AfterStep(afters ...AfterStep) AddStep[S] {
 	as.AddSteps = as.AddSteps.AfterStep(afters...)
 	return as
 }
+
+// Timeout sets the Step level timeout.
 func (as AddStep[S]) Timeout(timeout time.Duration) AddStep[S] {
 	as.AddSteps = as.AddSteps.Timeout(timeout)
 	return as
 }
+
+// When set the Condition for the Step.
 func (as AddStep[S]) When(when Condition) AddStep[S] {
 	as.AddSteps = as.AddSteps.When(when)
 	return as
 }
+
+// Retry customize how the Step should be retried.
+//
+// Step will be retried as long as this option is configured.
+//
+//	w.Add(
+//		Step(a), // not retry
+//		Step(b).Retry(func(opt *RetryOption) { // will retry 3 times
+//			opt.MaxAttempts = 3
+//		}),
+//		Step(c).Retry(nil), // will use DefaultRetryOption!
+//	)
 func (as AddStep[S]) Retry(fns ...func(*RetryOption)) AddStep[S] {
 	as.AddSteps = as.AddSteps.Retry(fns...)
 	return as
