@@ -553,6 +553,23 @@ func TestBeforeAfter(t *testing.T) {
 		)
 		assert.NoError(t, w.Do(context.Background()))
 	})
+	t.Run("should call AfterStep even BeforeStep fails", func(t *testing.T) {
+		w := &Workflow{}
+		afterRan := false
+		w.Add(
+			Step(NoOp("step")).
+				Input(func(ctx context.Context, nos *NoOpStep) error {
+					return assert.AnError
+				}).
+				AfterStep(func(ctx context.Context, s Steper, err error) error {
+					assert.ErrorIs(t, err, assert.AnError)
+					afterRan = true
+					return nil
+				}),
+		)
+		assert.Error(t, w.Do(context.Background()))
+		assert.True(t, afterRan)
+	})
 }
 
 func BenchmarkStatusChange(b *testing.B) {
