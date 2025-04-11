@@ -567,7 +567,7 @@ func TestBeforeAfter(t *testing.T) {
 					return nil
 				}),
 		)
-		assert.Error(t, w.Do(context.Background()))
+		assert.NoError(t, w.Do(context.Background()))
 		assert.True(t, afterRan)
 	})
 }
