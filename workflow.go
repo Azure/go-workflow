@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,7 @@ type Workflow struct {
 	DontPanic      bool        // DontPanic suppress panics, instead return it as error
 	SkipAsError    bool        // SkipAsError marks skipped Steps as an error if true, otherwise ignore them
 	Clock          clock.Clock // Clock for retry and unit test
+	DefaultOption  *StepOption // DefaultOption is the default option for all Steps
 
 	StepBuilder // StepBuilder to call BuildStep() for Steps
 
@@ -60,6 +62,11 @@ func (w *Workflow) Add(was ...Builder) *Workflow {
 	for _, wa := range was {
 		if wa != nil {
 			for step, config := range wa.AddToWorkflow() {
+				if w.DefaultOption != nil && config != nil {
+					config.Option = slices.Insert(config.Option, 0, func(o *StepOption) {
+						*o = *w.DefaultOption
+					})
+				}
 				w.addStep(step, config)
 			}
 		}

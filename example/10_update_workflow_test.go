@@ -57,7 +57,7 @@ import (
 //			flow.Steps(step).Retry(...), // update the Step
 //		)
 //	}
-func ExampleUpdateWorkflow() {
+func ExampleWorkflow_Add() {
 	workflow := &flow.Workflow{}
 	{ // scope foo and bar
 		var (
@@ -168,7 +168,7 @@ func (m *MultiWrapStep) Do(ctx context.Context) error {
 	return nil
 }
 
-func ExampleMultiWrap() {
+func ExampleMultiWrapStep() {
 	fooBar := &MultiWrapStep{
 		Steps: []flow.Steper{
 			new(Foo),

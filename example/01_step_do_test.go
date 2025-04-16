@@ -35,7 +35,7 @@ import (
 //	type Steper interface {
 //		Do(context.Context) error
 //	}
-func ExampleStepAndWorkflow() {
+func ExampleSteper_Do() {
 	// Create a Workflow
 	workflow := new(flow.Workflow)
 

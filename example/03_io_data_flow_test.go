@@ -27,7 +27,7 @@ import (
 //		}),
 //
 // Notice the callbacks declares in Input() and Output() are executed at runtime, before Do, and per try.
-func ExampleDataFlow() {
+func ExampleAddStep_Input() {
 	// Now, let's connect the Steps into Workflow with data flow.
 	var (
 		workflow = new(flow.Workflow)
@@ -96,7 +96,7 @@ func ExampleDataFlow() {
 //	│              └─────────┘                │
 //	│        finish all AfterStep             │
 //	└─────────────────────────────────────────┘
-func ExampleBeforeAfterStepCallback() {
+func ExampleAddSteps_BeforeStep() {
 	workflow := new(flow.Workflow)
 
 	var (
