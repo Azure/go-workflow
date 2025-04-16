@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	flow "github.com/Azure/go-workflow"
 )
@@ -19,7 +20,7 @@ import (
 //		OKToSkip       bool // OKToSkip returns nil if all Steps succeeded or skipped, otherwise only return nil if all Steps succeeded
 //	}
 
-func ExampleMaxConcurrency() {
+func ExampleWorkflow_MaxConcurrency() {
 	var (
 		workflow = &flow.Workflow{
 			MaxConcurrency: 2,
@@ -72,7 +73,7 @@ func ExampleMaxConcurrency() {
 	// 3
 }
 
-func ExampleDontPanic() {
+func ExampleWorkflow_DontPanic() {
 	var (
 		workflow = &flow.Workflow{
 			DontPanic: true,
@@ -91,7 +92,7 @@ func ExampleDontPanic() {
 	//	I'm panicking
 }
 
-func ExampleSkipAsError() {
+func ExampleWorkflow_SkipAsError() {
 	var (
 		workflow1 = &flow.Workflow{
 			SkipAsError: true,
@@ -115,4 +116,22 @@ func ExampleSkipAsError() {
 	//	skip me
 	//
 	// <nil>
+}
+
+func ExampleWorkflow_DefaultOption() {
+	var (
+		defaultTimeout = 10 * time.Minute
+		workflow       = &flow.Workflow{
+			DefaultOption: &flow.StepOption{
+				Timeout: &defaultTimeout,
+			},
+		}
+		step = flow.NoOp("step")
+	)
+
+	workflow.Add(flow.Step(step))
+	opt := workflow.StateOf(step).Option()
+	fmt.Println(*opt.Timeout)
+	// Output:
+	// 10m0s
 }

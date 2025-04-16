@@ -21,7 +21,7 @@ import (
 //		Timer         backoff.Timer
 //	}
 
-func ExampleRetry() {
+func ExampleAddSteps_Retry() {
 	var (
 		workflow   = new(flow.Workflow)
 		passAfter2 = &PassAfter{Attempt: 2}

@@ -16,7 +16,7 @@ import (
 // Which means, you can actually put a Workflow into another Workflow as a Step!
 //
 // We encourage you to use this feature to build complex workflows.
-func ExampleWorkflowInWorkflow() {
+func ExampleWorkflow_Do() {
 	var (
 		foo   = new(Foo)
 		bar   = new(Bar)

@@ -13,7 +13,7 @@ import (
 //
 // Introduce `If` and `Switch`, they're not steps,
 // rather a control branch that add into workflow and manages the condition of their branch steps.
-func ExampleIfBranch() {
+func ExampleIf() {
 	var (
 		item       string
 		isNotEmpty = flow.FuncO("IsNotEmpty", func(ctx context.Context) (bool, error) {
@@ -46,7 +46,7 @@ func ExampleIfBranch() {
 	// new_updated
 }
 
-func ExampleSwitchBranch() {
+func ExampleSwitch() {
 	var (
 		age    int
 		getAge = flow.Func("GetAge", func(ctx context.Context) error {

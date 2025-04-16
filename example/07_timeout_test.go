@@ -29,7 +29,7 @@ import (
 //			ro.TimeoutPerTry = /* Per-Try Timeout */
 //		}),
 //	)
-func ExampleTimeout() {
+func ExampleAddSteps_Timeout() {
 	var (
 		mock     = clock.NewMock() // use mock clock
 		workflow = &flow.Workflow{Clock: mock}

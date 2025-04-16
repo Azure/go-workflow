@@ -21,7 +21,7 @@ import (
 // The only difference is that:
 //
 //	Step supports a generic method `Input`, check next session about BeforeStep and AfterStep callbacks.
-func ExampleDeclareDependency() {
+func ExampleSteps() {
 	workflow := new(flow.Workflow)
 
 	// Besides, `flow` also provides a convenient way to create a Step implementation without declaring type,

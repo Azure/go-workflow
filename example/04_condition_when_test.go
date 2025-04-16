@@ -33,7 +33,7 @@ import (
 // After When makes the decision of next status, Workflow will update Step's status accordingly.
 //
 // If the decision is Running, Workflow starts a goroutine to run the Step.
-func ExampleConditionWhen() {
+func ExampleCondition() {
 	var (
 		succeeded = new(SucceededStep)
 		failed    = new(FailedStep)
