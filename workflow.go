@@ -512,3 +512,35 @@ func catchPanicAsError(f func() error) error {
 	}(&returnErr)
 	return returnErr
 }
+
+// SubWorkflow is a helper struct to let you create a step with a sub-workflow.
+// Embed this struct to your struct definition.
+//
+// Usage:
+//
+//	type MyStep struct {
+//		flow.SubWorkflow
+//	}
+//
+//	func (s *MyStep) BuildStep() {
+//		s.Reset() // reset the workflow
+//		s.Add(
+//			flow.Step(/* stepX */),
+//		)
+//	}
+//
+//	func main() {
+//		w := &flow.Workflow{}
+//		myStep := &MyStep{}
+//		w.Add(flow.Step(myStep)) // BuildStep() will be called when adding the step
+//		...
+//		stepX := flow.As[*StepX](w) // we can get the inner stepX from the workflow
+//	}
+type SubWorkflow struct{ w Workflow }
+
+func (s *SubWorkflow) Unwrap() Steper                    { return &s.w }
+func (s *SubWorkflow) Add(builders ...Builder) *Workflow { return s.w.Add(builders...) }
+func (s *SubWorkflow) Do(ctx context.Context) error      { return s.w.Do(ctx) }
+
+// Reset resets the sub-workflow to ready for BuildStep()
+func (s *SubWorkflow) Reset() { s.w = Workflow{} }
