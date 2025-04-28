@@ -602,3 +602,19 @@ func BenchmarkStatusChange(b *testing.B) {
 		w.Do(context.Background())
 	}
 }
+
+type StepSubWorkflow struct{ SubWorkflow }
+
+func (s *StepSubWorkflow) BuildStep() {
+	s.Reset()
+	s.Add(Step(NoOp("inner")))
+}
+
+func TestSubWorkflow(t *testing.T) {
+	w := new(Workflow).Add(
+		Step(&StepSubWorkflow{}),
+	)
+	assert.NoError(t, w.Do(context.Background()))
+	assert.True(t, Has[*NoOpStep](w))
+	assert.Equal(t, "inner", As[*NoOpStep](w)[0].Name)
+}
