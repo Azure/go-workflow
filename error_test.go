@@ -14,6 +14,6 @@ func TestErrCycleDependency(t *testing.T) {
 	)
 	var errCycle flow.ErrCycleDependency
 	if assert.ErrorAs(t, w.Do(context.Background()), &errCycle) {
-		assert.ErrorContains(t, errCycle, "Succeeded: [Succeeded]")
+		assert.ErrorContains(t, errCycle, "Succeeded depends on [\n\t\tSucceeded\n\t]")
 	}
 }

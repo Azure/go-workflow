@@ -26,6 +26,9 @@ func (sb *StepBuilder) BuildStep(s Steper) {
 			return TraverseEndBranch // it's a sub-workflow, let it manage its own steps
 		}
 		if b, ok := s.(interface{ BuildStep() }); ok {
+			if r, ok := s.(interface{ Reset() }); ok {
+				r.Reset() // reset the step before building
+			}
 			b.BuildStep()
 			sb.built.Add(s)
 			return TraverseEndBranch // not necessary to go deeper

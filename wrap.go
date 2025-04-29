@@ -168,15 +168,15 @@ func String(step Steper) string {
 	case interface{ String() string }:
 		return u.String()
 	case interface{ Unwrap() Steper }:
-		return String(u.Unwrap())
+		return fmt.Sprintf("%T(%p) {\n\t%s\n}", u, u, indent(String(u.Unwrap())))
 	case interface{ Unwrap() []Steper }:
 		stepStrs := []string{}
 		for _, step := range u.Unwrap() {
 			stepStrs = append(stepStrs, String(step))
 		}
-		return fmt.Sprintf("[%s]", strings.Join(stepStrs, ", "))
+		return fmt.Sprintf("%T(%p) {\n\t%s\n}", u, u, indent(strings.Join(stepStrs, "\n")))
 	default:
-		return fmt.Sprintf("%T(%v)", step, step)
+		return fmt.Sprintf("%T(%p)", step, step)
 	}
 }
 
