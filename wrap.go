@@ -164,7 +164,6 @@ func String(step Steper) string {
 	if step == nil {
 		return "<nil>"
 	}
-	indent := func(s string) string { return strings.ReplaceAll(s, "\n", "\n\t") }
 	switch u := step.(type) {
 	case interface{ String() string }:
 		return u.String()

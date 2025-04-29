@@ -115,11 +115,13 @@ type StepResult struct {
 func (e StepResult) Error() string {
 	rv := fmt.Sprintf("[%s]", e.Status)
 	if e.Err != nil {
-		rv += "\n\t" + strings.ReplaceAll(e.Err.Error(), "\n", "\n\t")
+		rv += "\n\t" + indent(e.Err.Error())
 	}
 	return rv
 }
 func (e StepResult) Unwrap() error { return e.Err }
+
+func indent(s string) string { return strings.ReplaceAll(s, "\n", "\n\t") }
 
 // ErrWorkflow contains all errors reported from terminated Steps in Workflow.
 //
@@ -172,18 +174,16 @@ var ErrWorkflowIsRunning = fmt.Errorf("Workflow is running, please wait for it t
 type ErrCycleDependency map[Steper][]Steper
 
 func (e ErrCycleDependency) Error() string {
-	var builder strings.Builder
-	builder.WriteString("Cycle Dependency Error:")
+	depErr := make([]string, 0, len(e))
 	for step, ups := range e {
 		depsStr := []string{}
 		for _, up := range ups {
 			depsStr = append(depsStr, String(up))
 		}
-		builder.WriteRune('\n')
-		builder.WriteString(fmt.Sprintf(
-			"%s: [%s]",
-			String(step), strings.Join(depsStr, ", "),
+		depErr = append(depErr, fmt.Sprintf(
+			"%s depends on [\n\t%s\n]",
+			String(step), indent(strings.Join(depsStr, "\n")),
 		))
 	}
-	return builder.String()
+	return fmt.Sprintf("Cycle Dependency Error:\n\t%s", indent(strings.Join(depErr, "\n")))
 }
