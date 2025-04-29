@@ -164,17 +164,18 @@ func String(step Steper) string {
 	if step == nil {
 		return "<nil>"
 	}
+	indent := func(s string) string { return strings.ReplaceAll(s, "\n", "\n\t") }
 	switch u := step.(type) {
 	case interface{ String() string }:
 		return u.String()
 	case interface{ Unwrap() Steper }:
-		return fmt.Sprintf("%T(%p) {\n\t%s\n}", u, u, String(u.Unwrap()))
+		return fmt.Sprintf("%T(%p) {\n\t%s\n}", u, u, indent(String(u.Unwrap())))
 	case interface{ Unwrap() []Steper }:
 		stepStrs := []string{}
 		for _, step := range u.Unwrap() {
 			stepStrs = append(stepStrs, String(step))
 		}
-		return fmt.Sprintf("%T(%p) {\n\t%s\n}", u, u, strings.Join(stepStrs, "\n\t"))
+		return fmt.Sprintf("%T(%p) {\n\t%s\n}", u, u, indent(strings.Join(stepStrs, "\n")))
 	default:
 		return fmt.Sprintf("%T(%p)", step, step)
 	}
