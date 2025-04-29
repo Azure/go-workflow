@@ -117,9 +117,12 @@ func TestString(t *testing.T) {
 	var (
 		a  = NoOp("a")
 		b  = NoOp("b")
+		A  = wrap(a)
 		ab = multi(a, b)
 	)
 	assert.Equal(t, "<nil>", String(nil))
 	assert.Equal(t, "a", String(a))
-	assert.Equal(t, "[a, b]", String(ab))
+	assert.Equal(t, "A", String(A))
+	assert.Contains(t, String(ab), "*flow.multiStep")
+	assert.Contains(t, String(ab), " {\n\ta\n\tb\n}")
 }
