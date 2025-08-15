@@ -5,7 +5,7 @@
 
 ## Overview
 
-> Strongly encourage everyone to read examples in the [examples](./examples) directory to have a quick understanding of how to use this library.
+> Strongly encourage everyone to read examples in the [example](./example) directory to have a quick understanding of how to use this library.
 
 `go-workflow` helps Go developers organize steps with dependencies into a Directed-Acyclic-Graph (DAG).
 - It provides a simple and flexible way to define and execute a workflow.
