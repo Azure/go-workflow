@@ -589,6 +589,27 @@ func TestBeforeAfter(t *testing.T) {
 		)
 		assert.NoError(t, w.Do(ctx))
 	})
+	t.Run("BeforeStep can modify context", func(t *testing.T) {
+		w := &Workflow{}
+		step := Func("step", func(ctx context.Context) error {
+			assert.Equal(t, "value", ctx.Value("key"))
+			return nil
+		})
+		w.Add(Step(step).
+			BeforeStep(func(ctx context.Context, _ Steper) (context.Context, error) {
+				return context.WithValue(ctx, "key", "value"), nil // save a modified context
+			}).
+			Input(func(ctx context.Context, _ *Function[struct{}, struct{}]) error {
+				assert.Equal(t, "value", ctx.Value("key")) // assert modified context is used
+				return nil
+			}).
+			Output(func(ctx context.Context, _ *Function[struct{}, struct{}]) error {
+				assert.Equal(t, "value", ctx.Value("key"))
+				return nil
+			}),
+		)
+		assert.NoError(t, w.Do(context.Background()))
+	})
 }
 
 func BenchmarkStatusChange(b *testing.B) {
