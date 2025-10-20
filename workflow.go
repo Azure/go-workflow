@@ -452,24 +452,25 @@ func (w *Workflow) runStep(ctx context.Context, step Steper, state *State) error
 
 // makeDoForStep is panic-free from Step's Do and Input.
 func (w *Workflow) makeDoForStep(step Steper, state *State) func(ctx context.Context) error {
-	return func(ctx context.Context) error {
+	return func(root context.Context) error {
 		do := func(fn func() error) error { return fn() }
 		if w.DontPanic {
 			do = catchPanicAsError
 		}
 		// call Before callbacks
+		var ctxStep context.Context
 		err := do(func() error {
-			ctxBefore, errBefore := state.Before(ctx, step)
-			ctx = ctxBefore // use the context returned by Before
+			ctxBefore, errBefore := state.Before(root, step, do) // pass do to Before to guard each Before callback
+			ctxStep = ctxBefore                                  // use the context returned by Before for the following Do
 			return errBefore
 		})
 		if err != nil {
 			err = ErrBeforeStep{err}
 		} else { // only call step.Do if all Before callbacks succeed
-			err = do(func() error { return step.Do(ctx) })
+			err = do(func() error { return step.Do(ctxStep) }) // step.Do will not change ctxStep
 		}
-		// call After callbacks
-		return do(func() error { return state.After(ctx, step, err) })
+		// call After callbacks, will use the ctxStep for After callbacks
+		return do(func() error { return state.After(ctxStep, step, err) })
 	}
 }
 
