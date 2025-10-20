@@ -55,18 +55,21 @@ func (s *State) Option() *StepOption {
 	}
 	return opt
 }
-func (s *State) Before(ctx context.Context, step Steper) (context.Context, error) {
+func (s *State) Before(root context.Context, step Steper, do func(func() error) error) (context.Context, error) {
 	if s.Config == nil || len(s.Config.Before) == 0 {
-		return ctx, nil
+		return root, nil
 	}
+	ctx := root
 	for _, b := range s.Config.Before {
-		var err error
-		ctx, err = b(ctx, step)
-		if err != nil {
+		if err := do(func() error {
+			ctxReturned, err := b(ctx, step)
+			ctx = ctxReturned // use the context returned by Before callback
+			return err
+		}); err != nil {
 			return ctx, err
 		}
 	}
-	return ctx, nil
+	return root, nil
 }
 func (s *State) After(ctx context.Context, step Steper, err error) error {
 	if s.Config == nil || len(s.Config.After) == 0 {
