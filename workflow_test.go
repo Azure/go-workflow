@@ -56,6 +56,7 @@ func TestAdd(t *testing.T) {
 		assert.Len(t, workflow.Steps(), 1)
 		assert.Equal(t, a, workflow.Steps()[0])
 	})
+	do := func(fn func() error) error { return fn() }
 	t.Run("nested workflow with input", func(t *testing.T) {
 		inner := new(Workflow)
 		step := NoOp("inner step")
@@ -71,7 +72,7 @@ func TestAdd(t *testing.T) {
 		outerState := outer.StateOf(step)
 		innerState := inner.StateOf(step)
 		assert.ObjectsAreEqual(outerState, innerState)
-		_, err := innerState.Before(context.Background(), inner)
+		_, err := innerState.Before(context.Background(), inner, do)
 		assert.NoError(t, err)
 		assert.Equal(t, "modified", step.Name)
 	})
@@ -88,7 +89,7 @@ func TestAdd(t *testing.T) {
 		outerState := outer.StateOf(a)
 		innerState := inner.StateOf(a)
 		assert.ObjectsAreEqual(outerState, innerState)
-		_, err := innerState.Before(context.TODO(), inner)
+		_, err := innerState.Before(context.TODO(), inner, do)
 		assert.NoError(t, err)
 		assert.Equal(t, "a_updated", a.Name)
 
@@ -569,6 +570,24 @@ func TestBeforeAfter(t *testing.T) {
 		)
 		assert.NoError(t, w.Do(context.Background()))
 		assert.True(t, afterRan)
+	})
+	t.Run("modified context from BeforeStep should still be used even panic happens", func(t *testing.T) {
+		w := &Workflow{DontPanic: true}
+		noop := NoOp("NoOp")
+		ctx := context.Background()
+		w.Add(Step(noop).
+			BeforeStep(func(ctx context.Context, s Steper) (context.Context, error) {
+				return context.WithValue(ctx, "key", "value"), nil // save a modified context
+			}).
+			Input(func(ctx context.Context, nos *NoOpStep) error {
+				panic("panic in input")
+			}).
+			AfterStep(func(ctx context.Context, s Steper, err error) error {
+				assert.Equal(t, "value", ctx.Value("key")) // assert modified context is still used
+				return nil
+			}),
+		)
+		assert.NoError(t, w.Do(ctx))
 	})
 }
 
