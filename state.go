@@ -69,7 +69,7 @@ func (s *State) Before(root context.Context, step Steper, do func(func() error) 
 			return ctx, err
 		}
 	}
-	return root, nil
+	return ctx, nil
 }
 func (s *State) After(ctx context.Context, step Steper, err error) error {
 	if s.Config == nil || len(s.Config.After) == 0 {
