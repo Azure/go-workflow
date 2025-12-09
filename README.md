@@ -67,6 +67,9 @@ func main() {
 }
 ```
 
+## Document from AI
+You can also check the document from deepwiki: https://deepwiki.com/Azure/go-workflow
+
 ## Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a
