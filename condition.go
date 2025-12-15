@@ -10,14 +10,15 @@ import (
 type StepStatus string
 
 const (
-	Pending   StepStatus = ""
-	Running   StepStatus = "Running"
-	Failed    StepStatus = "Failed"
-	Succeeded StepStatus = "Succeeded"
-	Canceled  StepStatus = "Canceled"
-	Skipped   StepStatus = "Skipped"
+	Pending   StepStatus = ""          // Pending means the Step has not started yet.
+	Running   StepStatus = "Running"   // Running means the Step is in progress.
+	Failed    StepStatus = "Failed"    // Failed means the Step has terminated and failed.
+	Succeeded StepStatus = "Succeeded" // Succeeded means the Step has terminated and succeeded.
+	Canceled  StepStatus = "Canceled"  // Canceled means the Step has terminated and been canceled.
+	Skipped   StepStatus = "Skipped"   // Skipped means the Step has terminated and been skipped.
 )
 
+// IsTerminated returns true if the StepStatus is one of the terminated states (Failed, Succeeded, Canceled, Skipped).
 func (s StepStatus) IsTerminated() bool {
 	switch s {
 	case Failed, Succeeded, Canceled, Skipped:
@@ -57,12 +58,12 @@ var (
 	}
 )
 
-// Always: as long as all Upstreams are terminated
+// Always runs the step as long as all upstream steps are terminated
 func Always(context.Context, map[Steper]StepResult) StepStatus {
 	return Running
 }
 
-// AllSucceeded: all Upstreams are Succeeded
+// AllSucceeded runs the step when all upstream steps are Succeeded
 func AllSucceeded(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Canceled
@@ -75,7 +76,7 @@ func AllSucceeded(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	return Running
 }
 
-// AnySucceeded: any Upstream is Succeeded
+// AnySucceeded runs the step when any upstream step is Succeeded
 func AnySucceeded(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Canceled
@@ -88,7 +89,7 @@ func AnySucceeded(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	return Skipped
 }
 
-// AllSucceededOrSkipped: all Upstreams are Succeeded or Skipped
+// AllSucceededOrSkipped runs the step when all upstream steps are Succeeded or Skipped
 func AllSucceededOrSkipped(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Canceled
@@ -101,15 +102,15 @@ func AllSucceededOrSkipped(ctx context.Context, ups map[Steper]StepResult) StepS
 	return Running
 }
 
-// BeCanceled: only run when the workflow is canceled
-func BeCanceled(ctx context.Context, ups map[Steper]StepResult) StepStatus {
+// BeCanceled runs the step only when the context is canceled
+func BeCanceled(ctx context.Context, _ map[Steper]StepResult) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Running
 	}
 	return Skipped
 }
 
-// AnyFailed: any Upstream is Failed
+// AnyFailed runs the step when any upstream step is Failed
 func AnyFailed(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Canceled
@@ -122,12 +123,15 @@ func AnyFailed(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	return Skipped
 }
 
-// ConditionOrDefault will use DefaultCondition if cond is nil.
-func ConditionOrDefault(cond Condition) func(context.Context, map[Steper]StepResult) StepStatus {
+// ConditionOr will use defaultCond if cond is nil.
+func ConditionOr(cond, defaultCond Condition) Condition {
 	return func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 		if cond == nil {
-			return DefaultCondition(ctx, ups)
+			return defaultCond(ctx, ups)
 		}
 		return cond(ctx, ups)
 	}
 }
+
+// ConditionOrDefault will use DefaultCondition if cond is nil.
+func ConditionOrDefault(cond Condition) Condition { return ConditionOr(cond, DefaultCondition) }

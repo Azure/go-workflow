@@ -39,11 +39,26 @@ func ExampleCondition() {
 		failed    = new(FailedStep)
 		canceled  = new(CanceledStep)
 		skipped   = new(SkippedStep)
+		custom    = Print("CustomStep")
 
 		allSucceeded = Print("AllSucceeded")
 		always       = Print("Always")
 		anyFailed    = Print("AnyFailed")
 		beCanceled   = Print("BeCanceled")
+		customWhen   = func(ctx context.Context, ups map[flow.Steper]flow.StepResult) flow.StepStatus {
+			// use built-in Condition to check upstreams' status
+			status := flow.AllSucceededOrSkipped(ctx, ups)
+			if status != flow.Running {
+				return status
+			}
+			// do custom logic
+			if result, ok := ups[succeeded]; ok {
+				if result.Err != nil {
+					return flow.Failed // fail if succeeded Step has error (it shouldn't happen)
+				}
+			}
+			return flow.Running
+		}
 	)
 
 	workflow := new(flow.Workflow)
@@ -79,6 +94,14 @@ func ExampleCondition() {
 	fmt.Println(workflow.StateOf(always).GetStatus())     // Succeeded
 	fmt.Println(workflow.StateOf(beCanceled).GetStatus()) // Succeeded
 
+	workflow = new(flow.Workflow)
+	workflow.Add(
+		flow.Step(custom).When(customWhen).DependsOn(succeeded, skipped),
+	)
+	_ = workflow.Do(context.Background())
+	// CustomStep
+	fmt.Println(workflow.StateOf(custom).GetStatus()) // Succeeded
+
 	// Output:
 	// AnyFailed
 	// Skipped
@@ -88,6 +111,8 @@ func ExampleCondition() {
 	// BeCanceled
 	// Canceled
 	// Succeeded
+	// Succeeded
+	// CustomStep
 	// Succeeded
 }
 

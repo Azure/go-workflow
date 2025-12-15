@@ -2,19 +2,25 @@ package flow
 
 import (
 	"context"
+	"iter"
+	"maps"
+	"slices"
 	"time"
 )
 
-// Steper describes the requirement for a Step, which is basic unit of a Workflow.
+// Steper describes the requirement for a step, which is basic unit of a Workflow.
 //
-// Implement this interface to allow Workflow orchestrating your Steps.
+// Implement this interface to allow Workflow orchestrating your steps.
 //
-// Notice Steper will be saved in Workflow as map key, so it's supposed to be 'comparable' type like pointer.
+// Notice Steper will be saved in Workflow as map key, so it's supposed to be 'comparable' type like struct pointer.
+//
+// Do not use empty struct{} as Steper implementation, because all empty struct{} are equal in Go,
+// which makes it impossible to distinguish different steps in Workflow.
 type Steper interface {
 	Do(context.Context) error
 }
 
-// Builder builds a Workflow by adding Steps.
+// Builder is an interface to add steps into Workflow
 type Builder interface {
 	AddToWorkflow() map[Steper]*StepConfig
 }
@@ -25,21 +31,24 @@ type BeforeStep func(context.Context, Steper) (context.Context, error)
 // AfterStep defines callback being called AFTER step being executed.
 type AfterStep func(context.Context, Steper, error) error
 
+// StepConfig is the configuration of a step in a Workflow.
 type StepConfig struct {
-	Upstreams Set[Steper]         // Upstreams of the Step, means these Steps should happen-before this Step
-	Before    []BeforeStep        // Before callbacks of the Step, will be called before Do
-	After     []AfterStep         // After callbacks of the Step, will be called before Do
-	Option    []func(*StepOption) // Option customize the Step settings
-}
-type StepOption struct {
-	RetryOption *RetryOption   // RetryOption customize how the Step should be retried, default (nil) means no retry.
-	Condition   Condition      // Condition decides whether Workflow should execute the Step, default to DefaultCondition.
-	Timeout     *time.Duration // Timeout sets the Step level timeout, default (nil) means no timeout.
+	Upstreams Set[Steper]         // Upstreams of the step, means these steps should happen-before this step
+	Before    []BeforeStep        // Before callbacks of the step, will be called before Do
+	After     []AfterStep         // After callbacks of the step, will be called before Do
+	Option    []func(*StepOption) // Option customize the step settings
 }
 
-// Steps declares a series of Steps ready to be added into Workflow.
+// StepOption customizes the behavior of how Workflow orchestrates the step.
+type StepOption struct {
+	RetryOption *RetryOption   // RetryOption customize how the step should be retried, default (nil) means no retry.
+	Condition   Condition      // Condition decides whether Workflow should execute the step, default to DefaultCondition.
+	Timeout     *time.Duration // Timeout sets the step level timeout, default (nil) means no timeout.
+}
+
+// Steps bakes Steper(s) ready to be added into Workflow.
 //
-// The Steps declared are mutually independent.
+// The Steper(s) declared are mutually independent, meaning they will be executed in parallel.
 //
 //	workflow.Add(
 //		Steps(a, b, c),					// a, b, c will be executed in parallel
@@ -53,10 +62,10 @@ func Steps(steps ...Steper) AddSteps {
 	return rv
 }
 
-// Step declares Step ready to be added into Workflow.
+// Step bakes typed Steper(s) ready to be added into Workflow.
 //
 // The main difference between Step() and Steps() is that,
-// Step() allows to add Input for the Step.
+// Step() allows to add Input callbacks for the step (since this is a generic function).
 //
 //	Step(a).Input(func(ctx context.Context, a *A) error {
 //		// fill a
@@ -196,6 +205,18 @@ func (as AddSteps) BeforeStep(befores ...BeforeStep) AddSteps {
 // The order of execution will respect the order of declarations.
 // The AfterStep callbacks are able to change the error returned by Do.
 // The AfterStep callbacks are executed at runtime and per-try.
+//
+// Tip:
+//
+// Remember to check error when overriding your own AfterStep function.
+//
+//	Steps(a).AfterStep(func(ctx context.Context, step Steper, err error) error {
+//		if err != nil {
+//			// do something when error happens
+//		}
+//		// do something when success
+//		return err // you can decide whether pass through the error or not
+//	})
 func (as AddSteps) AfterStep(afters ...AfterStep) AddSteps {
 	for step := range as {
 		as[step].After = append(as[step].After, afters...)
@@ -204,6 +225,7 @@ func (as AddSteps) AfterStep(afters ...AfterStep) AddSteps {
 }
 
 // Timeout sets the Step level timeout.
+// Last one wins.
 func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
 	for step := range as {
 		as[step].Option = append(as[step].Option, func(so *StepOption) {
@@ -214,6 +236,24 @@ func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
 }
 
 // When set the Condition for the Step.
+// Last one wins.
+//
+// Tip:
+//
+// Remember to check upstreams when overriding your own Condition function.
+//
+//	Steps(a).When(func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
+//		// check upstreams leveraging built-in Conditions
+//		status := flow.AllSucceeded(ctx, ups)
+//		if status != flow.Running {
+//			return status // return fast if the Condition not satisfied
+//		}
+//		// your custom logic
+//		if ... {
+//			return flow.Running
+//		}
+//		return flow.Skipped
+//	})
 func (as AddSteps) When(cond Condition) AddSteps {
 	for step := range as {
 		as[step].Option = append(as[step].Option, func(so *StepOption) {
@@ -225,7 +265,7 @@ func (as AddSteps) When(cond Condition) AddSteps {
 
 // Retry customize how the Step should be retried.
 //
-// Step will be retried as long as this option is configured.
+// Step will use DefaultRetryOption when this option is configured with nil.
 //
 //	w.Add(
 //		Step(a), // not retry
@@ -294,18 +334,49 @@ func (as AddStep[S]) BeforeStep(befores ...BeforeStep) AddStep[S] {
 // The order of execution will respect the order of declarations.
 // The AfterStep callbacks are able to change the error returned by Do.
 // The AfterStep callbacks are executed at runtime and per-try.
+//
+// Tip:
+//
+// Remember to check error when overriding your own AfterStep function.
+//
+//	Step(a).AfterStep(func(ctx context.Context, step Steper, err error) error {
+//		if err != nil {
+//			// do something when error happens
+//		}
+//		// do something when success
+//		return err // you can decide whether pass through the error or not
+//	})
 func (as AddStep[S]) AfterStep(afters ...AfterStep) AddStep[S] {
 	as.AddSteps = as.AddSteps.AfterStep(afters...)
 	return as
 }
 
 // Timeout sets the Step level timeout.
+// Last one wins.
 func (as AddStep[S]) Timeout(timeout time.Duration) AddStep[S] {
 	as.AddSteps = as.AddSteps.Timeout(timeout)
 	return as
 }
 
 // When set the Condition for the Step.
+// Last one wins.
+//
+// Tip:
+//
+// Remember to check upstreams when overriding your own Condition function.
+//
+//	Steps(a).When(func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
+//		// check upstreams leveraging built-in Conditions
+//		status := flow.AllSucceeded(ctx, ups)
+//		if status != flow.Running {
+//			return status // return fast if the Condition not satisfied
+//		}
+//		// your custom logic
+//		if ... {
+//			return flow.Running
+//		}
+//		return flow.Skipped
+//	})
 func (as AddStep[S]) When(when Condition) AddStep[S] {
 	as.AddSteps = as.AddSteps.When(when)
 	return as
@@ -313,7 +384,7 @@ func (as AddStep[S]) When(when Condition) AddStep[S] {
 
 // Retry customize how the Step should be retried.
 //
-// Step will be retried as long as this option is configured.
+// Step will use DefaultRetryOption when this option is configured with nil.
 //
 //	w.Add(
 //		Step(a), // not retry
@@ -327,13 +398,16 @@ func (as AddStep[S]) Retry(fns ...func(*RetryOption)) AddStep[S] {
 	return as
 }
 
+// AddStep is a typed wrapper of AddSteps.
 type AddStep[S Steper] struct {
 	AddSteps
 	Steps []S
 }
+
+// AddSteps helps to add Steper(s) into Workflow.
 type AddSteps map[Steper]*StepConfig
 
-// ToSteps converts []<StepDoer implemention> to []StepDoer.
+// ToSteps converts []<Steper implementation> to []Steper.
 //
 //	steps := []someStepImpl{ ... }
 //	flow.Add(
@@ -347,6 +421,7 @@ func ToSteps[S Steper](steps []S) []Steper {
 	return rv
 }
 
+// Merge merges another StepConfig into this one.
 func (sc *StepConfig) Merge(other *StepConfig) {
 	if other == nil {
 		return
@@ -360,8 +435,10 @@ func (sc *StepConfig) Merge(other *StepConfig) {
 	sc.Option = append(sc.Option, other.Option...)
 }
 
+// Set is a simple generic set implementation based on map.
 type Set[T comparable] map[T]struct{}
 
+// Has checks whether the set contains the given value.
 func (s Set[T]) Has(v T) bool {
 	if s == nil {
 		return false
@@ -369,6 +446,8 @@ func (s Set[T]) Has(v T) bool {
 	_, ok := s[v]
 	return ok
 }
+
+// Add adds the given values into the set.
 func (s *Set[T]) Add(vs ...T) {
 	if *s == nil {
 		*s = make(Set[T])
@@ -377,11 +456,15 @@ func (s *Set[T]) Add(vs ...T) {
 		(*s)[v] = struct{}{}
 	}
 }
+
+// Union adds all values from the given sets into the set.
 func (s *Set[T]) Union(sets ...Set[T]) {
 	for _, set := range sets {
 		s.Add(set.Flatten()...)
 	}
 }
+
+// Flatten converts the set into a slice of values.
 func (s Set[T]) Flatten() []T {
 	r := make([]T, 0, len(s))
 	for v := range s {
@@ -390,22 +473,30 @@ func (s Set[T]) Flatten() []T {
 	return r
 }
 
+// Seq returns an iterator over the set.
+// The order of values is indeterminate.
+func (s Set[T]) Seq() iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for v := range s {
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
+
 // Keys returns the keys of the map m.
 // The keys will be in an indeterminate order.
+//
+// Deprecated: use maps.Keys() from standard library instead.
 func Keys[M ~map[K]V, K comparable, V any](m M) []K {
-	r := make([]K, 0, len(m))
-	for k := range m {
-		r = append(r, k)
-	}
-	return r
+	return slices.Collect(maps.Keys(m))
 }
 
 // Values returns the values of the map m.
 // The values will be in an indeterminate order.
+//
+// Deprecated: use maps.Values() from standard library instead.
 func Values[M ~map[K]V, K comparable, V any](m M) []V {
-	r := make([]V, 0, len(m))
-	for _, v := range m {
-		r = append(r, v)
-	}
-	return r
+	return slices.Collect(maps.Values(m))
 }
