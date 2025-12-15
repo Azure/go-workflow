@@ -1,6 +1,6 @@
 module github.com/Azure/go-workflow
 
-go 1.22.2
+go 1.23
 
 retract v0.1.11
 
@@ -8,7 +8,7 @@ require (
 	github.com/benbjohnson/clock v1.3.5
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/google/uuid v1.6.0
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.11.1
 )
 
 require (
