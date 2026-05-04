@@ -280,6 +280,11 @@ func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 			if so.RetryOption == nil {
 				so.RetryOption = new(RetryOption)
 				*so.RetryOption = DefaultRetryOption
+				// Deep-copy: Backoff holds a pointer to mutable state.
+				// A shallow copy shares the same instance across all steps that
+				// call Retry(nil), causing a data race when they retry concurrently.
+				// Set to nil so retry() falls back to a freshly allocated instance.
+				so.RetryOption.Backoff = nil
 			}
 			for _, opt := range opts {
 				if opt != nil {

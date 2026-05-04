@@ -398,13 +398,18 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			w.waitGroup.Add(1)
 			go func(ctx context.Context, step Steper, state *State) {
 				defer w.waitGroup.Done()
-				defer w.unlease()
 
 				var err error
 				status := Failed
 				defer func() {
 					state.SetStatus(status)
 					state.SetError(err)
+					// Release the lease BEFORE signalling, so that when the main
+					// loop wakes up in tick() it can immediately acquire a new lease.
+					// Previously unlease() was a separate earlier defer (LIFO), meaning
+					// signal fired first → tick() saw a full bucket → went back to
+					// Wait() → deadlock when MaxConcurrency=1 with chained steps.
+					w.unlease()
 					w.signalStatusChange()
 				}()
 
