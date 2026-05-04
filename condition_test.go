@@ -76,6 +76,17 @@ func TestCondition(t *testing.T) {
 		v(t, flow.Running, allSteps...)
 	})
 
+	t.Run("ConditionOr with non-nil primary uses primary", func(t *testing.T) {
+		v := make(ctx, flow.ConditionOr(flow.Always, flow.AllSucceeded))
+		// Always returns Running regardless of upstream statuses
+		v(t, flow.Running, allSteps...)
+	})
+
+	t.Run("ConditionOr with nil primary falls back to given default", func(t *testing.T) {
+		v := make(ctx, flow.ConditionOr(nil, flow.Always))
+		v(t, flow.Running, allSteps...)
+	})
+
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 	t.Run("Canceled Context", func(t *testing.T) {
@@ -109,6 +120,72 @@ func TestCondition(t *testing.T) {
 			v := make(canceledCtx, flow.AnyFailed)
 			v(t, flow.Canceled, allSteps...)
 			v(t, flow.Canceled, succeededStep)
+		})
+	})
+}
+
+func TestCustomCondition(t *testing.T) {
+	t.Run("Custom When overrides AllSucceeded default", func(t *testing.T) {
+		// With default AllSucceeded, downstream would be Skipped when upstream fails.
+		// With AnyFailed, it should run.
+		upstream := flow.Func("upstream", func(ctx context.Context) error {
+			return assert.AnError
+		})
+		var ran bool
+		downstream := flow.Func("downstream", func(ctx context.Context) error {
+			ran = true
+			return nil
+		})
+		w := new(flow.Workflow).Add(
+			flow.Step(downstream).DependsOn(upstream).When(flow.AnyFailed),
+		)
+		assert.Error(t, w.Do(context.Background())) // upstream failed → ErrWorkflow
+		assert.True(t, ran, "downstream should have run because AnyFailed was set")
+		assert.Equal(t, flow.Succeeded, w.StateOf(downstream).Status)
+	})
+
+	t.Run("Custom condition can compose built-ins", func(t *testing.T) {
+		// A condition that calls AllSucceeded first, then applies domain logic.
+		type allowKey struct{}
+		customCond := func(ctx context.Context, ups map[flow.Steper]flow.StepResult) flow.StepStatus {
+			if status := flow.AllSucceeded(ctx, ups); status != flow.Running {
+				return status
+			}
+			if ctx.Value(allowKey{}) != true {
+				return flow.Skipped
+			}
+			return flow.Running
+		}
+
+		upstream := flow.Func("upstream-compose", func(ctx context.Context) error { return nil })
+
+		t.Run("domain logic blocks run when value absent", func(t *testing.T) {
+			var ran bool
+			downstream := flow.Func("downstream-blocked", func(ctx context.Context) error {
+				ran = true
+				return nil
+			})
+			w := new(flow.Workflow).Add(
+				flow.Step(downstream).DependsOn(upstream).When(customCond),
+			)
+			assert.NoError(t, w.Do(context.Background()))
+			assert.False(t, ran)
+			assert.Equal(t, flow.Skipped, w.StateOf(downstream).Status)
+		})
+
+		t.Run("domain logic allows run when value present", func(t *testing.T) {
+			var ran bool
+			downstream := flow.Func("downstream-allowed", func(ctx context.Context) error {
+				ran = true
+				return nil
+			})
+			w := new(flow.Workflow).Add(
+				flow.Step(downstream).DependsOn(upstream).When(customCond),
+			)
+			ctx := context.WithValue(context.Background(), allowKey{}, true)
+			assert.NoError(t, w.Do(ctx))
+			assert.True(t, ran)
+			assert.Equal(t, flow.Succeeded, w.StateOf(downstream).Status)
 		})
 	})
 }
