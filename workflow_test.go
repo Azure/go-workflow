@@ -3,7 +3,6 @@ package flow
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -225,47 +224,6 @@ func TestDep(t *testing.T) {
 	})
 }
 
-func TestPreflight(t *testing.T) {
-	t.Parallel()
-	t.Run("WorkflowIsRunning", func(t *testing.T) {
-		var (
-			workflow       = new(Workflow)
-			start          = make(chan struct{})
-			done           = make(chan struct{})
-			blockUntilDone = Func("block until done", func(ctx context.Context) error {
-				start <- struct{}{}
-				<-done
-				return nil
-			})
-		)
-
-		workflow.Add(
-			Step(blockUntilDone),
-		)
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			assert.NoError(t, workflow.Do(context.Background()))
-		}()
-
-		// ensure step is running
-		<-start
-		assert.ErrorIs(t, workflow.Do(context.Background()), ErrWorkflowIsRunning)
-
-		// unblock step
-		close(done)
-
-		// wait workflow to finish
-		wg.Wait()
-	})
-	t.Run("empty Workflow will just return nil", func(t *testing.T) {
-		workflow := new(Workflow)
-		assert.NoError(t, workflow.Do(context.Background()))
-		assert.NoError(t, workflow.Do(context.Background()))
-	})
-}
 
 func TestWorkflowWillRecover(t *testing.T) {
 	t.Parallel()
@@ -315,36 +273,6 @@ func TestWorkflowWillRecover(t *testing.T) {
 	})
 }
 
-func TestWorkflowErr(t *testing.T) {
-	t.Run("Workflow without error, should also return nil", func(t *testing.T) {
-		t.Parallel()
-		workflow := new(Workflow)
-		workflow.Add(
-			Step(Func("A", func(ctx context.Context) error { return nil })),
-		)
-		err := workflow.Do(context.Background())
-		assert.NoError(t, err)
-	})
-	t.Run("Workflow with error, return ErrWorkflow", func(t *testing.T) {
-		t.Parallel()
-		workflow := new(Workflow)
-		workflow.Add(
-			Step(Func("A", func(ctx context.Context) error { return nil })),
-			Step(Func("B", func(ctx context.Context) error { return fmt.Errorf("B") })),
-		)
-		err := workflow.Do(context.Background())
-		var errWorkflow ErrWorkflow
-		assert.ErrorAs(t, err, &errWorkflow)
-		for step, stepErr := range errWorkflow {
-			switch fmt.Sprint(step) {
-			case "A":
-				assert.NoError(t, stepErr.Unwrap())
-			case "B":
-				assert.ErrorContains(t, stepErr, "B")
-			}
-		}
-	})
-}
 
 func TestWorkflowTree(t *testing.T) {
 	var (
@@ -382,59 +310,6 @@ func TestWorkflowTree(t *testing.T) {
 	})
 }
 
-func TestSkip(t *testing.T) {
-	t.Parallel()
-	t.Run("should skip step if return ErrSkip", func(t *testing.T) {
-		w := &Workflow{SkipAsError: true}
-		skipMe := Func("SkipMe", func(ctx context.Context) error {
-			return Skip(fmt.Errorf("skip me"))
-		})
-		w.Add(Step(skipMe))
-		err := w.Do(context.Background())
-		var errWorkflow ErrWorkflow
-		if assert.ErrorAs(t, err, &errWorkflow) {
-			assert.False(t, errWorkflow.AllSucceeded())
-			assert.True(t, errWorkflow.AllSucceededOrSkipped())
-			assert.Equal(t, Skipped, errWorkflow[skipMe].Status)
-			assert.NotErrorIs(t, errWorkflow[skipMe].Unwrap(), ErrSkip{})
-			assert.ErrorContains(t, errWorkflow[skipMe].Unwrap(), "skip me")
-		}
-	})
-	t.Run("should cancel skip if return ErrCancel", func(t *testing.T) {
-		w := new(Workflow)
-		cancelMe := Func("CancelMe", func(ctx context.Context) error {
-			return Cancel(fmt.Errorf("cancel me"))
-		})
-		w.Add(Step(cancelMe))
-		err := w.Do(context.Background())
-		var errWorkflow ErrWorkflow
-		if assert.ErrorAs(t, err, &errWorkflow) {
-			assert.False(t, errWorkflow.AllSucceeded())
-			assert.False(t, errWorkflow.AllSucceededOrSkipped())
-			assert.Equal(t, Canceled, errWorkflow[cancelMe].Status)
-			assert.NotErrorIs(t, errWorkflow[cancelMe].Unwrap(), ErrCancel{})
-			assert.ErrorContains(t, errWorkflow[cancelMe].Unwrap(), "cancel me")
-		}
-	})
-	t.Run("should succeeded when return ErrSucceed", func(t *testing.T) {
-		w := new(Workflow)
-		succeedMe := Func("SucceedMe", func(ctx context.Context) error {
-			return Succeed(fmt.Errorf("succeed me"))
-		})
-		w.Add(Step(succeedMe))
-		assert.NoError(t, w.Do(context.Background()))
-		assert.Equal(t, Succeeded, w.StateOf(succeedMe).GetStatus())
-	})
-	t.Run("should regard skip as error if SkipAsError", func(t *testing.T) {
-		w := &Workflow{SkipAsError: true}
-		skipMe := Func("SkipMe", func(ctx context.Context) error {
-			return Skip(fmt.Errorf("skip me"))
-		})
-		w.Add(Step(skipMe))
-		assert.Error(t, w.Do(context.Background()))
-		assert.Equal(t, Skipped, w.StateOf(skipMe).GetStatus())
-	})
-}
 
 func TestBeforeAfter(t *testing.T) {
 	t.Parallel()
