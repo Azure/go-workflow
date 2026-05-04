@@ -139,6 +139,7 @@ func TestSkip(t *testing.T) {
 }
 
 func TestWorkflowReset(t *testing.T) {
+	t.Parallel()
 	t.Run("Reset allows re-run", func(t *testing.T) {
 		var calls atomic.Int32
 		step := Func("step", func(ctx context.Context) error {
@@ -180,6 +181,7 @@ func TestWorkflowReset(t *testing.T) {
 }
 
 func TestConcurrentExecution(t *testing.T) {
+	t.Parallel()
 	t.Run("independent Steps execute concurrently", func(t *testing.T) {
 		const n = 4
 		var running atomic.Int32

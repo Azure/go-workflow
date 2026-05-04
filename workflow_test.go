@@ -224,7 +224,6 @@ func TestDep(t *testing.T) {
 	})
 }
 
-
 func TestWorkflowWillRecover(t *testing.T) {
 	t.Parallel()
 	t.Run("panic in step", func(t *testing.T) {
@@ -273,7 +272,6 @@ func TestWorkflowWillRecover(t *testing.T) {
 	})
 }
 
-
 func TestWorkflowTree(t *testing.T) {
 	var (
 		a  = NoOp("a")
@@ -309,7 +307,6 @@ func TestWorkflowTree(t *testing.T) {
 		assert.Len(t, w.steps, 1)
 	})
 }
-
 
 func TestBeforeAfter(t *testing.T) {
 	t.Parallel()
