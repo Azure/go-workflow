@@ -125,6 +125,42 @@ sub-steps. The outer Workflow can reach into the inner Steps using `Has`, `As`, 
 
 ---
 
+### Requirement: Cross-boundary upstream registration
+
+When a Step inside a composite or sub-workflow declares a dependency via `DependsOn`,
+the Workflow registers the upstream at the **lowest workflow layer that can see both
+the step and its upstream**.
+
+This is necessary because each Workflow only orchestrates its own root Steps.
+If the upstream lives outside the sub-workflow that owns the step, the dependency
+must be registered on the outer Workflow's root entry for that step (i.e. the
+sub-workflow itself), not on the inner step's state. Conversely, if both the step
+and its upstream live inside the same sub-workflow, the dependency is registered
+inside that sub-workflow so its scheduler can enforce the ordering.
+
+The Workflow finds the correct layer by comparing the ancestor paths of both the
+step and the upstream in the full workflow tree and registering on the deepest
+common ancestor that implements scheduling (`StateOf` / `RootOf`).
+
+#### Scenario: Inner step depends on outer step
+
+- **GIVEN** an `inner` Workflow containing step `a`, added as a root Step of `outer`
+- **AND** step `b` exists only in `outer` (unknown to `inner`)
+- **WHEN** `outer.Add(Step(a).DependsOn(b))` is called
+- **THEN** the upstream `b` is recorded on `outer`'s state for `inner` (the root of `a`)
+- **AND** `inner`'s own state for `a` does NOT contain `b`
+  (because `inner` has no knowledge of `b`)
+
+#### Scenario: Inner step depends on sibling inner step
+
+- **GIVEN** an `inner` Workflow containing steps `a` and `b`, added as a root Step of `outer`
+- **WHEN** `outer.Add(Step(a).DependsOn(b))` is called
+- **THEN** the upstream `b` is recorded on `inner`'s state for `a`
+- **AND** `outer`'s state for `inner` does NOT contain `b`
+  (because the dependency is fully contained within `inner`)
+
+---
+
 ### Requirement: NoOp — placeholder Step
 
 `flow.NoOp(name)` creates a Step whose `Do` always returns `nil`. It is useful as
