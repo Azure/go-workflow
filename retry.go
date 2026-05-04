@@ -47,6 +47,11 @@ func (w *Workflow) retry(opt *RetryOption) func(
 	}
 	return func(ctx context.Context, do func(context.Context) error, notAfter time.Time) error {
 		backOff := opt.Backoff
+		if backOff == nil {
+			// Backoff was not set (or was cleared to avoid sharing DefaultRetryOption's
+			// mutable Backoff instance). Allocate a fresh one for this retry run.
+			backOff = backoff.NewExponentialBackOff()
+		}
 		backOff = backoff.WithContext(backOff, ctx)
 		if !notAfter.IsZero() {
 			backOff = &backOffStopIfTimeout{BackOff: backOff, NotAfter: notAfter, Now: w.Clock.Now}

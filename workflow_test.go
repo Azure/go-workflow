@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -657,4 +658,61 @@ func TestSubWorkflow(t *testing.T) {
 	assert.NoError(t, w.Do(context.Background()))
 	assert.True(t, Has[*NoOpStep](w))
 	assert.Equal(t, "inner", As[*NoOpStep](w)[0].Name)
+}
+
+// TestMaxConcurrencyDeadlock verifies that a workflow with MaxConcurrency=1
+// and a dependency chain (a → b → c) completes without deadlock.
+//
+// Before the fix, a step's goroutine called signalStatusChange() *before*
+// unlease(), so the main loop could wake up, fail to acquire the lease, go
+// back to Wait(), and then never be woken again after the lease was released.
+func TestMaxConcurrencyDeadlock(t *testing.T) {
+	t.Parallel()
+	a, b, c := NoOp("a"), NoOp("b"), NoOp("c")
+	w := &Workflow{MaxConcurrency: 1}
+	w.Add(
+		Step(a),
+		Step(b).DependsOn(a),
+		Step(c).DependsOn(b),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- w.Do(context.Background()) }()
+
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("deadlock: workflow with MaxConcurrency=1 did not complete within 5s")
+	}
+}
+
+// TestMaxConcurrencyDeadlockStress runs many concurrent workflow chains to
+// shake out the race between lease release and status-change signalling.
+func TestMaxConcurrencyDeadlockStress(t *testing.T) {
+	t.Parallel()
+	const rounds = 100
+	var wg sync.WaitGroup
+	for range rounds {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a, b, c := NoOp("a"), NoOp("b"), NoOp("c")
+			w := &Workflow{MaxConcurrency: 1}
+			w.Add(
+				Step(a),
+				Step(b).DependsOn(a),
+				Step(c).DependsOn(b),
+			)
+			done := make(chan error, 1)
+			go func() { done <- w.Do(context.Background()) }()
+			select {
+			case err := <-done:
+				assert.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Errorf("deadlock detected in stress round")
+			}
+		}()
+	}
+	wg.Wait()
 }
