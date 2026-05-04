@@ -144,3 +144,19 @@ because the slice is evaluated left-to-right and later writers overwrite earlier
 - **WHEN** `workflow.DefaultOption` has a `Timeout` of 10 minutes
   and a Step is added with `.Timeout(5 * time.Minute)`
 - **THEN** the effective timeout for that Step is 5 minutes
+
+#### Scenario: Timeout last-write wins
+- **WHEN** both `DefaultOption` and the Step's own option declare a `Timeout`
+- **THEN** the Step's explicit timeout takes effect (last writer wins in the option chain)
+
+---
+
+### Requirement: BuildStep lifecycle hook
+
+If a Step implements `BuildStep()`, that method is called exactly once when the Step
+is first added to a Workflow (via `workflow.Add`). `Reset()` is called on the Step
+before `BuildStep()` to initialize it to a clean state.
+
+#### Scenario: Reset called before BuildStep
+- **WHEN** a Step that implements both `Reset()` and `BuildStep()` is added to a Workflow
+- **THEN** `Reset()` is called before `BuildStep()` is called

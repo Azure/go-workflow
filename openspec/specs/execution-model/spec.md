@@ -156,3 +156,18 @@ so the Workflow can be executed again. `Reset()` fails if the Workflow is curren
 #### Scenario: Reset rejected while running
 - **WHEN** `workflow.Reset()` is called while `Do` is executing
 - **THEN** `Reset()` returns `ErrWorkflowIsRunning`
+
+---
+
+### Requirement: StateOf nil-safety
+
+`workflow.StateOf(nil)` SHALL return `nil`. `workflow.StateOf(unknownStep)` for a Step
+that was never added to the Workflow SHALL also return `nil`.
+
+#### Scenario: StateOf nil returns nil
+- **WHEN** `workflow.StateOf(nil)` is called
+- **THEN** it returns `nil` without panicking
+
+#### Scenario: StateOf unknown step returns nil
+- **WHEN** `workflow.StateOf(step)` is called for a Step not added to the Workflow
+- **THEN** it returns `nil` without panicking
