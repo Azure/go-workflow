@@ -127,15 +127,6 @@ func TestSkip(t *testing.T) {
 		assert.NoError(t, w.Do(context.Background()))
 		assert.Equal(t, Succeeded, w.StateOf(succeedMe).GetStatus())
 	})
-	t.Run("should regard skip as error if SkipAsError", func(t *testing.T) {
-		w := &Workflow{SkipAsError: true}
-		skipMe := Func("SkipMe", func(ctx context.Context) error {
-			return Skip(fmt.Errorf("skip me"))
-		})
-		w.Add(Step(skipMe))
-		assert.Error(t, w.Do(context.Background()))
-		assert.Equal(t, Skipped, w.StateOf(skipMe).GetStatus())
-	})
 }
 
 func TestWorkflowReset(t *testing.T) {

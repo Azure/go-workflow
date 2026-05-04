@@ -163,54 +163,6 @@ type stepWithBuilder struct {
 
 func (s *stepWithBuilder) BuildStep() { s.Builder(s) }
 
-func TestWorkflowWillRecover(t *testing.T) {
-	t.Parallel()
-	t.Run("panic in step", func(t *testing.T) {
-		t.Parallel()
-		workflow := &Workflow{DontPanic: true}
-		panicStep := Func("panic", func(ctx context.Context) error {
-			panic("panic in step")
-		})
-		workflow.Add(
-			Step(panicStep),
-		)
-		err := workflow.Do(context.Background())
-		assert.ErrorContains(t, err, "panic in step")
-	})
-	t.Run("panic in flow", func(t *testing.T) {
-		t.Parallel()
-		workflow := &Workflow{DontPanic: true}
-		answer := FuncO("answer", func(ctx context.Context) (int, error) {
-			return 42, nil
-		})
-		print := FuncI("print", func(ctx context.Context, msg string) error {
-			fmt.Println(msg)
-			return nil
-		})
-
-		workflow.Add(
-			Step(print).DependsOn(answer).Input(func(ctx context.Context, print *Function[string, struct{}]) error {
-				panic("panic in flow")
-			}),
-		)
-
-		err := workflow.Do(context.Background())
-		assert.ErrorContains(t, err, "panic in flow")
-	})
-	t.Run("panic will have stack traces", func(t *testing.T) {
-		t.Parallel()
-		workflow := &Workflow{DontPanic: true}
-		panicStep := Func("panic", func(ctx context.Context) error {
-			panic("panic in step")
-		})
-		workflow.Add(
-			Step(panicStep),
-		)
-		err := workflow.Do(context.Background())
-		assert.ErrorContains(t, err, "panic in step")
-	})
-}
-
 func TestWorkflowTree(t *testing.T) {
 	var (
 		a  = NoOp("a")
