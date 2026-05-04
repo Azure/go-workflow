@@ -36,7 +36,7 @@ func TestDep(t *testing.T) {
 			assert.ElementsMatch(t, []Steper{}, Keys(w.UpstreamOf(d)))
 		})
 	})
-	t.Run("cycle stepsendency", func(t *testing.T) {
+	t.Run("cycle dependency", func(t *testing.T) {
 		w := new(Workflow)
 		w.Add(
 			Step(a).DependsOn(b),
@@ -276,5 +276,3 @@ func TestDefaultOption(t *testing.T) {
 		assert.Equal(t, 7*time.Minute, *w.StateOf(step).Option().Timeout)
 	})
 }
-
-func durationPtr(d time.Duration) *time.Duration { return &d }
