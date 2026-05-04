@@ -64,6 +64,7 @@ If the context is canceled it returns `Canceled` regardless of upstream statuses
 ### Requirement: AnySucceeded condition
 
 `AnySucceeded` runs the Step when **at least one** upstream terminated with `Succeeded`.
+If the context is canceled it returns `Canceled` regardless of upstream statuses.
 
 #### Scenario: One upstream succeeded
 - **WHEN** at least one upstream has status `Succeeded`
@@ -73,12 +74,17 @@ If the context is canceled it returns `Canceled` regardless of upstream statuses
 - **WHEN** no upstream has status `Succeeded`
 - **THEN** `AnySucceeded` returns `Skipped`
 
+#### Scenario: Context canceled
+- **WHEN** the context passed to the Condition is canceled
+- **THEN** `AnySucceeded` returns `Canceled`
+
 ---
 
 ### Requirement: AllSucceededOrSkipped condition
 
 `AllSucceededOrSkipped` runs the Step when every upstream terminated with either
 `Succeeded` or `Skipped`, treating skipped upstreams as acceptable.
+If the context is canceled it returns `Canceled` regardless of upstream statuses.
 
 #### Scenario: Upstreams all succeeded or skipped
 - **WHEN** every upstream has status `Succeeded` or `Skipped`
@@ -88,12 +94,17 @@ If the context is canceled it returns `Canceled` regardless of upstream statuses
 - **WHEN** any upstream has status `Failed` or `Canceled`
 - **THEN** `AllSucceededOrSkipped` returns `Skipped`
 
+#### Scenario: Context canceled
+- **WHEN** the context passed to the Condition is canceled
+- **THEN** `AllSucceededOrSkipped` returns `Canceled`
+
 ---
 
 ### Requirement: AnyFailed condition
 
 `AnyFailed` runs the Step when **at least one** upstream terminated with `Failed`.
 This is useful for cleanup or alerting Steps that should execute on failure.
+If the context is canceled it returns `Canceled` regardless of upstream statuses.
 
 #### Scenario: One upstream failed
 - **WHEN** at least one upstream has status `Failed`
@@ -102,6 +113,10 @@ This is useful for cleanup or alerting Steps that should execute on failure.
 #### Scenario: No upstream failed
 - **WHEN** no upstream has status `Failed`
 - **THEN** `AnyFailed` returns `Skipped`
+
+#### Scenario: Context canceled
+- **WHEN** the context passed to the Condition is canceled
+- **THEN** `AnyFailed` returns `Canceled`
 
 ---
 

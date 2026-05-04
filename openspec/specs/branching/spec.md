@@ -77,18 +77,33 @@ The `target` Step runs first. Each `Case` check function is evaluated independen
 
 ---
 
-### Requirement: Branch check runs inside target's AfterStep
+### Requirement: If branch check runs inside target's AfterStep
 
-The check function for both `If` and `Switch` is called inside an `AfterStep` callback
-registered on the target Step. This means the check runs after `target.Do` returns but
-the result (true/false/error) is stored on the `BranchCheck` struct and read later when
-the branch Step's Condition is evaluated.
+For `If` branches, the check function is called inside an `AfterStep` callback registered
+on the target Step. The check runs after `target.Do` returns; the result (`BranchCheck.OK`
+and `BranchCheck.Error`) is stored and read by the `Then`/`Else` step Conditions later.
 
-#### Scenario: Check executes after target Do
+#### Scenario: If check executes in target's AfterStep
 - **WHEN** the target Step's `Do` method returns
-- **THEN** the branch check function is called before any branch Step starts
+- **THEN** the `checkFn` is called inside an `AfterStep` before any `Then`/`Else` Step starts
 
-#### Scenario: BranchCheck state is used in branch Condition
-- **WHEN** a branch Step's Condition is evaluated
-- **THEN** it reads the already-computed `BranchCheck.OK` and `BranchCheck.Error`
-  rather than calling the check function again
+#### Scenario: BranchCheck state is used in If branch Condition
+- **WHEN** a `Then` or `Else` Step's Condition is evaluated
+- **THEN** it reads the already-computed `BranchCheck.OK` rather than calling `checkFn` again
+
+---
+
+### Requirement: Switch branch check runs inside each case step's Condition
+
+For `Switch` branches, each case's check function is called inside that case step's
+`Condition` function (not in an `AfterStep`). The result is stored in the case's
+`BranchCheck` struct. The `Default` branch then reads all `BranchCheck.OK` values to
+determine whether any case matched.
+
+#### Scenario: Switch case check executes inside the case Condition
+- **WHEN** a case Step's Condition is evaluated (all upstreams including the target are terminated)
+- **THEN** the case's `checkFn` is called at that point, storing the result in `BranchCheck.OK`
+
+#### Scenario: Default branch reads all case BranchCheck results
+- **WHEN** the Default Step's Condition is evaluated
+- **THEN** it inspects every case's `BranchCheck.OK`; if any is `true` it returns `Skipped`
