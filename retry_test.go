@@ -3,6 +3,7 @@ package flow_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -168,4 +169,39 @@ func (t *testTimer) Start(duration time.Duration) {
 
 func (t *testTimer) Stop() {
 	t.timer.Stop()
+}
+
+// TestRetrySharedBackoffDataRace verifies that steps using Retry(nil) (which
+// copies DefaultRetryOption) do not share the same Backoff instance.
+// Before the fix, all such steps shared the same *ExponentialBackOff pointer
+// (shallow copy), causing a data race under concurrent retries.
+// Run with -race to catch the race; without -race it checks attempt counts
+// are not corrupted by concurrent resets.
+func TestRetrySharedBackoffDataRace(t *testing.T) {
+	t.Parallel()
+	const numSteps = 5
+	const wantAttempts = 3
+
+	type counter struct{ n atomic.Int64 }
+	counters := make([]counter, numSteps)
+
+	w := &flow.Workflow{}
+	for i := range numSteps {
+		i := i
+		s := flow.Func("step-"+string(rune('A'+i)), func(ctx context.Context) error {
+			if counters[i].n.Add(1) < wantAttempts {
+				return assert.AnError
+			}
+			return nil
+		})
+		// Retry(nil) triggers shallow-copy of DefaultRetryOption,
+		// sharing the same Backoff pointer across all steps before the fix.
+		w.Add(flow.Step(s).Retry(nil))
+	}
+
+	assert.NoError(t, w.Do(context.Background()))
+	for i := range numSteps {
+		assert.Equal(t, int64(wantAttempts), counters[i].n.Load(),
+			"step %c attempt count should not be corrupted by shared Backoff", rune('A'+i))
+	}
 }
