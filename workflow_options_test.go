@@ -180,6 +180,5 @@ func TestClock(t *testing.T) {
 		mockClock.Add(time.Minute + time.Second)
 
 		assert.ErrorIs(t, <-done, context.DeadlineExceeded)
-		close(blocker)
 	})
 }
