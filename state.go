@@ -3,7 +3,6 @@ package flow
 import (
 	"context"
 	"sync"
-	"time"
 )
 
 // State is the internal state of a Step in a Workflow.
@@ -25,26 +24,6 @@ func (s *State) SetStatus(ss StepStatus) {
 	s.Lock()
 	defer s.Unlock()
 	s.Status = ss
-}
-func (s *State) GetError() error {
-	s.RLock()
-	defer s.RUnlock()
-	return s.Err
-}
-func (s *State) SetError(err error) {
-	s.Lock()
-	defer s.Unlock()
-	s.Err = err
-}
-func (s *State) GetFinishedAt() time.Time {
-	s.RLock()
-	defer s.RUnlock()
-	return s.FinishedAt
-}
-func (s *State) SetFinishedAt(t time.Time) {
-	s.Lock()
-	defer s.Unlock()
-	s.FinishedAt = t
 }
 func (s *State) GetStepResult() StepResult {
 	s.RLock()
