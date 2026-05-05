@@ -384,6 +384,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 		}
 		// if condition is evaluated to terminate
 		if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
+			state.SetFinishedAt(w.Clock.Now())
 			state.SetStatus(nextStatus)
 			w.waitGroup.Add(1)
 			go func() {
@@ -402,6 +403,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 				var err error
 				status := Failed
 				defer func() {
+					state.SetFinishedAt(w.Clock.Now())
 					state.SetStatus(status)
 					state.SetError(err)
 					// Release the lease BEFORE signalling, so that when the main
