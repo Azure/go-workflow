@@ -36,12 +36,8 @@ func (s *State) SetStepResult(r StepResult) {
 	s.StepResult = r
 }
 
-// Deprecated: Use GetStepResult().Err instead.
-//
-//go:fix inline
 func (s *State) GetError() error { return s.GetStepResult().Err }
 
-// Deprecated: Use SetStepResult instead to update Status, Err, and FinishedAt atomically.
 func (s *State) SetError(err error) {
 	s.Lock()
 	defer s.Unlock()
