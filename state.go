@@ -3,7 +3,6 @@ package flow
 import (
 	"context"
 	"sync"
-	"time"
 )
 
 // State is the internal state of a Step in a Workflow.
@@ -49,17 +48,6 @@ func (s *State) SetError(err error) {
 	s.Err = err
 }
 
-// Deprecated: Use GetStepResult().FinishedAt instead.
-//
-//go:fix inline
-func (s *State) GetFinishedAt() time.Time { return s.GetStepResult().FinishedAt }
-
-// Deprecated: Use SetStepResult instead to update Status, Err, and FinishedAt atomically.
-func (s *State) SetFinishedAt(t time.Time) {
-	s.Lock()
-	defer s.Unlock()
-	s.FinishedAt = t
-}
 func (s *State) Upstreams() Set[Steper] {
 	if s.Config == nil {
 		return nil
