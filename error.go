@@ -3,7 +3,9 @@ package flow
 import (
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
+	"time"
 )
 
 // Succeed marks the current step as `Succeeded`, while still reports the error.
@@ -104,8 +106,9 @@ func StatusFromError(err error) StepStatus {
 
 // StepResult contains the status and error of a Step.
 type StepResult struct {
-	Status StepStatus
-	Err    error
+	Status     StepStatus
+	Err        error
+	FinishedAt time.Time
 }
 
 // StatusError will be printed as:
@@ -128,10 +131,35 @@ func indent(s string) string { return strings.ReplaceAll(s, "\n", "\n\t") }
 // Keys are root Steps, values are its status and error.
 type ErrWorkflow map[Steper]StepResult
 
+// sortedSteps returns ErrWorkflow keys sorted by FinishedAt ascending.
+// Steps with zero FinishedAt (never ran) sort last.
+// Tie-break: lexicographic order of String(step).
+func sortedSteps(e ErrWorkflow) []Steper {
+	steps := make([]Steper, 0, len(e))
+	for step := range e {
+		steps = append(steps, step)
+	}
+	sort.Slice(steps, func(i, j int) bool {
+		ti := e[steps[i]].FinishedAt
+		tj := e[steps[j]].FinishedAt
+		zeroI := ti.IsZero()
+		zeroJ := tj.IsZero()
+		if zeroI != zeroJ {
+			return !zeroI // non-zero before zero
+		}
+		if !ti.Equal(tj) {
+			return ti.Before(tj)
+		}
+		return String(steps[i]) < String(steps[j])
+	})
+	return steps
+}
+
 func (e ErrWorkflow) Unwrap() []error {
+	steps := sortedSteps(e)
 	rv := make([]error, 0, len(e))
-	for _, sErr := range e {
-		rv = append(rv, sErr.Err)
+	for _, step := range steps {
+		rv = append(rv, e[step].Err)
 	}
 	return rv
 }
@@ -142,9 +170,9 @@ func (e ErrWorkflow) Unwrap() []error {
 //		error message
 func (e ErrWorkflow) Error() string {
 	var builder strings.Builder
-	for step, serr := range e {
-		builder.WriteString(fmt.Sprintf("%s: ", String(step)))
-		builder.WriteString(fmt.Sprintln(serr.Error()))
+	for _, step := range sortedSteps(e) {
+		fmt.Fprintf(&builder, "%s: ", String(step))
+		fmt.Fprintln(&builder, e[step].Error())
 	}
 	return builder.String()
 }
