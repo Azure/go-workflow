@@ -169,3 +169,15 @@ a named synchronization point or placeholder in a DAG.
 #### Scenario: NoOp always succeeds
 - **WHEN** a `NoOp` Step is executed
 - **THEN** it returns `nil` and transitions to `Succeeded`
+
+---
+
+### Requirement: Workflow tree rendering
+
+`workflow.String()` (or its equivalent) SHALL render the DAG as an indented tree for
+human-readable debugging, showing each root Step, its direct upstreams (dependencies),
+and recursing into sub-workflows.
+
+#### Scenario: Tree string output
+- **WHEN** `fmt.Sprint(workflow)` (or equivalent) is called on a Workflow with Steps
+- **THEN** the output contains the names of all added Steps

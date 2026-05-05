@@ -148,6 +148,31 @@ func TestIf(t *testing.T) {
 			assert.Equal(t, flow.Skipped, w.StateOf(m.Else).Status)
 		}
 	})
+	t.Run("re-run with Reset produces opposite branch result", func(t *testing.T) {
+		var checkResult bool
+		var target flow.Steper = flow.Func("target", func(ctx context.Context) error { return nil })
+		thenStep := flow.Func("then", func(ctx context.Context) error { return nil })
+		elseStep := flow.Func("else", func(ctx context.Context) error { return nil })
+
+		w := new(flow.Workflow).Add(
+			flow.If(target, func(ctx context.Context, s flow.Steper) (bool, error) {
+				return checkResult, nil
+			}).Then(thenStep).Else(elseStep),
+		)
+
+		// First run: check returns false → Else executes, Then is Skipped
+		checkResult = false
+		assert.NoError(t, w.Do(context.Background()))
+		assert.Equal(t, flow.Skipped, w.StateOf(thenStep).Status)
+		assert.Equal(t, flow.Succeeded, w.StateOf(elseStep).Status)
+
+		// Reset and re-run: check returns true → Then executes, Else is Skipped
+		assert.NoError(t, w.Reset())
+		checkResult = true
+		assert.NoError(t, w.Do(context.Background()))
+		assert.Equal(t, flow.Succeeded, w.StateOf(thenStep).Status)
+		assert.Equal(t, flow.Skipped, w.StateOf(elseStep).Status)
+	})
 }
 
 func TestSwitch(t *testing.T) {

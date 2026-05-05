@@ -8,6 +8,22 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// resetBuildStep is a spy Step that records whether Reset and BuildStep are called,
+// and in which order.
+type resetBuildStep struct {
+	calls []string
+}
+
+func (r *resetBuildStep) Do(ctx context.Context) error { return nil }
+
+func (r *resetBuildStep) Reset() {
+	r.calls = append(r.calls, "Reset")
+}
+
+func (r *resetBuildStep) BuildStep() {
+	r.calls = append(r.calls, "BuildStep")
+}
+
 type wrappedStep struct{ Steper }
 type multiStep struct{ steps []Steper }
 
@@ -125,4 +141,12 @@ func TestString(t *testing.T) {
 	assert.Equal(t, "A", String(A))
 	assert.Contains(t, String(ab), "*flow.multiStep")
 	assert.Contains(t, String(ab), " {\n\ta\n\tb\n}")
+}
+
+func TestBuildStep(t *testing.T) {
+	t.Run("Reset called before BuildStep", func(t *testing.T) {
+		s := &resetBuildStep{}
+		_ = new(Workflow).Add(Step(s))
+		assert.Equal(t, []string{"Reset", "BuildStep"}, s.calls)
+	})
 }
