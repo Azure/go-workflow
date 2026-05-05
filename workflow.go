@@ -244,7 +244,7 @@ func (w *Workflow) Reset() error {
 
 func (w *Workflow) reset() {
 	for _, state := range w.steps {
-		state.SetStatus(Pending)
+		state.SetStepResult(StepResult{Status: Pending})
 	}
 	if w.Clock == nil {
 		w.Clock = clock.New()
@@ -355,7 +355,7 @@ func (w *Workflow) preflight() error {
 	}
 	// reset all Steps' status to Pending
 	for _, step := range w.steps {
-		step.SetStatus(Pending)
+		step.SetStepResult(StepResult{Status: Pending})
 	}
 	return nil
 }
@@ -384,8 +384,10 @@ func (w *Workflow) tick(ctx context.Context) bool {
 		}
 		// if condition is evaluated to terminate
 		if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
-			state.SetFinishedAt(w.Clock.Now())
-			state.SetStatus(nextStatus)
+			state.SetStepResult(StepResult{
+				Status:     nextStatus,
+				FinishedAt: w.Clock.Now(),
+			})
 			w.waitGroup.Add(1)
 			go func() {
 				defer w.waitGroup.Done()
@@ -403,9 +405,11 @@ func (w *Workflow) tick(ctx context.Context) bool {
 				var err error
 				status := Failed
 				defer func() {
-					state.SetFinishedAt(w.Clock.Now())
-					state.SetStatus(status)
-					state.SetError(err)
+					state.SetStepResult(StepResult{
+						Status:     status,
+						Err:        err,
+						FinishedAt: w.Clock.Now(),
+					})
 					// Release the lease BEFORE signalling, so that when the main
 					// loop wakes up in tick() it can immediately acquire a new lease.
 					// Previously unlease() was a separate earlier defer (LIFO), meaning

@@ -159,7 +159,9 @@ func (e ErrWorkflow) Unwrap() []error {
 	steps := sortedSteps(e)
 	rv := make([]error, 0, len(e))
 	for _, step := range steps {
-		rv = append(rv, e[step].Err)
+		if err := e[step].Err; err != nil {
+			rv = append(rv, err)
+		}
 	}
 	return rv
 }

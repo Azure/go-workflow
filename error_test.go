@@ -87,6 +87,9 @@ func TestErrWorkflowOutputOrdering(t *testing.T) {
 	posA := strings.Index(output, "A-second")
 	posB := strings.Index(output, "B-third")
 
+	require.GreaterOrEqual(t, posC, 0, "C-first not found in error output")
+	require.GreaterOrEqual(t, posA, 0, "A-second not found in error output")
+	require.GreaterOrEqual(t, posB, 0, "B-third not found in error output")
 	assert.Greater(t, posA, posC, "A-second should appear after C-first")
 	assert.Greater(t, posB, posA, "B-third should appear after A-second")
 }
@@ -118,5 +121,7 @@ func TestErrWorkflowTieBreakByName(t *testing.T) {
 	output := errW.Error()
 	posA := strings.Index(output, "A-step")
 	posZ := strings.Index(output, "Z-step")
+	require.GreaterOrEqual(t, posA, 0, "A-step not found in error output")
+	require.GreaterOrEqual(t, posZ, 0, "Z-step not found in error output")
 	assert.Less(t, posA, posZ, "A-step should appear before Z-step (tie-break by name)")
 }

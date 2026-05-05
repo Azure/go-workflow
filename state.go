@@ -51,6 +51,11 @@ func (s *State) GetStepResult() StepResult {
 	defer s.RUnlock()
 	return s.StepResult
 }
+func (s *State) SetStepResult(r StepResult) {
+	s.Lock()
+	defer s.Unlock()
+	s.StepResult = r
+}
 func (s *State) Upstreams() Set[Steper] {
 	if s.Config == nil {
 		return nil
