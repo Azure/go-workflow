@@ -2,10 +2,13 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -224,4 +227,38 @@ func TestSubWorkflow_ChildInterceptorPreserved(t *testing.T) {
 	assert.GreaterOrEqual(t, len(parentEvents), 4)
 	// Child sees inner step only = at least 2 events
 	assert.GreaterOrEqual(t, len(childEvents), 2)
+}
+
+func TestSubWorkflow_InterceptorNotDuplicatedOnRetry(t *testing.T) {
+	t.Parallel()
+
+	var count atomic.Int32
+	sink := StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
+		count.Add(1)
+		return next(ctx)
+	})
+
+	attempts := 0
+	inner := Func("inner", func(ctx context.Context) error {
+		attempts++
+		if attempts < 2 {
+			return errors.New("fail once")
+		}
+		return nil
+	})
+
+	type mySubStep struct{ SubWorkflow }
+	sub := &mySubStep{}
+	sub.Add(Step(inner).Retry(func(o *RetryOption) {
+		o.Attempts = 3
+		o.Backoff = &backoff.ZeroBackOff{}
+	}))
+
+	w := &Workflow{StepInterceptors: []StepInterceptor{sink}}
+	w.Add(Step(sub))
+	assert.NoError(t, w.Do(context.Background()))
+
+	// parent interceptor must fire exactly twice:
+	// once for the outer sub step, once for the inner step (regardless of retry count).
+	assert.Equal(t, int32(2), count.Load())
 }

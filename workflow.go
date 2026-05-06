@@ -482,6 +482,12 @@ func (ex *stepExecution) run(ctx context.Context) {
 
 func (ex *stepExecution) executeWithRetry(ctx context.Context) error {
 	option := ex.state.Option()
+
+	// Propagate interceptors to SubWorkflow once — before the retry loop starts.
+	if recv, ok := ex.step.(InterceptorReceiver); ok {
+		recv.PrependInterceptors(ex.w.StepInterceptors, ex.w.AttemptInterceptors)
+	}
+
 	ex.wireNotify(option)
 
 	attemptChain := ex.buildAttemptChain()
@@ -519,10 +525,6 @@ func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 func (ex *stepExecution) runAttempt(ctx context.Context) error {
 	defer func() { ex.attempt++ }()
 
-	if recv, ok := ex.step.(InterceptorReceiver); ok {
-		recv.PrependInterceptors(ex.w.StepInterceptors, ex.w.AttemptInterceptors)
-	}
-
 	do := func(fn func() error) error { return fn() }
 	if ex.w.DontPanic {
 		do = catchPanicAsError
@@ -546,6 +548,8 @@ func (ex *stepExecution) wireNotify(option *StepOption) {
 	if option == nil || option.RetryOption == nil {
 		return
 	}
+	// option is a fresh copy from State.Option() each run — safe to mutate.
+	// State.Option() allocates new StepOption and RetryOption on every call.
 	userNotify := option.RetryOption.Notify
 	option.RetryOption.Notify = func(err error, d time.Duration) {
 		// ex.attempt has already been incremented by runAttempt's defer,
