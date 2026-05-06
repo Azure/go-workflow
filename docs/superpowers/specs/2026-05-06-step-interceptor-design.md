@@ -144,6 +144,10 @@ type Workflow struct {
     // AttemptInterceptors are called once per attempt, inside the retry loop.
     // Executed in order: [0] is outermost, [len-1] is innermost.
     AttemptInterceptors []AttemptInterceptor
+
+    // IsolateInterceptors disables inheriting interceptors from a parent workflow.
+    // When true, PrependInterceptors is a no-op for this workflow.
+    IsolateInterceptors bool
 }
 ```
 
@@ -181,8 +185,12 @@ w := &flow.Workflow{
 
 ## SubWorkflow Propagation
 
-`SubWorkflow` implements `InterceptorReceiver`. Once in `executeWithRetry` (before the retry loop),
-`stepExecution` injects the parent's interceptors into the child workflow:
+`Workflow` itself implements `InterceptorReceiver` via `PrependInterceptors`, so any nested
+workflow — whether embedded via `SubWorkflow` or used directly as a step — inherits its parent's
+interceptors. `SubWorkflow.PrependInterceptors` simply delegates to the inner `Workflow`.
+
+Once in `executeWithRetry` (before the retry loop), `stepExecution` injects the parent's
+interceptors into the child:
 
 ```go
 if recv, ok := ex.step.(InterceptorReceiver); ok {
@@ -194,10 +202,23 @@ if recv, ok := ex.step.(InterceptorReceiver); ok {
 prepended without aliasing the parent's backing array and without accumulating across `Reset()`
 cycles.
 
-Execution stack for inner steps:
+### Opting out: `IsolateInterceptors`
+
+Set `Workflow.IsolateInterceptors = true` on a child to disable inheritance. `PrependInterceptors`
+becomes a no-op and the child runs with only its own interceptor stack. Useful when the child
+defines a self-contained observability pipeline (e.g., its own tracer / event sink) that must
+not be wrapped by the parent.
+
+Execution stack for inner steps (default, inheritance enabled):
 
 ```
 [parent StepInterceptors] → [child StepInterceptors] → retry → [parent AttemptInterceptors] → [child AttemptInterceptors] → Before → Do → After
+```
+
+With `IsolateInterceptors = true`:
+
+```
+[child StepInterceptors] → retry → [child AttemptInterceptors] → Before → Do → After
 ```
 
 ---
@@ -227,7 +248,7 @@ queryable via `workflow.StateOf(step).GetStatus()`.
 |------|--------|
 | `workflow.go` | Add `StepInterceptors`, `AttemptInterceptors` fields; simplify `tick()`; add `stepExecution` |
 | `interceptor.go` | New file: interceptor interfaces, info types, func adapters, `InterceptorReceiver` |
-| `wrap.go` | `SubWorkflow` implements `InterceptorReceiver` |
+| `wrap.go` | `SubWorkflow.PrependInterceptors` delegates to embedded `Workflow.PrependInterceptors` |
 
 ---
 

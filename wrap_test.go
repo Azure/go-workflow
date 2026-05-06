@@ -256,3 +256,63 @@ func TestSubWorkflow_InterceptorNotDuplicatedOnRetry(t *testing.T) {
 	// once for the outer sub step, once for the inner step (regardless of retry count).
 	assert.Equal(t, int32(2), count.Load())
 }
+
+func TestWorkflow_AsStep_InheritsInterceptors(t *testing.T) {
+	t.Parallel()
+
+	var stepped []Steper
+	mu := sync.Mutex{}
+	ic := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		mu.Lock()
+		stepped = append(stepped, s)
+		mu.Unlock()
+		return next(ctx)
+	})
+
+	innerStep := NoOp("inner")
+	child := &Workflow{}
+	child.Add(Step(innerStep))
+
+	parent := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	parent.Add(Step(child))
+	assert.NoError(t, parent.Do(context.Background()))
+
+	// parent's interceptor should see both the child workflow step and the inner step
+	found := false
+	for _, s := range stepped {
+		if s == innerStep {
+			found = true
+		}
+	}
+	assert.True(t, found, "parent interceptor should see inner step via Workflow.PrependInterceptors")
+}
+
+func TestSubWorkflow_IsolateInterceptors(t *testing.T) {
+	t.Parallel()
+
+	var parentCount, childCount atomic.Int32
+	parentIC := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		parentCount.Add(1)
+		return next(ctx)
+	})
+	childIC := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		childCount.Add(1)
+		return next(ctx)
+	})
+
+	innerStep := NoOp("inner")
+	type mySubStep struct{ SubWorkflow }
+	sub := &mySubStep{}
+	sub.Add(Step(innerStep))
+	sub.w.StepInterceptors = []StepInterceptor{childIC}
+	sub.w.IsolateInterceptors = true
+
+	w := &Workflow{StepInterceptors: []StepInterceptor{parentIC}}
+	w.Add(Step(sub))
+	assert.NoError(t, w.Do(context.Background()))
+
+	// parent only sees the outer sub step (1), not the inner step (since isolated)
+	assert.Equal(t, int32(1), parentCount.Load())
+	// child only sees the inner step
+	assert.Equal(t, int32(1), childCount.Load())
+}

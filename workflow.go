@@ -46,6 +46,7 @@ type Workflow struct {
 
 	StepInterceptors    []StepInterceptor    // per-step global interceptors
 	AttemptInterceptors []AttemptInterceptor // per-attempt global interceptors
+	IsolateInterceptors bool                 // if true, do not inherit interceptors from a parent workflow
 
 	StepBuilder // StepBuilder to call BuildStep() for Steps
 
@@ -259,6 +260,25 @@ func (w *Workflow) reset() {
 		// and remove the lease from the bucket when it's done.
 		w.leaseBucket = make(chan struct{}, w.MaxConcurrency)
 	}
+}
+
+// PrependInterceptors implements InterceptorReceiver on Workflow itself,
+// so a Workflow used directly as a step (or embedded via SubWorkflow) can
+// inherit interceptors from its parent. If IsolateInterceptors is true,
+// the call is a no-op and the workflow uses only its own interceptors.
+func (w *Workflow) PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor) {
+	if w.IsolateInterceptors {
+		return
+	}
+	combined := make([]StepInterceptor, len(step)+len(w.StepInterceptors))
+	copy(combined, step)
+	copy(combined[len(step):], w.StepInterceptors)
+	w.StepInterceptors = combined
+
+	combinedA := make([]AttemptInterceptor, len(attempt)+len(w.AttemptInterceptors))
+	copy(combinedA, attempt)
+	copy(combinedA[len(attempt):], w.AttemptInterceptors)
+	w.AttemptInterceptors = combinedA
 }
 
 // Do starts the Step execution in topological order,
@@ -523,7 +543,6 @@ func (ex *stepExecution) runAttempt(ctx context.Context) error {
 	return do(func() error { return ex.state.After(ctxStep, ex.step, err) })
 }
 
-
 func (w *Workflow) lease() bool {
 	if w.leaseBucket == nil {
 		return true
@@ -596,16 +615,8 @@ func (s *SubWorkflow) Do(ctx context.Context) error      { return s.w.Do(ctx) }
 // Reset resets the sub-workflow to ready for BuildStep()
 func (s *SubWorkflow) Reset() { s.w = Workflow{} }
 
-// PrependInterceptors implements InterceptorReceiver.
-// Parent workflow interceptors are prepended so they execute outside child interceptors.
+// PrependInterceptors implements InterceptorReceiver by delegating to the
+// embedded Workflow.
 func (s *SubWorkflow) PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor) {
-	combined := make([]StepInterceptor, len(step)+len(s.w.StepInterceptors))
-	copy(combined, step)
-	copy(combined[len(step):], s.w.StepInterceptors)
-	s.w.StepInterceptors = combined
-
-	combinedA := make([]AttemptInterceptor, len(attempt)+len(s.w.AttemptInterceptors))
-	copy(combinedA, attempt)
-	copy(combinedA[len(attempt):], s.w.AttemptInterceptors)
-	s.w.AttemptInterceptors = combinedA
+	s.w.PrependInterceptors(step, attempt)
 }
