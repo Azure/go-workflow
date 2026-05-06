@@ -44,6 +44,9 @@ type Workflow struct {
 	Clock          clock.Clock // Clock for retry and unit test
 	DefaultOption  *StepOption // DefaultOption is the default option for all Steps
 
+	StepInterceptors    []StepInterceptor    // per-step global interceptors
+	AttemptInterceptors []AttemptInterceptor // per-attempt global interceptors
+
 	StepBuilder // StepBuilder to call BuildStep() for Steps
 
 	steps map[Steper]*State // the internal states of Steps
@@ -303,6 +306,19 @@ func (w *Workflow) Do(ctx context.Context) error {
 }
 
 const scanned StepStatus = "scanned" // a private status for preflight
+
+// scheduled is a private StepStatus sentinel used by tick() to atomically
+// claim a step and prevent double-spawning. Never exposed to users.
+const scheduled StepStatus = "scheduled"
+
+type stepExecution struct {
+	w       *Workflow
+	step    Steper
+	state   *State
+	attempt uint64
+	onRetry func(WorkflowEvent)
+}
+
 func isAllUpstreamScanned(ups map[Steper]StepResult) bool {
 	for _, up := range ups {
 		if up.Status != scanned {
@@ -377,58 +393,12 @@ func (w *Workflow) tick(ctx context.Context) bool {
 		if isAnyUpstreamNotTerminated(ups) {
 			continue
 		}
-		option := state.Option()
-		cond := DefaultCondition
-		if option != nil && option.Condition != nil {
-			cond = option.Condition
-		}
-		// if condition is evaluated to terminate
-		if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
-			state.SetStatus(nextStatus)
-			w.waitGroup.Add(1)
-			go func() {
-				defer w.waitGroup.Done()
-				w.signalStatusChange() // it locks w.statusChange.L, so we need another goroutine
-			}()
-			continue
-		}
 		// kick off the Step
 		if w.lease() {
-			state.SetStatus(Running)
+			state.SetStatus(scheduled)
 			w.waitGroup.Add(1)
-			go func(ctx context.Context, step Steper, state *State) {
-				defer w.waitGroup.Done()
-
-				var err error
-				status := Failed
-				defer func() {
-					state.SetStatus(status)
-					state.SetError(err)
-					// Release the lease BEFORE signalling, so that when the main
-					// loop wakes up in tick() it can immediately acquire a new lease.
-					// Previously unlease() was a separate earlier defer (LIFO), meaning
-					// signal fired first → tick() saw a full bucket → went back to
-					// Wait() → deadlock when MaxConcurrency=1 with chained steps.
-					w.unlease()
-					w.signalStatusChange()
-				}()
-
-				err = w.runStep(ctx, step, state)
-				if err == nil {
-					status = Succeeded
-					return
-				}
-				status = StatusFromError(err)
-				if status == Failed { // do some extra checks
-					switch {
-					case
-						DefaultIsCanceled(err),
-						errors.Is(err, context.Canceled),
-						errors.Is(err, context.DeadlineExceeded):
-						status = Canceled
-					}
-				}
-			}(ctx, step, state)
+			ex := &stepExecution{w: w, step: step, state: state}
+			go ex.run(ctx)
 		}
 	}
 	return false
@@ -440,43 +410,169 @@ func (w *Workflow) signalStatusChange() {
 	w.statusChange.Signal()
 }
 
-func (w *Workflow) runStep(ctx context.Context, step Steper, state *State) error {
-	// set Step-level timeout for the Step
-	var notAfter time.Time
-	option := state.Option()
-	if option != nil && option.Timeout != nil {
-		notAfter = w.Clock.Now().Add(*option.Timeout)
-		var cancel func()
-		ctx, cancel = w.Clock.WithDeadline(ctx, notAfter)
-		defer cancel()
+func (ex *stepExecution) run(ctx context.Context) {
+	defer ex.w.waitGroup.Done()
+
+	ups := ex.w.UpstreamOf(ex.step)
+	option := ex.state.Option()
+	cond := DefaultCondition
+	if option != nil && option.Condition != nil {
+		cond = option.Condition
 	}
-	// run the Step with or without retry
-	do := w.makeDoForStep(step, state)
-	return w.retry(option.RetryOption)(ctx, do, notAfter)
+
+	terminalReason := Pending
+	if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
+		terminalReason = nextStatus
+	}
+
+	info := StepInfo{Step: ex.step, TerminalReason: terminalReason}
+
+	// Build StepInterceptor chain; collect retryNotifiers.
+	// The innermost next is executeWithRetry for normal steps; a no-op for terminal steps
+	// (interceptors that observe terminalReason should not call next).
+	var retrySinks []func(WorkflowEvent)
+	var stepNext func(context.Context) error
+	if terminalReason == Pending {
+		stepNext = ex.executeWithRetry
+	} else {
+		stepNext = func(ctx context.Context) error { return nil }
+	}
+	for i := len(ex.w.StepInterceptors) - 1; i >= 0; i-- {
+		ic := ex.w.StepInterceptors[i]
+		if rn, ok := ic.(retryNotifier); ok {
+			retrySinks = append(retrySinks, rn.onRetry)
+		}
+		next := stepNext
+		icLocal := ic
+		stepNext = func(ctx context.Context) error {
+			return icLocal.InterceptStep(ctx, info, next)
+		}
+	}
+	ex.onRetry = func(e WorkflowEvent) {
+		for _, s := range retrySinks {
+			s(e)
+		}
+	}
+
+	var status StepStatus
+	var err error
+
+	if terminalReason != Pending {
+		err = stepNext(ctx)
+		status = terminalReason
+	} else {
+		ex.state.SetStatus(Running)
+		err = stepNext(ctx)
+		status = statusFromError(err)
+		if status == Failed {
+			switch {
+			case DefaultIsCanceled(err),
+				errors.Is(err, context.Canceled),
+				errors.Is(err, context.DeadlineExceeded):
+				status = Canceled
+			}
+		}
+	}
+
+	ex.state.SetStatus(status)
+	ex.state.SetError(err)
+	ex.w.unlease()
+	ex.w.signalStatusChange()
 }
 
-// makeDoForStep is panic-free from Step's Do and Input.
-func (w *Workflow) makeDoForStep(step Steper, state *State) func(ctx context.Context) error {
-	return func(root context.Context) error {
-		do := func(fn func() error) error { return fn() }
-		if w.DontPanic {
-			do = catchPanicAsError
-		}
-		// call Before callbacks
-		var ctxStep context.Context
-		err := do(func() error {
-			ctxBefore, errBefore := state.Before(root, step, do) // pass do to Before to guard each Before callback
-			ctxStep = ctxBefore                                  // use the context returned by Before for the following Do
-			return errBefore
-		})
-		if err != nil {
-			err = ErrBeforeStep{err}
-		} else { // only call step.Do if all Before callbacks succeed
-			err = do(func() error { return step.Do(ctxStep) }) // step.Do will not change ctxStep
-		}
-		// call After callbacks, will use the ctxStep for After callbacks
-		return do(func() error { return state.After(ctxStep, step, err) })
+func (ex *stepExecution) executeWithRetry(ctx context.Context) error {
+	option := ex.state.Option()
+	ex.wireNotify(option)
+
+	attemptChain := ex.buildAttemptChain()
+
+	var notAfter time.Time
+	if option != nil && option.Timeout != nil {
+		notAfter = ex.w.Clock.Now().Add(*option.Timeout)
+		var cancel func()
+		ctx, cancel = ex.w.Clock.WithDeadline(ctx, notAfter)
+		defer cancel()
 	}
+
+	return ex.w.retry(option.RetryOption)(ctx, attemptChain, notAfter)
+}
+
+func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
+	chain := func(ctx context.Context) error {
+		return ex.runAttempt(ctx)
+	}
+	for i := len(ex.w.AttemptInterceptors) - 1; i >= 0; i-- {
+		ic := ex.w.AttemptInterceptors[i]
+		next := chain
+		icLocal := ic
+		chain = func(ctx context.Context) error {
+			info := AttemptInfo{
+				StepInfo: StepInfo{Step: ex.step},
+				Attempt:  ex.attempt,
+			}
+			return icLocal.InterceptAttempt(ctx, info, next)
+		}
+	}
+	return chain
+}
+
+func (ex *stepExecution) runAttempt(ctx context.Context) error {
+	defer func() { ex.attempt++ }()
+
+	if recv, ok := ex.step.(InterceptorReceiver); ok {
+		recv.PrependInterceptors(ex.w.StepInterceptors, ex.w.AttemptInterceptors)
+	}
+
+	do := func(fn func() error) error { return fn() }
+	if ex.w.DontPanic {
+		do = catchPanicAsError
+	}
+
+	var ctxStep context.Context
+	err := do(func() error {
+		ctxBefore, errBefore := ex.state.Before(ctx, ex.step, do)
+		ctxStep = ctxBefore
+		return errBefore
+	})
+	if err != nil {
+		err = ErrBeforeStep{err}
+	} else {
+		err = do(func() error { return ex.step.Do(ctxStep) })
+	}
+	return do(func() error { return ex.state.After(ctxStep, ex.step, err) })
+}
+
+func (ex *stepExecution) wireNotify(option *StepOption) {
+	if option == nil || option.RetryOption == nil {
+		return
+	}
+	userNotify := option.RetryOption.Notify
+	option.RetryOption.Notify = func(err error, d time.Duration) {
+		e := WorkflowEvent{
+			Step:            ex.step,
+			Type:            Retrying,
+			Attempt:         ex.attempt,
+			Err:             err,
+			BackoffDuration: d,
+		}
+		ex.attempt++
+		if ex.onRetry != nil {
+			ex.onRetry(e)
+		}
+		if userNotify != nil {
+			userNotify(err, d)
+		}
+	}
+}
+
+func statusFromError(err error) StepStatus {
+	if err == nil {
+		return Succeeded
+	}
+	if s := StatusFromError(err); s != Failed {
+		return s
+	}
+	return Failed
 }
 
 func (w *Workflow) lease() bool {

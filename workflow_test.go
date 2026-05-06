@@ -2,12 +2,14 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -302,4 +304,120 @@ func TestMaxConcurrencyDeadlockStress(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestStepExecution_BasicSuccess(t *testing.T) {
+	t.Parallel()
+	var events []WorkflowEvent
+	step := NoOp("a")
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{
+			NewStepEventSink(func(e WorkflowEvent) { events = append(events, e) }),
+		},
+	}
+	w.Add(Step(step))
+	err := w.Do(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, []EventType{Scheduled, Succeeded}, eventTypes(events))
+}
+
+func TestStepExecution_StepInterceptorOrder(t *testing.T) {
+	t.Parallel()
+	var order []string
+	makeIC := func(name string) StepInterceptor {
+		return StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
+			order = append(order, name+":before")
+			err := next(ctx)
+			order = append(order, name+":after")
+			return err
+		})
+	}
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{makeIC("A"), makeIC("B")},
+	}
+	w.Add(Step(NoOp("s")))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []string{"A:before", "B:before", "B:after", "A:after"}, order)
+}
+
+func TestStepExecution_AttemptInterceptorOrder(t *testing.T) {
+	t.Parallel()
+	var order []string
+	makeIC := func(name string) AttemptInterceptor {
+		return AttemptInterceptorFunc(func(ctx context.Context, info AttemptInfo, next func(context.Context) error) error {
+			order = append(order, name+":before")
+			err := next(ctx)
+			order = append(order, name+":after")
+			return err
+		})
+	}
+	w := &Workflow{
+		AttemptInterceptors: []AttemptInterceptor{makeIC("X"), makeIC("Y")},
+	}
+	w.Add(Step(NoOp("s")))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []string{"X:before", "Y:before", "Y:after", "X:after"}, order)
+}
+
+func TestStepExecution_SkippedStep(t *testing.T) {
+	t.Parallel()
+	var events []WorkflowEvent
+	step := NoOp("a")
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{
+			NewStepEventSink(func(e WorkflowEvent) { events = append(events, e) }),
+		},
+	}
+	w.Add(Step(step).When(func(_ context.Context, _ map[Steper]StepResult) StepStatus {
+		return Skipped
+	}))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []EventType{Scheduled, Skipped}, eventTypes(events))
+}
+
+func TestStepExecution_RetryingEvent(t *testing.T) {
+	t.Parallel()
+	var events []WorkflowEvent
+	mu := sync.Mutex{}
+	record := func(e WorkflowEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}
+	boom := errors.New("boom")
+	attempts := 0
+	step := Func("s", func(ctx context.Context) error {
+		attempts++
+		if attempts < 3 {
+			return boom
+		}
+		return nil
+	})
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{
+			NewStepEventSink(record),
+		},
+		AttemptInterceptors: []AttemptInterceptor{
+			NewAttemptEventSink(record),
+		},
+	}
+	w.Add(Step(step).Retry(func(o *RetryOption) {
+		o.Attempts = 3
+		o.Backoff = &backoff.ZeroBackOff{}
+	}))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []EventType{
+		Scheduled,
+		Started, Retrying,
+		Started, Retrying,
+		Started, Succeeded,
+	}, eventTypes(events))
+}
+
+func eventTypes(events []WorkflowEvent) []EventType {
+	types := make([]EventType, len(events))
+	for i, e := range events {
+		types[i] = e.Type
+	}
+	return types
 }
