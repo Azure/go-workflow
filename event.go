@@ -70,8 +70,8 @@ func (f AttemptInterceptorFunc) InterceptAttempt(ctx context.Context, info Attem
 }
 
 // InterceptorReceiver is implemented by steps that contain a sub-workflow.
-// stepExecution calls PrependInterceptors before each attempt so that
-// parent interceptors wrap child interceptors.
+// stepExecution calls PrependInterceptors once (in executeWithRetry, before the retry loop)
+// so that parent interceptors wrap child interceptors for the entire step lifetime.
 type InterceptorReceiver interface {
 	PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor)
 }

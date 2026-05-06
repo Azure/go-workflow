@@ -519,12 +519,16 @@ func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 			return icLocal.InterceptAttempt(ctx, info, next)
 		}
 	}
-	return chain
+	// Wrap the full attempt chain (including interceptors) so ex.attempt is always
+	// incremented after each attempt regardless of whether interceptors short-circuit.
+	inner := chain
+	return func(ctx context.Context) error {
+		defer func() { ex.attempt++ }()
+		return inner(ctx)
+	}
 }
 
 func (ex *stepExecution) runAttempt(ctx context.Context) error {
-	defer func() { ex.attempt++ }()
-
 	do := func(fn func() error) error { return fn() }
 	if ex.w.DontPanic {
 		do = catchPanicAsError
@@ -548,12 +552,17 @@ func (ex *stepExecution) wireNotify(option *StepOption) {
 	if option == nil || option.RetryOption == nil {
 		return
 	}
-	// option is a fresh copy from State.Option() each run — safe to mutate.
-	// State.Option() allocates new StepOption and RetryOption on every call.
+	// Deep-copy RetryOption before mutating its Notify field.
+	// option is a fresh StepOption from State.Option(), but its RetryOption pointer
+	// may be shared (e.g. when Workflow.DefaultOption carries a RetryOption) — a
+	// shallow copy of StepOption does not copy the pointed-to RetryOption.
+	ro := *option.RetryOption
+	option.RetryOption = &ro
+
 	userNotify := option.RetryOption.Notify
 	option.RetryOption.Notify = func(err error, d time.Duration) {
-		// ex.attempt has already been incremented by runAttempt's defer,
-		// so subtract 1 to get the attempt number that just failed.
+		// ex.attempt has already been incremented by the buildAttemptChain wrapper's
+		// defer, so subtract 1 to get the attempt number that just failed.
 		e := WorkflowEvent{
 			Step:            ex.step,
 			Type:            Retrying,
@@ -655,6 +664,13 @@ func (s *SubWorkflow) Reset() { s.w = Workflow{} }
 // PrependInterceptors implements InterceptorReceiver.
 // Parent workflow interceptors are prepended so they execute outside child interceptors.
 func (s *SubWorkflow) PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor) {
-	s.w.StepInterceptors = append(step, s.w.StepInterceptors...)
-	s.w.AttemptInterceptors = append(attempt, s.w.AttemptInterceptors...)
+	combined := make([]StepInterceptor, len(step)+len(s.w.StepInterceptors))
+	copy(combined, step)
+	copy(combined[len(step):], s.w.StepInterceptors)
+	s.w.StepInterceptors = combined
+
+	combinedA := make([]AttemptInterceptor, len(attempt)+len(s.w.AttemptInterceptors))
+	copy(combinedA, attempt)
+	copy(combinedA[len(attempt):], s.w.AttemptInterceptors)
+	s.w.AttemptInterceptors = combinedA
 }
