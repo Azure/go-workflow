@@ -178,10 +178,10 @@ type StepInfo struct {
 }
 
 // AttemptInfo is passed to AttemptInterceptor.
+// Interceptors that need timing should record time.Now() at the top of InterceptAttempt.
 type AttemptInfo struct {
     StepInfo
     Attempt uint64
-    Start   time.Time
 }
 
 // EventType identifies a step lifecycle event.
