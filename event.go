@@ -6,15 +6,16 @@ import (
 )
 
 // EventType identifies a step lifecycle event.
-// It reuses the same underlying type as StepStatus so that StepStatus constants
-// (Succeeded, Failed, Canceled, Skipped) are directly usable as EventType values.
-type EventType = StepStatus
+type EventType string
 
 const (
-	Scheduled EventType = "Scheduled"
-	Started   EventType = "Started"
-	Retrying  EventType = "Retrying"
-	// Succeeded, Failed, Canceled, Skipped are inherited from StepStatus in condition.go
+	Scheduled      EventType = "Scheduled"
+	Started        EventType = "Started"
+	Retrying       EventType = "Retrying"
+	EventSucceeded EventType = "Succeeded"
+	EventFailed    EventType = "Failed"
+	EventCanceled  EventType = "Canceled"
+	EventSkipped   EventType = "Skipped"
 )
 
 // WorkflowEvent carries information about a step lifecycle event.
@@ -85,15 +86,31 @@ type retryNotifier interface {
 // terminalEventType maps an error to the corresponding terminal EventType.
 func terminalEventType(err error) EventType {
 	if err == nil {
-		return Succeeded
+		return EventSucceeded
 	}
 	switch StatusFromError(err) {
 	case Canceled:
-		return Canceled
+		return EventCanceled
 	case Skipped:
-		return Skipped
+		return EventSkipped
 	default:
-		return Failed
+		return EventFailed
+	}
+}
+
+// terminalStepStatusToEventType converts a terminal StepStatus to its EventType counterpart.
+func terminalStepStatusToEventType(s StepStatus) EventType {
+	switch s {
+	case Succeeded:
+		return EventSucceeded
+	case Failed:
+		return EventFailed
+	case Canceled:
+		return EventCanceled
+	case Skipped:
+		return EventSkipped
+	default:
+		return EventFailed
 	}
 }
 
@@ -112,7 +129,7 @@ func (s *stepEventSink) InterceptStep(ctx context.Context, info StepInfo, next f
 	s.sink(WorkflowEvent{Step: info.Step, Type: Scheduled})
 
 	if info.TerminalReason != Pending {
-		s.sink(WorkflowEvent{Step: info.Step, Type: info.TerminalReason})
+		s.sink(WorkflowEvent{Step: info.Step, Type: terminalStepStatusToEventType(info.TerminalReason)})
 		return nil
 	}
 

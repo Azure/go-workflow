@@ -182,7 +182,7 @@ func TestSubWorkflow_InterceptorPropagation(t *testing.T) {
 	// At least 4 events: Scheduled+Succeeded for sub, Scheduled+Succeeded for innerStep
 	assert.GreaterOrEqual(t, len(events), 4)
 	assert.Contains(t, types, Scheduled)
-	assert.Contains(t, types, Succeeded)
+	assert.Contains(t, types, EventSucceeded)
 	for _, e := range events {
 		assert.NotNil(t, e.Step)
 	}

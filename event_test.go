@@ -11,7 +11,7 @@ import (
 
 func TestEventTypeConstants(t *testing.T) {
 	// Verify all constants exist and are distinct
-	types := []EventType{Scheduled, Started, Retrying, Succeeded, Failed, Canceled, Skipped}
+	types := []EventType{Scheduled, Started, Retrying, EventSucceeded, EventFailed, EventCanceled, EventSkipped}
 	seen := map[EventType]bool{}
 	for _, et := range types {
 		assert.False(t, seen[et], "duplicate EventType: %q", et)
@@ -53,7 +53,7 @@ func TestNewStepEventSink_SucceededStep(t *testing.T) {
 	assert.Len(t, events, 2)
 	assert.Equal(t, Scheduled, events[0].Type)
 	assert.Equal(t, step, events[0].Step)
-	assert.Equal(t, Succeeded, events[1].Type)
+	assert.Equal(t, EventSucceeded, events[1].Type)
 	assert.NotZero(t, events[1].Duration)
 }
 
@@ -71,7 +71,7 @@ func TestNewStepEventSink_FailedStep(t *testing.T) {
 	assert.Equal(t, boom, err)
 	assert.Len(t, events, 2)
 	assert.Equal(t, Scheduled, events[0].Type)
-	assert.Equal(t, Failed, events[1].Type)
+	assert.Equal(t, EventFailed, events[1].Type)
 	assert.Equal(t, boom, events[1].Err)
 }
 
@@ -91,7 +91,7 @@ func TestNewStepEventSink_SkippedStep(t *testing.T) {
 	assert.False(t, nextCalled, "next must not be called for Skipped")
 	assert.Len(t, events, 2)
 	assert.Equal(t, Scheduled, events[0].Type)
-	assert.Equal(t, Skipped, events[1].Type)
+	assert.Equal(t, EventSkipped, events[1].Type)
 }
 
 func TestNewStepEventSink_OnRetry(t *testing.T) {

@@ -318,7 +318,7 @@ func TestStepExecution_BasicSuccess(t *testing.T) {
 	w.Add(Step(step))
 	err := w.Do(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, []EventType{Scheduled, Succeeded}, eventTypes(events))
+	assert.Equal(t, []EventType{Scheduled, EventSucceeded}, eventTypes(events))
 }
 
 func TestStepExecution_StepInterceptorOrder(t *testing.T) {
@@ -372,7 +372,7 @@ func TestStepExecution_SkippedStep(t *testing.T) {
 		return Skipped
 	}))
 	assert.NoError(t, w.Do(context.Background()))
-	assert.Equal(t, []EventType{Scheduled, Skipped}, eventTypes(events))
+	assert.Equal(t, []EventType{Scheduled, EventSkipped}, eventTypes(events))
 }
 
 func TestStepExecution_RetryingEvent(t *testing.T) {
@@ -410,7 +410,7 @@ func TestStepExecution_RetryingEvent(t *testing.T) {
 		Scheduled,
 		Started, Retrying,
 		Started, Retrying,
-		Started, Succeeded,
+		Started, EventSucceeded,
 	}, eventTypes(events))
 }
 
@@ -460,7 +460,7 @@ func TestStepExecution_RetryingEventAttemptNumbers(t *testing.T) {
 		Started,   // attempt 1
 		Retrying,  // attempt 1 failed
 		Started,   // attempt 2 succeeds
-		Succeeded,
+		EventSucceeded,
 	}, eventTypes(events))
 
 	retryingEvents := filterEvents(events, Retrying)
