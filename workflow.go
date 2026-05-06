@@ -316,7 +316,6 @@ type stepExecution struct {
 	step    Steper
 	state   *State
 	attempt uint64
-	onRetry func(WorkflowEvent)
 }
 
 func isAllUpstreamScanned(ups map[Steper]StepResult) bool {
@@ -445,22 +444,6 @@ func (ex *stepExecution) run(ctx context.Context) {
 		}
 	}
 
-	// Collect retryNotifiers from AttemptInterceptors.
-	// Retrying events fire inside RetryOption.Notify (between two next() calls),
-	// where the interceptor chain is unwound — they are delivered via a side-channel
-	// to any AttemptInterceptor that implements retryNotifier.
-	var retrySinks []func(WorkflowEvent)
-	for _, ic := range ex.w.AttemptInterceptors {
-		if rn, ok := ic.(retryNotifier); ok {
-			retrySinks = append(retrySinks, rn.onRetry)
-		}
-	}
-	ex.onRetry = func(e WorkflowEvent) {
-		for _, s := range retrySinks {
-			s(e)
-		}
-	}
-
 	var status StepStatus
 	var err error
 
@@ -499,8 +482,6 @@ func (ex *stepExecution) executeWithRetry(ctx context.Context) error {
 	if recv, ok := ex.step.(InterceptorReceiver); ok {
 		recv.PrependInterceptors(ex.w.StepInterceptors, ex.w.AttemptInterceptors)
 	}
-
-	ex.wireNotify(option)
 
 	attemptChain := ex.buildAttemptChain()
 
@@ -560,36 +541,6 @@ func (ex *stepExecution) runAttempt(ctx context.Context) error {
 	return do(func() error { return ex.state.After(ctxStep, ex.step, err) })
 }
 
-func (ex *stepExecution) wireNotify(option *StepOption) {
-	if option == nil || option.RetryOption == nil {
-		return
-	}
-	// Deep-copy RetryOption before mutating its Notify field.
-	// option is a fresh StepOption from State.Option(), but its RetryOption pointer
-	// may be shared (e.g. when Workflow.DefaultOption carries a RetryOption) — a
-	// shallow copy of StepOption does not copy the pointed-to RetryOption.
-	ro := *option.RetryOption
-	option.RetryOption = &ro
-
-	userNotify := option.RetryOption.Notify
-	option.RetryOption.Notify = func(err error, d time.Duration) {
-		// ex.attempt has already been incremented by the buildAttemptChain wrapper's
-		// defer, so subtract 1 to get the attempt number that just failed.
-		e := WorkflowEvent{
-			Step:            ex.step,
-			Type:            EventRetrying,
-			Attempt:         ex.attempt - 1,
-			Err:             err,
-			BackoffDuration: d,
-		}
-		if ex.onRetry != nil {
-			ex.onRetry(e)
-		}
-		if userNotify != nil {
-			userNotify(err, d)
-		}
-	}
-}
 
 func (w *Workflow) lease() bool {
 	if w.leaseBucket == nil {

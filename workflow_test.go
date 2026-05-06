@@ -375,7 +375,7 @@ func TestStepExecution_SkippedStep(t *testing.T) {
 	assert.Equal(t, []EventType{EventScheduled, EventSkipped}, eventTypes(events))
 }
 
-func TestStepExecution_RetryingEvent(t *testing.T) {
+func TestStepExecution_RetryingStep(t *testing.T) {
 	t.Parallel()
 	var events []WorkflowEvent
 	mu := sync.Mutex{}
@@ -394,78 +394,23 @@ func TestStepExecution_RetryingEvent(t *testing.T) {
 		return nil
 	})
 	w := &Workflow{
-		StepInterceptors: []StepInterceptor{
-			NewStepEventSink(record),
-		},
-		AttemptInterceptors: []AttemptInterceptor{
-			NewAttemptEventSink(record),
-		},
+		StepInterceptors:    []StepInterceptor{NewStepEventSink(record)},
+		AttemptInterceptors: []AttemptInterceptor{NewAttemptEventSink(record)},
 	}
 	w.Add(Step(step).Retry(func(o *RetryOption) {
 		o.Attempts = 3
 		o.Backoff = &backoff.ZeroBackOff{}
 	}))
 	assert.NoError(t, w.Do(context.Background()))
+	// StepInterceptor sees Scheduled + terminal only; AttemptInterceptor sees
+	// one EventStarted per attempt; no Retrying events are emitted.
 	assert.Equal(t, []EventType{
 		EventScheduled,
-		EventStarted, EventRetrying,
-		EventStarted, EventRetrying,
-		EventStarted, EventSucceeded,
-	}, eventTypes(events))
-}
-
-func eventTypes(events []WorkflowEvent) []EventType {
-	types := make([]EventType, len(events))
-	for i, e := range events {
-		types[i] = e.Type
-	}
-	return types
-}
-
-func TestStepExecution_RetryingEventAttemptNumbers(t *testing.T) {
-	t.Parallel()
-
-	var events []WorkflowEvent
-	mu := sync.Mutex{}
-	record := func(e WorkflowEvent) {
-		mu.Lock()
-		events = append(events, e)
-		mu.Unlock()
-	}
-
-	callCount := 0
-	step := Func("flaky", func(ctx context.Context) error {
-		callCount++
-		if callCount < 3 {
-			return errors.New("not yet")
-		}
-		return nil
-	})
-
-	w := &Workflow{
-		StepInterceptors:    []StepInterceptor{NewStepEventSink(record)},
-		AttemptInterceptors: []AttemptInterceptor{NewAttemptEventSink(record)},
-	}
-	w.Add(Step(step).Retry(func(o *RetryOption) {
-		o.Attempts = 5
-		o.Backoff = &backoff.ZeroBackOff{}
-	}))
-
-	assert.NoError(t, w.Do(context.Background()))
-
-	assert.Equal(t, []EventType{
-		EventScheduled,
-		EventStarted,   // attempt 0
-		EventRetrying,  // attempt 0 failed
-		EventStarted,   // attempt 1
-		EventRetrying,  // attempt 1 failed
-		EventStarted,   // attempt 2 succeeds
+		EventStarted, // attempt 0 (fails, retried)
+		EventStarted, // attempt 1 (fails, retried)
+		EventStarted, // attempt 2 (succeeds)
 		EventSucceeded,
 	}, eventTypes(events))
-
-	retryingEvents := filterEvents(events, EventRetrying)
-	assert.Equal(t, uint64(0), retryingEvents[0].Attempt)
-	assert.Equal(t, uint64(1), retryingEvents[1].Attempt)
 
 	startedEvents := filterEvents(events, EventStarted)
 	assert.Equal(t, uint64(0), startedEvents[0].Attempt)
@@ -481,6 +426,14 @@ func TestWorkflow_NoInterceptors_NoRegression(t *testing.T) {
 	w.Add(Step(step))
 	assert.NoError(t, w.Do(context.Background()))
 	assert.Equal(t, Succeeded, w.StateOf(step).GetStatus())
+}
+
+func eventTypes(events []WorkflowEvent) []EventType {
+	types := make([]EventType, len(events))
+	for i, e := range events {
+		types[i] = e.Type
+	}
+	return types
 }
 
 func filterEvents(events []WorkflowEvent, et EventType) []WorkflowEvent {
