@@ -25,21 +25,25 @@ func (s *State) SetStatus(ss StepStatus) {
 	defer s.Unlock()
 	s.Status = ss
 }
-func (s *State) GetError() error {
-	s.RLock()
-	defer s.RUnlock()
-	return s.Err
-}
-func (s *State) SetError(err error) {
-	s.Lock()
-	defer s.Unlock()
-	s.Err = err
-}
 func (s *State) GetStepResult() StepResult {
 	s.RLock()
 	defer s.RUnlock()
 	return s.StepResult
 }
+func (s *State) SetStepResult(r StepResult) {
+	s.Lock()
+	defer s.Unlock()
+	s.StepResult = r
+}
+
+func (s *State) GetError() error { return s.GetStepResult().Err }
+
+func (s *State) SetError(err error) {
+	s.Lock()
+	defer s.Unlock()
+	s.Err = err
+}
+
 func (s *State) Upstreams() Set[Steper] {
 	if s.Config == nil {
 		return nil

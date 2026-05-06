@@ -247,7 +247,7 @@ func (w *Workflow) Reset() error {
 
 func (w *Workflow) reset() {
 	for _, state := range w.steps {
-		state.SetStatus(Pending)
+		state.SetStepResult(StepResult{Status: Pending})
 	}
 	if w.Clock == nil {
 		w.Clock = clock.New()
@@ -371,7 +371,7 @@ func (w *Workflow) preflight() error {
 	}
 	// reset all Steps' status to Pending
 	for _, step := range w.steps {
-		step.SetStatus(Pending)
+		step.SetStepResult(StepResult{Status: Pending})
 	}
 	return nil
 }
@@ -474,8 +474,13 @@ func (ex *stepExecution) run(ctx context.Context) {
 		}
 	}
 
-	ex.state.SetStatus(status)
-	ex.state.SetError(err)
+	ex.state.SetStepResult(StepResult{
+		Status:     status,
+		Err:        err,
+		FinishedAt: ex.w.Clock.Now(),
+	})
+	// Release the lease BEFORE signalling, so that when the main loop wakes up
+	// in tick() it can immediately acquire a new lease.
 	ex.w.unlease()
 	ex.w.signalStatusChange()
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benbjohnson/clock"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -214,4 +215,17 @@ func TestConcurrentExecution(t *testing.T) {
 		assert.GreaterOrEqual(t, int(maxSeen.Load()), 2,
 			"expected at least 2 steps to run concurrently")
 	})
+}
+
+func TestStepResultFinishedAtPopulated(t *testing.T) {
+	mockClock := clock.NewMock()
+	step := Func("test-step", func(ctx context.Context) error { return nil })
+	w := &Workflow{Clock: mockClock}
+	w.Add(Step(step))
+
+	err := w.Do(context.Background())
+	assert.NoError(t, err)
+
+	result := w.StateOf(step).GetStepResult()
+	assert.False(t, result.FinishedAt.IsZero(), "FinishedAt should be set after step execution")
 }
