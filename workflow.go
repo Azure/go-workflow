@@ -427,10 +427,9 @@ func (ex *stepExecution) run(ctx context.Context) {
 
 	info := StepInfo{Step: ex.step, TerminalReason: terminalReason}
 
-	// Build StepInterceptor chain; collect retryNotifiers.
+	// Build StepInterceptor chain.
 	// The innermost next is executeWithRetry for normal steps; a no-op for terminal steps
 	// (interceptors that observe terminalReason should not call next).
-	var retrySinks []func(WorkflowEvent)
 	var stepNext func(context.Context) error
 	if terminalReason == Pending {
 		stepNext = ex.executeWithRetry
@@ -439,13 +438,21 @@ func (ex *stepExecution) run(ctx context.Context) {
 	}
 	for i := len(ex.w.StepInterceptors) - 1; i >= 0; i-- {
 		ic := ex.w.StepInterceptors[i]
-		if rn, ok := ic.(retryNotifier); ok {
-			retrySinks = append(retrySinks, rn.onRetry)
-		}
 		next := stepNext
 		icLocal := ic
 		stepNext = func(ctx context.Context) error {
 			return icLocal.InterceptStep(ctx, info, next)
+		}
+	}
+
+	// Collect retryNotifiers from AttemptInterceptors.
+	// Retrying events fire inside RetryOption.Notify (between two next() calls),
+	// where the interceptor chain is unwound — they are delivered via a side-channel
+	// to any AttemptInterceptor that implements retryNotifier.
+	var retrySinks []func(WorkflowEvent)
+	for _, ic := range ex.w.AttemptInterceptors {
+		if rn, ok := ic.(retryNotifier); ok {
+			retrySinks = append(retrySinks, rn.onRetry)
 		}
 	}
 	ex.onRetry = func(e WorkflowEvent) {

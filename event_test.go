@@ -94,12 +94,18 @@ func TestNewStepEventSink_SkippedStep(t *testing.T) {
 	assert.Equal(t, EventSkipped, events[1].Type)
 }
 
-func TestNewStepEventSink_OnRetry(t *testing.T) {
+func TestNewStepEventSink_OnRetry_NotImplemented(t *testing.T) {
+	sink := NewStepEventSink(func(e WorkflowEvent) {})
+	_, ok := sink.(retryNotifier)
+	assert.False(t, ok, "NewStepEventSink must NOT implement retryNotifier")
+}
+
+func TestNewAttemptEventSink_OnRetry(t *testing.T) {
 	var events []WorkflowEvent
-	sink := NewStepEventSink(func(e WorkflowEvent) { events = append(events, e) })
+	sink := NewAttemptEventSink(func(e WorkflowEvent) { events = append(events, e) })
 
 	rn, ok := sink.(retryNotifier)
-	assert.True(t, ok, "NewStepEventSink should implement retryNotifier")
+	assert.True(t, ok, "NewAttemptEventSink should implement retryNotifier")
 
 	boom := errors.New("boom")
 	rn.onRetry(WorkflowEvent{Type: Retrying, Attempt: 0, Err: boom, BackoffDuration: time.Second})

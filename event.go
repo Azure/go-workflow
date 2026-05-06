@@ -77,7 +77,7 @@ type InterceptorReceiver interface {
 }
 
 // retryNotifier is a package-private interface implemented by the concrete
-// type returned by NewStepEventSink. stepExecution uses it to deliver
+// type returned by NewAttemptEventSink. stepExecution uses it to deliver
 // Retrying events (which bypass the interceptor chain) to the sink.
 type retryNotifier interface {
 	onRetry(WorkflowEvent)
@@ -121,6 +121,7 @@ type stepEventSink struct {
 
 // NewStepEventSink returns a StepInterceptor that emits Scheduled then a terminal
 // event (Succeeded/Failed/Canceled/Skipped) for every step.
+// It is not aware of individual retry attempts; use NewAttemptEventSink for that.
 func NewStepEventSink(sink func(WorkflowEvent)) StepInterceptor {
 	return &stepEventSink{sink: sink}
 }
@@ -144,17 +145,27 @@ func (s *stepEventSink) InterceptStep(ctx context.Context, info StepInfo, next f
 	return err
 }
 
-func (s *stepEventSink) onRetry(e WorkflowEvent) { s.sink(e) }
+// attemptEventSink is the concrete type returned by NewAttemptEventSink.
+// It implements both AttemptInterceptor and retryNotifier so that Started and
+// Retrying events are delivered to the same sink function.
+type attemptEventSink struct {
+	sink func(WorkflowEvent)
+}
 
 // NewAttemptEventSink returns an AttemptInterceptor that emits a Started event
-// for each attempt.
+// for each attempt and a Retrying event after each failed attempt (before backoff).
+// Retrying carries the failure error and the backoff duration.
 func NewAttemptEventSink(sink func(WorkflowEvent)) AttemptInterceptor {
-	return AttemptInterceptorFunc(func(ctx context.Context, info AttemptInfo, next func(context.Context) error) error {
-		sink(WorkflowEvent{
-			Step:    info.Step,
-			Type:    Started,
-			Attempt: info.Attempt,
-		})
-		return next(ctx)
-	})
+	return &attemptEventSink{sink: sink}
 }
+
+func (s *attemptEventSink) InterceptAttempt(ctx context.Context, info AttemptInfo, next func(context.Context) error) error {
+	s.sink(WorkflowEvent{
+		Step:    info.Step,
+		Type:    Started,
+		Attempt: info.Attempt,
+	})
+	return next(ctx)
+}
+
+func (s *attemptEventSink) onRetry(e WorkflowEvent) { s.sink(e) }
