@@ -17,7 +17,7 @@ done? How long did step Y take? None of these are answerable today without bespo
 
 This design introduces a two-layer interceptor system that:
 - Provides global, structured observability across all steps
-- Subsumes and extends `BeforeStep`/`AfterStep` without replacing them
+- Is orthogonal to `BeforeStep`/`AfterStep` — they serve different scopes and both are preserved
 - Propagates automatically into nested `SubWorkflow`s
 - Ships with built-in `EventSink` adapters for slog, OTel, Prometheus
 
@@ -90,9 +90,11 @@ OTel spans (one span per step, not per attempt) and step-level metrics.
 attempt, including retried ones. It is the right place for per-attempt logging and attempt-level
 tracing.
 
-**BeforeStep/AfterStep** (existing) remain unchanged. They are implicitly the innermost layer of
-the AttemptInterceptor stack — always present, always closest to `Do`. Users do not need to
-change how they use them.
+**BeforeStep/AfterStep** (existing) are a different mechanism from Interceptors. Interceptors are
+workflow-level and apply globally to all steps. BeforeStep/AfterStep are step-level and are
+configured per-step via `StepConfig`. They are orthogonal: in the execution stack, Interceptors
+execute on the outside, BeforeStep/AfterStep execute on the inside — but conceptually they belong
+to different layers of the system and serve different purposes. Users configure them independently.
 
 ### stepExecution (internal)
 
@@ -101,12 +103,11 @@ the full step lifecycle:
 
 ```go
 type stepExecution struct {
-    w       *Workflow
-    step    Steper
-    state   *State
-    name    string   // precomputed flow.String(step)
-    attempt uint64   // single source of truth for attempt count
-    onRetry func(WorkflowEvent) // assembled during chain build
+    w        *Workflow
+    step     Steper
+    state    *State
+    attempt  uint64        // single source of truth for attempt count
+    onRetry  func(WorkflowEvent) // assembled during chain build
 }
 ```
 
@@ -166,9 +167,13 @@ type StepInterceptorFunc func(ctx context.Context, info StepInfo, next func(ctx 
 type AttemptInterceptorFunc func(ctx context.Context, info AttemptInfo, next func(ctx context.Context) error) error
 
 // StepInfo is passed to StepInterceptor.
+// Step is the canonical identifier — it is the same pointer used as the map key
+// in Workflow, stable for the lifetime of the workflow definition.
+// Callers that need a human-readable name can call flow.String(info.Step).
+// No name is precomputed by the framework; different sinks may have different
+// naming preferences (short name, fully-qualified type, etc.).
 type StepInfo struct {
     Step           Steper
-    Name           string     // precomputed flow.String(step)
     TerminalReason StepStatus // Pending = will execute; Skipped/Canceled = will not execute
 }
 
@@ -195,7 +200,6 @@ const (
 // WorkflowEvent carries information about a step lifecycle event.
 type WorkflowEvent struct {
     Step            Steper
-    Name            string
     Type            EventType
     Attempt         uint64
     Err             error
@@ -232,8 +236,10 @@ type Workflow struct {
 ```go
 // NewStepEventSink returns a StepInterceptor that emits Scheduled, Succeeded,
 // Failed, Canceled, Skipped, and Retrying events to sink.
-// It also implements onRetry so Retrying events (from wireNotify) reach sink.
-func NewStepEventSink(sink func(WorkflowEvent)) *StepEventSinkInterceptor
+// The returned value also implements a package-private retryNotifier interface
+// so that stepExecution can deliver Retrying events (which bypass the chain) to sink.
+// This implementation detail is not visible to callers.
+func NewStepEventSink(sink func(WorkflowEvent)) StepInterceptor
 
 // NewAttemptEventSink returns an AttemptInterceptor that emits Started events to sink.
 func NewAttemptEventSink(sink func(WorkflowEvent)) AttemptInterceptor
@@ -247,7 +253,7 @@ w := &flow.Workflow{
     StepInterceptors: []flow.StepInterceptor{
         flow.NewStepEventSink(func(e flow.WorkflowEvent) {
             slog.Info("step event",
-                "step", e.Name, "type", e.Type,
+                "step", flow.String(e.Step), "type", e.Type,
                 "attempt", e.Attempt, "err", e.Err, "duration", e.Duration,
             )
         }),
@@ -312,6 +318,10 @@ from any `*StepEventSinkInterceptor` in `StepInterceptors`.
 attempt N fails → backoff.Notify fires → ex.onRetry(Retrying{attempt=N}) → ex.attempt++
 ```
 
+`ex.onRetry` is assembled during chain construction by collecting the package-private `retryNotifier`
+interface from any interceptor in `StepInterceptors` that implements it. The concrete type returned
+by `NewStepEventSink` implements this interface; custom interceptors do not need to.
+
 This keeps `Retrying` aligned with the same `attempt` counter used by `AttemptInfo`.
 
 ---
@@ -349,7 +359,6 @@ Custom interceptors that call `next` when `TerminalReason != Pending` will cause
 | `step.go` | Add interceptor interfaces, info types, `InterceptorReceiver` |
 | `event.go` | New file: `EventType`, `WorkflowEvent`, `NewStepEventSink`, `NewAttemptEventSink` |
 | `wrap.go` | `SubWorkflow` implements `InterceptorReceiver` |
-| `retry.go` | Minor: expose `attempt` increment so `stepExecution` can own it |
 
 ---
 
@@ -363,7 +372,10 @@ None. All questions from the brainstorm have been resolved:
 | Per-step vs per-attempt | Both layers; different use cases |
 | Skipped/Canceled visibility | Enter StepInterceptor chain via TerminalReason |
 | SubWorkflow propagation | PrependInterceptors on InterceptorReceiver |
-| Retrying event delivery | wireNotify + onRetry, bypasses chain by design |
+| Retrying event delivery | wireNotify + onRetry (private retryNotifier), bypasses chain by design |
 | attempt counter ownership | stepExecution owns it; single source of truth |
-| BeforeStep/AfterStep fate | Unchanged; implicit innermost AttemptInterceptor layer |
+| BeforeStep/AfterStep fate | Unchanged; orthogonal to Interceptors (step-level vs workflow-level) |
+| Step identifier / name | No precomputed name; Step pointer is the identifier; callers call flow.String() |
+| NewStepEventSink return type | Returns StepInterceptor (interface); retryNotifier is package-private |
+| retry.go changes | None needed; stepExecution.attempt is independent |
 | Breaking changes | None |
