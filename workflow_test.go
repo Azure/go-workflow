@@ -312,8 +312,8 @@ func TestStepExecution_BasicSuccess(t *testing.T) {
 	step := NoOp("a")
 	w := &Workflow{
 		StepInterceptors: []StepInterceptor{
-			StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
-				stepped = append(stepped, info.Step)
+			StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+				stepped = append(stepped, s)
 				return next(ctx)
 			}),
 		},
@@ -327,7 +327,7 @@ func TestStepExecution_StepInterceptorOrder(t *testing.T) {
 	t.Parallel()
 	var order []string
 	makeIC := func(name string) StepInterceptor {
-		return StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
+		return StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
 			order = append(order, name+":before")
 			err := next(ctx)
 			order = append(order, name+":after")
@@ -346,7 +346,7 @@ func TestStepExecution_AttemptInterceptorOrder(t *testing.T) {
 	t.Parallel()
 	var order []string
 	makeIC := func(name string) AttemptInterceptor {
-		return AttemptInterceptorFunc(func(ctx context.Context, info AttemptInfo, next func(context.Context) error) error {
+		return AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
 			order = append(order, name+":before")
 			err := next(ctx)
 			order = append(order, name+":after")
@@ -363,15 +363,12 @@ func TestStepExecution_AttemptInterceptorOrder(t *testing.T) {
 
 func TestStepExecution_SkippedStep(t *testing.T) {
 	t.Parallel()
-	var terminalReason StepStatus
+	interceptorCalled := false
 	step := NoOp("a")
 	w := &Workflow{
 		StepInterceptors: []StepInterceptor{
-			StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
-				terminalReason = info.TerminalReason
-				if info.TerminalReason != Pending {
-					return nil
-				}
+			StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+				interceptorCalled = true
 				return next(ctx)
 			}),
 		},
@@ -380,7 +377,7 @@ func TestStepExecution_SkippedStep(t *testing.T) {
 		return Skipped
 	}))
 	assert.NoError(t, w.Do(context.Background()))
-	assert.Equal(t, Skipped, terminalReason)
+	assert.False(t, interceptorCalled, "interceptor must not be called for skipped steps")
 }
 
 func TestStepExecution_RetryingStep(t *testing.T) {
@@ -398,9 +395,9 @@ func TestStepExecution_RetryingStep(t *testing.T) {
 	})
 	w := &Workflow{
 		AttemptInterceptors: []AttemptInterceptor{
-			AttemptInterceptorFunc(func(ctx context.Context, info AttemptInfo, next func(context.Context) error) error {
+			AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
 				mu.Lock()
-				attempts = append(attempts, info.Attempt)
+				attempts = append(attempts, attempt)
 				mu.Unlock()
 				return next(ctx)
 			}),

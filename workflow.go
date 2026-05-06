@@ -419,39 +419,25 @@ func (ex *stepExecution) run(ctx context.Context) {
 		cond = option.Condition
 	}
 
-	terminalReason := Pending
-	if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
-		terminalReason = nextStatus
-	}
-
-	info := StepInfo{Step: ex.step, TerminalReason: terminalReason}
-
-	// Build StepInterceptor chain.
-	// The innermost next is executeWithRetry for normal steps; a no-op for terminal steps
-	// (interceptors that observe terminalReason should not call next).
-	var stepNext func(context.Context) error
-	if terminalReason == Pending {
-		stepNext = ex.executeWithRetry
-	} else {
-		stepNext = func(ctx context.Context) error { return nil }
-	}
-	for i := len(ex.w.StepInterceptors) - 1; i >= 0; i-- {
-		ic := ex.w.StepInterceptors[i]
-		next := stepNext
-		icLocal := ic
-		stepNext = func(ctx context.Context) error {
-			return icLocal.InterceptStep(ctx, info, next)
-		}
-	}
-
 	var status StepStatus
 	var err error
 
-	if terminalReason != Pending {
-		err = stepNext(ctx)
-		status = terminalReason
+	if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
+		// Skipped/Canceled steps do not enter the interceptor chain.
+		status = nextStatus
 	} else {
 		ex.state.SetStatus(Running)
+
+		// Build StepInterceptor chain; innermost next is executeWithRetry.
+		stepNext := func(ctx context.Context) error { return ex.executeWithRetry(ctx) }
+		for i := len(ex.w.StepInterceptors) - 1; i >= 0; i-- {
+			ic := ex.w.StepInterceptors[i]
+			next := stepNext
+			stepNext = func(ctx context.Context) error {
+				return ic.InterceptStep(ctx, ex.step, next)
+			}
+		}
+
 		err = stepNext(ctx)
 		status = StatusFromError(err)
 		if status == Failed {
@@ -505,11 +491,7 @@ func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 		next := chain
 		icLocal := ic
 		chain = func(ctx context.Context) error {
-			info := AttemptInfo{
-				StepInfo: StepInfo{Step: ex.step},
-				Attempt:  ex.attempt,
-			}
-			return icLocal.InterceptAttempt(ctx, info, next)
+			return icLocal.InterceptAttempt(ctx, ex.step, ex.attempt, next)
 		}
 	}
 	// Wrap the full attempt chain (including interceptors) so ex.attempt is always

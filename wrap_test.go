@@ -160,13 +160,10 @@ func TestSubWorkflow_InterceptorPropagation(t *testing.T) {
 
 	var stepped []Steper
 	mu := sync.Mutex{}
-	ic := StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
+	ic := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
 		mu.Lock()
-		stepped = append(stepped, info.Step)
+		stepped = append(stepped, s)
 		mu.Unlock()
-		if info.TerminalReason != Pending {
-			return nil
-		}
 		return next(ctx)
 	})
 
@@ -197,22 +194,16 @@ func TestSubWorkflow_ChildInterceptorPreserved(t *testing.T) {
 	var parentStepped, childStepped []Steper
 	pmu, cmu := sync.Mutex{}, sync.Mutex{}
 
-	parentIC := StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
+	parentIC := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
 		pmu.Lock()
-		parentStepped = append(parentStepped, info.Step)
+		parentStepped = append(parentStepped, s)
 		pmu.Unlock()
-		if info.TerminalReason != Pending {
-			return nil
-		}
 		return next(ctx)
 	})
-	childIC := StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
+	childIC := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
 		cmu.Lock()
-		childStepped = append(childStepped, info.Step)
+		childStepped = append(childStepped, s)
 		cmu.Unlock()
-		if info.TerminalReason != Pending {
-			return nil
-		}
 		return next(ctx)
 	})
 
@@ -236,7 +227,7 @@ func TestSubWorkflow_InterceptorNotDuplicatedOnRetry(t *testing.T) {
 	t.Parallel()
 
 	var count atomic.Int32
-	sink := StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
+	sink := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
 		count.Add(1)
 		return next(ctx)
 	})

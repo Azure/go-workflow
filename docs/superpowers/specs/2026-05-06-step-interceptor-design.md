@@ -107,37 +107,23 @@ double-spawning. All other logic moves into `stepExecution.run()`.
 ### New Types
 
 ```go
-// StepInfo is passed to StepInterceptor.
-type StepInfo struct {
-    Step           Steper
-    TerminalReason StepStatus // Pending = will execute; Skipped/Canceled = will not execute
-}
-
-// AttemptInfo is passed to AttemptInterceptor.
-// Interceptors that need timing should record time.Now() at the top of InterceptAttempt.
-type AttemptInfo struct {
-    StepInfo
-    Attempt uint64
-}
-
 // StepInterceptor intercepts the full lifecycle of a step (all retry attempts).
-// If info.TerminalReason != Pending, next must not be called — the step will not execute.
-// Return nil in that case after observing the event.
+// Skipped and Canceled steps do not enter the interceptor chain.
 type StepInterceptor interface {
-    InterceptStep(ctx context.Context, info StepInfo, next func(context.Context) error) error
+    InterceptStep(ctx context.Context, step Steper, next func(context.Context) error) error
 }
 
 // AttemptInterceptor intercepts each individual attempt (Before → Do → After).
 // The error returned by next (if any) is the attempt's failure.
 type AttemptInterceptor interface {
-    InterceptAttempt(ctx context.Context, info AttemptInfo, next func(context.Context) error) error
+    InterceptAttempt(ctx context.Context, step Steper, attempt uint64, next func(context.Context) error) error
 }
 
 // StepInterceptorFunc is a function adapter for StepInterceptor.
-type StepInterceptorFunc func(ctx context.Context, info StepInfo, next func(context.Context) error) error
+type StepInterceptorFunc func(ctx context.Context, step Steper, next func(context.Context) error) error
 
 // AttemptInterceptorFunc is a function adapter for AttemptInterceptor.
-type AttemptInterceptorFunc func(ctx context.Context, info AttemptInfo, next func(context.Context) error) error
+type AttemptInterceptorFunc func(ctx context.Context, step Steper, attempt uint64, next func(context.Context) error) error
 
 // InterceptorReceiver is implemented by steps that contain a sub-workflow.
 type InterceptorReceiver interface {
@@ -167,12 +153,9 @@ type Workflow struct {
 // OTel: one span per step
 w := &flow.Workflow{
     StepInterceptors: []flow.StepInterceptor{
-        flow.StepInterceptorFunc(func(ctx context.Context, info flow.StepInfo, next func(context.Context) error) error {
-            ctx, span := tracer.Start(ctx, flow.String(info.Step))
+        flow.StepInterceptorFunc(func(ctx context.Context, step flow.Steper, next func(context.Context) error) error {
+            ctx, span := tracer.Start(ctx, flow.String(step))
             defer span.End()
-            if info.TerminalReason != flow.Pending {
-                return nil // step will not execute
-            }
             err := next(ctx)
             if err != nil {
                 span.RecordError(err)
@@ -185,9 +168,9 @@ w := &flow.Workflow{
 // Per-attempt logging with attempt number and error
 w := &flow.Workflow{
     AttemptInterceptors: []flow.AttemptInterceptor{
-        flow.AttemptInterceptorFunc(func(ctx context.Context, info flow.AttemptInfo, next func(context.Context) error) error {
+        flow.AttemptInterceptorFunc(func(ctx context.Context, step flow.Steper, attempt uint64, next func(context.Context) error) error {
             err := next(ctx)
-            slog.Info("attempt", "step", flow.String(info.Step), "attempt", info.Attempt, "err", err)
+            slog.Info("attempt", "step", flow.String(step), "attempt", attempt, "err", err)
             return err
         }),
     },
@@ -219,13 +202,11 @@ Execution stack for inner steps:
 
 ---
 
-## Skipped / Canceled in StepInterceptor
+## Skipped / Canceled steps
 
-Steps that are Skipped or Canceled by their `Condition` still enter the `StepInterceptor` chain.
-`StepInfo.TerminalReason` carries the reason. The contract is:
-
-- If `TerminalReason != Pending`, the interceptor **must not** call `next`.
-- Return nil after observing the terminal reason.
+Steps that are Skipped or Canceled by their `Condition` do **not** enter the interceptor chain.
+Their final status is set directly and the interceptors are never invoked. Post-run status is
+queryable via `workflow.StateOf(step).GetStatus()`.
 
 ---
 
@@ -258,7 +239,8 @@ None. All questions from the brainstorm have been resolved:
 |----------|------------|
 | EventSink vs Interceptor | Pure interceptor; no built-in EventSink adapter — users bring their own event types |
 | Per-step vs per-attempt | Both layers; different use cases |
-| Skipped/Canceled visibility | Enter StepInterceptor chain via TerminalReason |
+| Skipped/Canceled visibility | Skipped/Canceled steps bypass interceptor chain entirely; query post-run via StateOf |
+| StepInfo / AttemptInfo wrappers | Removed; step passed as Steper directly; attempt as uint64 directly |
 | SubWorkflow propagation | PrependInterceptors on InterceptorReceiver; once per step, make+copy |
 | Retrying / BackoffDuration event | Removed; not worth the side-channel complexity; failure error available from InterceptAttempt |
 | attempt counter ownership | stepExecution owns it; incremented in buildAttemptChain wrapper |
