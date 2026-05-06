@@ -2,7 +2,9 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -35,4 +37,91 @@ func TestAttemptInterceptorFunc(t *testing.T) {
 	})
 	_ = ic.InterceptAttempt(context.Background(), AttemptInfo{}, func(ctx context.Context) error { return nil })
 	assert.True(t, called)
+}
+
+func TestNewStepEventSink_SucceededStep(t *testing.T) {
+	var events []WorkflowEvent
+	sink := NewStepEventSink(func(e WorkflowEvent) { events = append(events, e) })
+
+	step := NoOp("a")
+	info := StepInfo{Step: step, TerminalReason: Pending}
+	err := sink.InterceptStep(context.Background(), info, func(ctx context.Context) error {
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	assert.Equal(t, Scheduled, events[0].Type)
+	assert.Equal(t, step, events[0].Step)
+	assert.Equal(t, Succeeded, events[1].Type)
+	assert.NotZero(t, events[1].Duration)
+}
+
+func TestNewStepEventSink_FailedStep(t *testing.T) {
+	var events []WorkflowEvent
+	sink := NewStepEventSink(func(e WorkflowEvent) { events = append(events, e) })
+
+	step := NoOp("a")
+	boom := errors.New("boom")
+	info := StepInfo{Step: step, TerminalReason: Pending}
+	err := sink.InterceptStep(context.Background(), info, func(ctx context.Context) error {
+		return boom
+	})
+
+	assert.Equal(t, boom, err)
+	assert.Len(t, events, 2)
+	assert.Equal(t, Scheduled, events[0].Type)
+	assert.Equal(t, Failed, events[1].Type)
+	assert.Equal(t, boom, events[1].Err)
+}
+
+func TestNewStepEventSink_SkippedStep(t *testing.T) {
+	var events []WorkflowEvent
+	sink := NewStepEventSink(func(e WorkflowEvent) { events = append(events, e) })
+
+	step := NoOp("a")
+	info := StepInfo{Step: step, TerminalReason: Skipped}
+	nextCalled := false
+	err := sink.InterceptStep(context.Background(), info, func(ctx context.Context) error {
+		nextCalled = true
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.False(t, nextCalled, "next must not be called for Skipped")
+	assert.Len(t, events, 2)
+	assert.Equal(t, Scheduled, events[0].Type)
+	assert.Equal(t, Skipped, events[1].Type)
+}
+
+func TestNewStepEventSink_OnRetry(t *testing.T) {
+	var events []WorkflowEvent
+	sink := NewStepEventSink(func(e WorkflowEvent) { events = append(events, e) })
+
+	rn, ok := sink.(retryNotifier)
+	assert.True(t, ok, "NewStepEventSink should implement retryNotifier")
+
+	boom := errors.New("boom")
+	rn.onRetry(WorkflowEvent{Type: Retrying, Attempt: 0, Err: boom, BackoffDuration: time.Second})
+
+	assert.Len(t, events, 1)
+	assert.Equal(t, Retrying, events[0].Type)
+	assert.Equal(t, boom, events[0].Err)
+}
+
+func TestNewAttemptEventSink_EmitsStarted(t *testing.T) {
+	var events []WorkflowEvent
+	sink := NewAttemptEventSink(func(e WorkflowEvent) { events = append(events, e) })
+
+	step := NoOp("a")
+	info := AttemptInfo{StepInfo: StepInfo{Step: step}, Attempt: 2}
+	err := sink.InterceptAttempt(context.Background(), info, func(ctx context.Context) error {
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	assert.Equal(t, Started, events[0].Type)
+	assert.Equal(t, uint64(2), events[0].Attempt)
+	assert.Equal(t, step, events[0].Step)
 }

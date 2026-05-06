@@ -81,3 +81,63 @@ type InterceptorReceiver interface {
 type retryNotifier interface {
 	onRetry(WorkflowEvent)
 }
+
+// terminalEventType maps an error to the corresponding terminal EventType.
+func terminalEventType(err error) EventType {
+	if err == nil {
+		return Succeeded
+	}
+	switch StatusFromError(err) {
+	case Canceled:
+		return Canceled
+	case Skipped:
+		return Skipped
+	default:
+		return Failed
+	}
+}
+
+// stepEventSink is the concrete type returned by NewStepEventSink.
+type stepEventSink struct {
+	sink func(WorkflowEvent)
+}
+
+// NewStepEventSink returns a StepInterceptor that emits Scheduled then a terminal
+// event (Succeeded/Failed/Canceled/Skipped) for every step.
+func NewStepEventSink(sink func(WorkflowEvent)) StepInterceptor {
+	return &stepEventSink{sink: sink}
+}
+
+func (s *stepEventSink) InterceptStep(ctx context.Context, info StepInfo, next func(context.Context) error) error {
+	s.sink(WorkflowEvent{Step: info.Step, Type: Scheduled})
+
+	if info.TerminalReason != Pending {
+		s.sink(WorkflowEvent{Step: info.Step, Type: info.TerminalReason})
+		return nil
+	}
+
+	start := time.Now()
+	err := next(ctx)
+	s.sink(WorkflowEvent{
+		Step:     info.Step,
+		Type:     terminalEventType(err),
+		Err:      err,
+		Duration: time.Since(start),
+	})
+	return err
+}
+
+func (s *stepEventSink) onRetry(e WorkflowEvent) { s.sink(e) }
+
+// NewAttemptEventSink returns an AttemptInterceptor that emits a Started event
+// for each attempt.
+func NewAttemptEventSink(sink func(WorkflowEvent)) AttemptInterceptor {
+	return AttemptInterceptorFunc(func(ctx context.Context, info AttemptInfo, next func(context.Context) error) error {
+		sink(WorkflowEvent{
+			Step:    info.Step,
+			Type:    Started,
+			Attempt: info.Attempt,
+		})
+		return next(ctx)
+	})
+}
