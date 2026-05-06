@@ -548,14 +548,15 @@ func (ex *stepExecution) wireNotify(option *StepOption) {
 	}
 	userNotify := option.RetryOption.Notify
 	option.RetryOption.Notify = func(err error, d time.Duration) {
+		// ex.attempt has already been incremented by runAttempt's defer,
+		// so subtract 1 to get the attempt number that just failed.
 		e := WorkflowEvent{
 			Step:            ex.step,
 			Type:            Retrying,
-			Attempt:         ex.attempt,
+			Attempt:         ex.attempt - 1,
 			Err:             err,
 			BackoffDuration: d,
 		}
-		ex.attempt++
 		if ex.onRetry != nil {
 			ex.onRetry(e)
 		}

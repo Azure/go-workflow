@@ -421,3 +421,64 @@ func eventTypes(events []WorkflowEvent) []EventType {
 	}
 	return types
 }
+
+func TestStepExecution_RetryingEventAttemptNumbers(t *testing.T) {
+	t.Parallel()
+
+	var events []WorkflowEvent
+	mu := sync.Mutex{}
+	record := func(e WorkflowEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	}
+
+	callCount := 0
+	step := Func("flaky", func(ctx context.Context) error {
+		callCount++
+		if callCount < 3 {
+			return errors.New("not yet")
+		}
+		return nil
+	})
+
+	w := &Workflow{
+		StepInterceptors:    []StepInterceptor{NewStepEventSink(record)},
+		AttemptInterceptors: []AttemptInterceptor{NewAttemptEventSink(record)},
+	}
+	w.Add(Step(step).Retry(func(o *RetryOption) {
+		o.Attempts = 5
+		o.Backoff = &backoff.ZeroBackOff{}
+	}))
+
+	assert.NoError(t, w.Do(context.Background()))
+
+	assert.Equal(t, []EventType{
+		Scheduled,
+		Started,   // attempt 0
+		Retrying,  // attempt 0 failed
+		Started,   // attempt 1
+		Retrying,  // attempt 1 failed
+		Started,   // attempt 2 succeeds
+		Succeeded,
+	}, eventTypes(events))
+
+	retryingEvents := filterEvents(events, Retrying)
+	assert.Equal(t, uint64(0), retryingEvents[0].Attempt)
+	assert.Equal(t, uint64(1), retryingEvents[1].Attempt)
+
+	startedEvents := filterEvents(events, Started)
+	assert.Equal(t, uint64(0), startedEvents[0].Attempt)
+	assert.Equal(t, uint64(1), startedEvents[1].Attempt)
+	assert.Equal(t, uint64(2), startedEvents[2].Attempt)
+}
+
+func filterEvents(events []WorkflowEvent, et EventType) []WorkflowEvent {
+	var rv []WorkflowEvent
+	for _, e := range events {
+		if e.Type == et {
+			rv = append(rv, e)
+		}
+	}
+	return rv
+}
