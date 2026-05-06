@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -149,4 +150,78 @@ func TestBuildStep(t *testing.T) {
 		_ = new(Workflow).Add(Step(s))
 		assert.Equal(t, []string{"Reset", "BuildStep"}, s.calls)
 	})
+}
+
+func TestSubWorkflow_InterceptorPropagation(t *testing.T) {
+	t.Parallel()
+
+	var events []WorkflowEvent
+	mu := sync.Mutex{}
+	sink := NewStepEventSink(func(e WorkflowEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	})
+
+	innerStep := NoOp("inner")
+	type mySubStep struct{ SubWorkflow }
+	sub := &mySubStep{}
+	sub.Add(Step(innerStep))
+
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{sink},
+	}
+	w.Add(Step(sub))
+
+	assert.NoError(t, w.Do(context.Background()))
+
+	types := make([]EventType, len(events))
+	for i, e := range events {
+		types[i] = e.Type
+	}
+	// At least 4 events: Scheduled+Succeeded for sub, Scheduled+Succeeded for innerStep
+	assert.GreaterOrEqual(t, len(events), 4)
+	assert.Contains(t, types, Scheduled)
+	assert.Contains(t, types, Succeeded)
+	for _, e := range events {
+		assert.NotNil(t, e.Step)
+	}
+}
+
+func TestSubWorkflow_ChildInterceptorPreserved(t *testing.T) {
+	t.Parallel()
+
+	var parentEvents []WorkflowEvent
+	var childEvents []WorkflowEvent
+	pmu := sync.Mutex{}
+	cmu := sync.Mutex{}
+
+	parentSink := NewStepEventSink(func(e WorkflowEvent) {
+		pmu.Lock()
+		parentEvents = append(parentEvents, e)
+		pmu.Unlock()
+	})
+	childSink := NewStepEventSink(func(e WorkflowEvent) {
+		cmu.Lock()
+		childEvents = append(childEvents, e)
+		cmu.Unlock()
+	})
+
+	innerStep := NoOp("inner")
+	type mySubStep struct{ SubWorkflow }
+	sub := &mySubStep{}
+	sub.Add(Step(innerStep))
+	sub.w.StepInterceptors = []StepInterceptor{childSink}
+
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{parentSink},
+	}
+	w.Add(Step(sub))
+
+	assert.NoError(t, w.Do(context.Background()))
+
+	// Parent sees outer step (sub) + inner step (propagated) = at least 4 events
+	assert.GreaterOrEqual(t, len(parentEvents), 4)
+	// Child sees inner step only = at least 2 events
+	assert.GreaterOrEqual(t, len(childEvents), 2)
 }

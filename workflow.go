@@ -646,3 +646,10 @@ func (s *SubWorkflow) Do(ctx context.Context) error      { return s.w.Do(ctx) }
 
 // Reset resets the sub-workflow to ready for BuildStep()
 func (s *SubWorkflow) Reset() { s.w = Workflow{} }
+
+// PrependInterceptors implements InterceptorReceiver.
+// Parent workflow interceptors are prepended so they execute outside child interceptors.
+func (s *SubWorkflow) PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor) {
+	s.w.StepInterceptors = append(step, s.w.StepInterceptors...)
+	s.w.AttemptInterceptors = append(attempt, s.w.AttemptInterceptors...)
+}
