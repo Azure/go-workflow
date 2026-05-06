@@ -470,7 +470,7 @@ func (ex *stepExecution) run(ctx context.Context) {
 	} else {
 		ex.state.SetStatus(Running)
 		err = stepNext(ctx)
-		status = statusFromError(err)
+		status = StatusFromError(err)
 		if status == Failed {
 			switch {
 			case DefaultIsCanceled(err),
@@ -589,16 +589,6 @@ func (ex *stepExecution) wireNotify(option *StepOption) {
 			userNotify(err, d)
 		}
 	}
-}
-
-func statusFromError(err error) StepStatus {
-	if err == nil {
-		return Succeeded
-	}
-	if s := StatusFromError(err); s != Failed {
-		return s
-	}
-	return Failed
 }
 
 func (w *Workflow) lease() bool {
