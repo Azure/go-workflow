@@ -318,7 +318,7 @@ func TestStepExecution_BasicSuccess(t *testing.T) {
 	w.Add(Step(step))
 	err := w.Do(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, []EventType{Scheduled, EventSucceeded}, eventTypes(events))
+	assert.Equal(t, []EventType{EventScheduled, EventSucceeded}, eventTypes(events))
 }
 
 func TestStepExecution_StepInterceptorOrder(t *testing.T) {
@@ -372,7 +372,7 @@ func TestStepExecution_SkippedStep(t *testing.T) {
 		return Skipped
 	}))
 	assert.NoError(t, w.Do(context.Background()))
-	assert.Equal(t, []EventType{Scheduled, EventSkipped}, eventTypes(events))
+	assert.Equal(t, []EventType{EventScheduled, EventSkipped}, eventTypes(events))
 }
 
 func TestStepExecution_RetryingEvent(t *testing.T) {
@@ -407,10 +407,10 @@ func TestStepExecution_RetryingEvent(t *testing.T) {
 	}))
 	assert.NoError(t, w.Do(context.Background()))
 	assert.Equal(t, []EventType{
-		Scheduled,
-		Started, Retrying,
-		Started, Retrying,
-		Started, EventSucceeded,
+		EventScheduled,
+		EventStarted, EventRetrying,
+		EventStarted, EventRetrying,
+		EventStarted, EventSucceeded,
 	}, eventTypes(events))
 }
 
@@ -454,20 +454,20 @@ func TestStepExecution_RetryingEventAttemptNumbers(t *testing.T) {
 	assert.NoError(t, w.Do(context.Background()))
 
 	assert.Equal(t, []EventType{
-		Scheduled,
-		Started,   // attempt 0
-		Retrying,  // attempt 0 failed
-		Started,   // attempt 1
-		Retrying,  // attempt 1 failed
-		Started,   // attempt 2 succeeds
+		EventScheduled,
+		EventStarted,   // attempt 0
+		EventRetrying,  // attempt 0 failed
+		EventStarted,   // attempt 1
+		EventRetrying,  // attempt 1 failed
+		EventStarted,   // attempt 2 succeeds
 		EventSucceeded,
 	}, eventTypes(events))
 
-	retryingEvents := filterEvents(events, Retrying)
+	retryingEvents := filterEvents(events, EventRetrying)
 	assert.Equal(t, uint64(0), retryingEvents[0].Attempt)
 	assert.Equal(t, uint64(1), retryingEvents[1].Attempt)
 
-	startedEvents := filterEvents(events, Started)
+	startedEvents := filterEvents(events, EventStarted)
 	assert.Equal(t, uint64(0), startedEvents[0].Attempt)
 	assert.Equal(t, uint64(1), startedEvents[1].Attempt)
 	assert.Equal(t, uint64(2), startedEvents[2].Attempt)

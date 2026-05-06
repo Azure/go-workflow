@@ -577,7 +577,7 @@ func (ex *stepExecution) wireNotify(option *StepOption) {
 		// defer, so subtract 1 to get the attempt number that just failed.
 		e := WorkflowEvent{
 			Step:            ex.step,
-			Type:            Retrying,
+			Type:            EventRetrying,
 			Attempt:         ex.attempt - 1,
 			Err:             err,
 			BackoffDuration: d,

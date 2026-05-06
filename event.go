@@ -9,9 +9,9 @@ import (
 type EventType string
 
 const (
-	Scheduled      EventType = "Scheduled"
-	Started        EventType = "Started"
-	Retrying       EventType = "Retrying"
+	EventScheduled EventType = "Scheduled"
+	EventStarted   EventType = "Started"
+	EventRetrying  EventType = "Retrying"
 	EventSucceeded EventType = "Succeeded"
 	EventFailed    EventType = "Failed"
 	EventCanceled  EventType = "Canceled"
@@ -127,7 +127,7 @@ func NewStepEventSink(sink func(WorkflowEvent)) StepInterceptor {
 }
 
 func (s *stepEventSink) InterceptStep(ctx context.Context, info StepInfo, next func(context.Context) error) error {
-	s.sink(WorkflowEvent{Step: info.Step, Type: Scheduled})
+	s.sink(WorkflowEvent{Step: info.Step, Type: EventScheduled})
 
 	if info.TerminalReason != Pending {
 		s.sink(WorkflowEvent{Step: info.Step, Type: terminalStepStatusToEventType(info.TerminalReason)})
@@ -162,7 +162,7 @@ func NewAttemptEventSink(sink func(WorkflowEvent)) AttemptInterceptor {
 func (s *attemptEventSink) InterceptAttempt(ctx context.Context, info AttemptInfo, next func(context.Context) error) error {
 	s.sink(WorkflowEvent{
 		Step:    info.Step,
-		Type:    Started,
+		Type:    EventStarted,
 		Attempt: info.Attempt,
 	})
 	return next(ctx)

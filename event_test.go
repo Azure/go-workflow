@@ -11,7 +11,7 @@ import (
 
 func TestEventTypeConstants(t *testing.T) {
 	// Verify all constants exist and are distinct
-	types := []EventType{Scheduled, Started, Retrying, EventSucceeded, EventFailed, EventCanceled, EventSkipped}
+	types := []EventType{EventScheduled, EventStarted, EventRetrying, EventSucceeded, EventFailed, EventCanceled, EventSkipped}
 	seen := map[EventType]bool{}
 	for _, et := range types {
 		assert.False(t, seen[et], "duplicate EventType: %q", et)
@@ -51,7 +51,7 @@ func TestNewStepEventSink_SucceededStep(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Len(t, events, 2)
-	assert.Equal(t, Scheduled, events[0].Type)
+	assert.Equal(t, EventScheduled, events[0].Type)
 	assert.Equal(t, step, events[0].Step)
 	assert.Equal(t, EventSucceeded, events[1].Type)
 	assert.NotZero(t, events[1].Duration)
@@ -70,7 +70,7 @@ func TestNewStepEventSink_FailedStep(t *testing.T) {
 
 	assert.Equal(t, boom, err)
 	assert.Len(t, events, 2)
-	assert.Equal(t, Scheduled, events[0].Type)
+	assert.Equal(t, EventScheduled, events[0].Type)
 	assert.Equal(t, EventFailed, events[1].Type)
 	assert.Equal(t, boom, events[1].Err)
 }
@@ -90,7 +90,7 @@ func TestNewStepEventSink_SkippedStep(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, nextCalled, "next must not be called for Skipped")
 	assert.Len(t, events, 2)
-	assert.Equal(t, Scheduled, events[0].Type)
+	assert.Equal(t, EventScheduled, events[0].Type)
 	assert.Equal(t, EventSkipped, events[1].Type)
 }
 
@@ -108,10 +108,10 @@ func TestNewAttemptEventSink_OnRetry(t *testing.T) {
 	assert.True(t, ok, "NewAttemptEventSink should implement retryNotifier")
 
 	boom := errors.New("boom")
-	rn.onRetry(WorkflowEvent{Type: Retrying, Attempt: 0, Err: boom, BackoffDuration: time.Second})
+	rn.onRetry(WorkflowEvent{Type: EventRetrying, Attempt: 0, Err: boom, BackoffDuration: time.Second})
 
 	assert.Len(t, events, 1)
-	assert.Equal(t, Retrying, events[0].Type)
+	assert.Equal(t, EventRetrying, events[0].Type)
 	assert.Equal(t, boom, events[0].Err)
 }
 
@@ -127,7 +127,7 @@ func TestNewAttemptEventSink_EmitsStarted(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Len(t, events, 1)
-	assert.Equal(t, Started, events[0].Type)
+	assert.Equal(t, EventStarted, events[0].Type)
 	assert.Equal(t, uint64(2), events[0].Attempt)
 	assert.Equal(t, step, events[0].Step)
 }
