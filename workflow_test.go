@@ -473,6 +473,16 @@ func TestStepExecution_RetryingEventAttemptNumbers(t *testing.T) {
 	assert.Equal(t, uint64(2), startedEvents[2].Attempt)
 }
 
+func TestWorkflow_NoInterceptors_NoRegression(t *testing.T) {
+	t.Parallel()
+	// Workflows without interceptors must not regress existing behaviour.
+	step := NoOp("a")
+	w := &Workflow{}
+	w.Add(Step(step))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, Succeeded, w.StateOf(step).GetStatus())
+}
+
 func filterEvents(events []WorkflowEvent, et EventType) []WorkflowEvent {
 	var rv []WorkflowEvent
 	for _, e := range events {
