@@ -158,12 +158,16 @@ func TestBuildStep(t *testing.T) {
 func TestSubWorkflow_InterceptorPropagation(t *testing.T) {
 	t.Parallel()
 
-	var events []WorkflowEvent
+	var stepped []Steper
 	mu := sync.Mutex{}
-	sink := NewStepEventSink(func(e WorkflowEvent) {
+	ic := StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
 		mu.Lock()
-		events = append(events, e)
+		stepped = append(stepped, info.Step)
 		mu.Unlock()
+		if info.TerminalReason != Pending {
+			return nil
+		}
+		return next(ctx)
 	})
 
 	innerStep := NoOp("inner")
@@ -171,62 +175,61 @@ func TestSubWorkflow_InterceptorPropagation(t *testing.T) {
 	sub := &mySubStep{}
 	sub.Add(Step(innerStep))
 
-	w := &Workflow{
-		StepInterceptors: []StepInterceptor{sink},
-	}
+	w := &Workflow{StepInterceptors: []StepInterceptor{ic}}
 	w.Add(Step(sub))
 
 	assert.NoError(t, w.Do(context.Background()))
 
-	types := make([]EventType, len(events))
-	for i, e := range events {
-		types[i] = e.Type
+	// Parent interceptor must have seen both the sub step and the inner step.
+	assert.GreaterOrEqual(t, len(stepped), 2)
+	found := false
+	for _, s := range stepped {
+		if s == innerStep {
+			found = true
+		}
 	}
-	// At least 4 events: EventScheduled+Succeeded for sub, EventScheduled+Succeeded for innerStep
-	assert.GreaterOrEqual(t, len(events), 4)
-	assert.Contains(t, types, EventScheduled)
-	assert.Contains(t, types, EventSucceeded)
-	for _, e := range events {
-		assert.NotNil(t, e.Step)
-	}
+	assert.True(t, found, "parent interceptor should see inner step via propagation")
 }
 
 func TestSubWorkflow_ChildInterceptorPreserved(t *testing.T) {
 	t.Parallel()
 
-	var parentEvents []WorkflowEvent
-	var childEvents []WorkflowEvent
-	pmu := sync.Mutex{}
-	cmu := sync.Mutex{}
+	var parentStepped, childStepped []Steper
+	pmu, cmu := sync.Mutex{}, sync.Mutex{}
 
-	parentSink := NewStepEventSink(func(e WorkflowEvent) {
+	parentIC := StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
 		pmu.Lock()
-		parentEvents = append(parentEvents, e)
+		parentStepped = append(parentStepped, info.Step)
 		pmu.Unlock()
+		if info.TerminalReason != Pending {
+			return nil
+		}
+		return next(ctx)
 	})
-	childSink := NewStepEventSink(func(e WorkflowEvent) {
+	childIC := StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
 		cmu.Lock()
-		childEvents = append(childEvents, e)
+		childStepped = append(childStepped, info.Step)
 		cmu.Unlock()
+		if info.TerminalReason != Pending {
+			return nil
+		}
+		return next(ctx)
 	})
 
 	innerStep := NoOp("inner")
 	type mySubStep struct{ SubWorkflow }
 	sub := &mySubStep{}
 	sub.Add(Step(innerStep))
-	sub.w.StepInterceptors = []StepInterceptor{childSink}
+	sub.w.StepInterceptors = []StepInterceptor{childIC}
 
-	w := &Workflow{
-		StepInterceptors: []StepInterceptor{parentSink},
-	}
+	w := &Workflow{StepInterceptors: []StepInterceptor{parentIC}}
 	w.Add(Step(sub))
 
 	assert.NoError(t, w.Do(context.Background()))
 
-	// Parent sees outer step (sub) + inner step (propagated) = at least 4 events
-	assert.GreaterOrEqual(t, len(parentEvents), 4)
-	// Child sees inner step only = at least 2 events
-	assert.GreaterOrEqual(t, len(childEvents), 2)
+	// Parent sees sub + inner (propagated); child sees inner only.
+	assert.GreaterOrEqual(t, len(parentStepped), 2)
+	assert.GreaterOrEqual(t, len(childStepped), 1)
 }
 
 func TestSubWorkflow_InterceptorNotDuplicatedOnRetry(t *testing.T) {

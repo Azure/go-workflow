@@ -308,17 +308,19 @@ func TestMaxConcurrencyDeadlockStress(t *testing.T) {
 
 func TestStepExecution_BasicSuccess(t *testing.T) {
 	t.Parallel()
-	var events []WorkflowEvent
+	var stepped []Steper
 	step := NoOp("a")
 	w := &Workflow{
 		StepInterceptors: []StepInterceptor{
-			NewStepEventSink(func(e WorkflowEvent) { events = append(events, e) }),
+			StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
+				stepped = append(stepped, info.Step)
+				return next(ctx)
+			}),
 		},
 	}
 	w.Add(Step(step))
-	err := w.Do(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, []EventType{EventScheduled, EventSucceeded}, eventTypes(events))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []Steper{step}, stepped)
 }
 
 func TestStepExecution_StepInterceptorOrder(t *testing.T) {
@@ -361,61 +363,55 @@ func TestStepExecution_AttemptInterceptorOrder(t *testing.T) {
 
 func TestStepExecution_SkippedStep(t *testing.T) {
 	t.Parallel()
-	var events []WorkflowEvent
+	var terminalReason StepStatus
 	step := NoOp("a")
 	w := &Workflow{
 		StepInterceptors: []StepInterceptor{
-			NewStepEventSink(func(e WorkflowEvent) { events = append(events, e) }),
+			StepInterceptorFunc(func(ctx context.Context, info StepInfo, next func(context.Context) error) error {
+				terminalReason = info.TerminalReason
+				if info.TerminalReason != Pending {
+					return nil
+				}
+				return next(ctx)
+			}),
 		},
 	}
 	w.Add(Step(step).When(func(_ context.Context, _ map[Steper]StepResult) StepStatus {
 		return Skipped
 	}))
 	assert.NoError(t, w.Do(context.Background()))
-	assert.Equal(t, []EventType{EventScheduled, EventSkipped}, eventTypes(events))
+	assert.Equal(t, Skipped, terminalReason)
 }
 
 func TestStepExecution_RetryingStep(t *testing.T) {
 	t.Parallel()
-	var events []WorkflowEvent
+	var attempts []uint64
 	mu := sync.Mutex{}
-	record := func(e WorkflowEvent) {
-		mu.Lock()
-		events = append(events, e)
-		mu.Unlock()
-	}
 	boom := errors.New("boom")
-	attempts := 0
+	callCount := 0
 	step := Func("s", func(ctx context.Context) error {
-		attempts++
-		if attempts < 3 {
+		callCount++
+		if callCount < 3 {
 			return boom
 		}
 		return nil
 	})
 	w := &Workflow{
-		StepInterceptors:    []StepInterceptor{NewStepEventSink(record)},
-		AttemptInterceptors: []AttemptInterceptor{NewAttemptEventSink(record)},
+		AttemptInterceptors: []AttemptInterceptor{
+			AttemptInterceptorFunc(func(ctx context.Context, info AttemptInfo, next func(context.Context) error) error {
+				mu.Lock()
+				attempts = append(attempts, info.Attempt)
+				mu.Unlock()
+				return next(ctx)
+			}),
+		},
 	}
 	w.Add(Step(step).Retry(func(o *RetryOption) {
 		o.Attempts = 3
 		o.Backoff = &backoff.ZeroBackOff{}
 	}))
 	assert.NoError(t, w.Do(context.Background()))
-	// StepInterceptor sees Scheduled + terminal only; AttemptInterceptor sees
-	// one EventStarted per attempt; no Retrying events are emitted.
-	assert.Equal(t, []EventType{
-		EventScheduled,
-		EventStarted, // attempt 0 (fails, retried)
-		EventStarted, // attempt 1 (fails, retried)
-		EventStarted, // attempt 2 (succeeds)
-		EventSucceeded,
-	}, eventTypes(events))
-
-	startedEvents := filterEvents(events, EventStarted)
-	assert.Equal(t, uint64(0), startedEvents[0].Attempt)
-	assert.Equal(t, uint64(1), startedEvents[1].Attempt)
-	assert.Equal(t, uint64(2), startedEvents[2].Attempt)
+	assert.Equal(t, []uint64{0, 1, 2}, attempts)
 }
 
 func TestWorkflow_NoInterceptors_NoRegression(t *testing.T) {
@@ -426,22 +422,4 @@ func TestWorkflow_NoInterceptors_NoRegression(t *testing.T) {
 	w.Add(Step(step))
 	assert.NoError(t, w.Do(context.Background()))
 	assert.Equal(t, Succeeded, w.StateOf(step).GetStatus())
-}
-
-func eventTypes(events []WorkflowEvent) []EventType {
-	types := make([]EventType, len(events))
-	for i, e := range events {
-		types[i] = e.Type
-	}
-	return types
-}
-
-func filterEvents(events []WorkflowEvent, et EventType) []WorkflowEvent {
-	var rv []WorkflowEvent
-	for _, e := range events {
-		if e.Type == et {
-			rv = append(rv, e)
-		}
-	}
-	return rv
 }
