@@ -370,10 +370,6 @@ func (w *Workflow) Do(ctx context.Context) error {
 
 const scanned StepStatus = "scanned" // a private status for preflight
 
-// scheduled is a private StepStatus sentinel used by tick() to atomically
-// claim a step and prevent double-spawning. Never exposed to users.
-const scheduled StepStatus = "scheduled"
-
 type stepExecution struct {
 	w       *Workflow
 	step    Steper
@@ -440,30 +436,69 @@ func (w *Workflow) preflight() error {
 
 // tick will not block, it starts a goroutine for each runnable Step.
 // tick returns true if all steps in all phases are terminated.
+//
+// The Step's Condition is evaluated here (in the tick goroutine, holding
+// statusChange.L) so that:
+//   - Steps whose Condition resolves to a terminal status (Skipped/Canceled)
+//     are settled inline without spawning a goroutine or consuming a
+//     concurrency lease.
+//   - Steps that will execute have their status set to Running before the
+//     worker goroutine is spawned, so a subsequent tick cannot double-spawn
+//     them.
+//
+// Inline-settled steps may unblock downstream steps in the same tick. Because
+// no goroutine is spawned for them, no signalStatusChange is fired — so we
+// loop until a single pass produces no inline progress, otherwise the main
+// loop in Do() would Wait() forever for a signal that never comes.
 func (w *Workflow) tick(ctx context.Context) bool {
-	if w.IsTerminated() {
-		return true
+	for {
+		if w.IsTerminated() {
+			return true
+		}
+		progressed := false
+		for step := range w.steps {
+			state := w.StateOf(step)
+			// we only process pending Steps
+			if state.GetStatus() != Pending {
+				continue
+			}
+			// we only process Steps whose all upstreams are terminated
+			ups := w.UpstreamOf(step)
+			if isAnyUpstreamNotTerminated(ups) {
+				continue
+			}
+
+			// Evaluate Condition inline. If terminal (Skipped/Canceled), settle
+			// the step here — no goroutine, no lease, no interceptor chain.
+			cond := DefaultCondition
+			if option := state.Option(); option != nil && option.Condition != nil {
+				cond = option.Condition
+			}
+			if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
+				state.SetStepResult(StepResult{
+					Status:     nextStatus,
+					FinishedAt: w.Clock.Now(),
+				})
+				progressed = true
+				continue
+			}
+
+			// Step will execute: take a lease and spawn a worker goroutine.
+			// SetStatus(Running) happens here (under statusChange.L) so a
+			// subsequent tick won't see it as Pending and double-spawn.
+			if w.lease() {
+				state.SetStatus(Running)
+				w.waitGroup.Add(1)
+				ex := &stepExecution{w: w, step: step, state: state}
+				go ex.run(ctx)
+			}
+		}
+		// If we settled any step inline this pass, re-iterate to give downstream
+		// steps a chance to be picked up without waiting for a signal.
+		if !progressed {
+			return false
+		}
 	}
-	for step := range w.steps {
-		state := w.StateOf(step)
-		// we only process pending Steps
-		if state.GetStatus() != Pending {
-			continue
-		}
-		// we only process Steps whose all upstreams are terminated
-		ups := w.UpstreamOf(step)
-		if isAnyUpstreamNotTerminated(ups) {
-			continue
-		}
-		// kick off the Step
-		if w.lease() {
-			state.SetStatus(scheduled)
-			w.waitGroup.Add(1)
-			ex := &stepExecution{w: w, step: step, state: state}
-			go ex.run(ctx)
-		}
-	}
-	return false
 }
 
 func (w *Workflow) signalStatusChange() {
@@ -475,42 +510,27 @@ func (w *Workflow) signalStatusChange() {
 func (ex *stepExecution) run(ctx context.Context) {
 	defer ex.w.waitGroup.Done()
 
-	ups := ex.w.UpstreamOf(ex.step)
-	option := ex.state.Option()
-	cond := DefaultCondition
-	if option != nil && option.Condition != nil {
-		cond = option.Condition
+	// By the time we get here, tick() has already evaluated the Condition
+	// (terminal results are settled inline) and set the status to Running.
+	// Build the StepInterceptor chain; innermost next is executeWithRetry.
+	stepNext := func(ctx context.Context) error { return ex.executeWithRetry(ctx) }
+	stepICs := ex.w.effectiveStepInterceptors()
+	for i := len(stepICs) - 1; i >= 0; i-- {
+		ic := stepICs[i]
+		next := stepNext
+		stepNext = func(ctx context.Context) error {
+			return ic.InterceptStep(ctx, ex.step, next)
+		}
 	}
 
-	var status StepStatus
-	var err error
-
-	if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
-		// Skipped/Canceled steps do not enter the interceptor chain.
-		status = nextStatus
-	} else {
-		ex.state.SetStatus(Running)
-
-		// Build StepInterceptor chain; innermost next is executeWithRetry.
-		stepNext := func(ctx context.Context) error { return ex.executeWithRetry(ctx) }
-		stepICs := ex.w.effectiveStepInterceptors()
-		for i := len(stepICs) - 1; i >= 0; i-- {
-			ic := stepICs[i]
-			next := stepNext
-			stepNext = func(ctx context.Context) error {
-				return ic.InterceptStep(ctx, ex.step, next)
-			}
-		}
-
-		err = stepNext(ctx)
-		status = StatusFromError(err)
-		if status == Failed {
-			switch {
-			case DefaultIsCanceled(err),
-				errors.Is(err, context.Canceled),
-				errors.Is(err, context.DeadlineExceeded):
-				status = Canceled
-			}
+	err := stepNext(ctx)
+	status := StatusFromError(err)
+	if status == Failed {
+		switch {
+		case DefaultIsCanceled(err),
+			errors.Is(err, context.Canceled),
+			errors.Is(err, context.DeadlineExceeded):
+			status = Canceled
 		}
 	}
 

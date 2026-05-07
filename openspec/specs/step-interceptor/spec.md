@@ -45,12 +45,15 @@ call `flow.String(step)`.
 ### Requirement: Skipped and Canceled steps bypass the interceptor chain
 
 Steps whose `Condition` evaluates to a terminal status (`Skipped` or `Canceled`) before
-execution SHALL NOT enter the `StepInterceptor` chain. Their final status is set directly
-on the `State` and no interceptor is invoked. The post-run status remains queryable via
+execution SHALL NOT enter the `StepInterceptor` chain. The Workflow SHALL evaluate the
+Condition inline in the scheduling loop (`tick()`) and settle the step's terminal
+`StepResult` directly — without spawning a worker goroutine and without consuming a
+`MaxConcurrency` lease. The post-run status remains queryable via
 `workflow.StateOf(step).GetStatus()`.
 
 This avoids the footgun of forcing every interceptor to check whether the step "will
-actually execute" before calling `next`.
+actually execute" before calling `next`, and ensures terminal-by-condition steps do not
+serialize behind a low concurrency limit.
 
 #### Scenario: Skipped step does not invoke interceptors
 - **WHEN** a Step's Condition returns `Skipped`
@@ -60,6 +63,13 @@ actually execute" before calling `next`.
 #### Scenario: Canceled-by-condition step does not invoke interceptors
 - **WHEN** a Step's Condition returns `Canceled`
 - **THEN** no `StepInterceptor` or `AttemptInterceptor` is invoked for that step
+
+#### Scenario: Skipped step does not consume a concurrency lease
+- **GIVEN** a Workflow with `MaxConcurrency = 1` and a chain `a → b → c` where `b`'s
+  Condition returns `Skipped`
+- **WHEN** the Workflow runs
+- **THEN** `b` is settled inline; no worker goroutine is spawned for `b`; `b` does not
+  occupy the single available lease while `a` or `c` are running
 
 ---
 

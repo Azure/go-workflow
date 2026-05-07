@@ -97,8 +97,22 @@ type stepExecution struct {
 
 ### tick() simplification
 
-`tick()` is reduced to atomically claiming a step (private `scheduled` sentinel) to prevent
-double-spawning. All other logic moves into `stepExecution.run()`.
+`tick()` evaluates each runnable Step's `Condition` inline:
+
+- If the Condition returns a terminal status (`Skipped` / `Canceled`), the Step's
+  `StepResult` is set directly and execution moves on. No goroutine is spawned, no
+  `MaxConcurrency` lease is consumed, no interceptor runs.
+- Otherwise, `tick()` takes a lease, sets the status to `Running`, and spawns a worker
+  that runs the interceptor chain.
+
+Because the worker's status flip to `Running` happens under `statusChange.L` *before* the
+goroutine is spawned, a subsequent `tick()` cannot see the Step as `Pending` and double-
+spawn it. No `scheduled` sentinel is needed, and `StateOf(step).GetStatus()` only ever
+returns documented public `StepStatus` values.
+
+When a Step is settled inline, `tick()` re-iterates within the same call so newly-
+unblocked downstream Steps are picked up immediately (no signal would otherwise wake the
+main loop).
 
 ---
 
@@ -235,7 +249,7 @@ queryable via `workflow.StateOf(step).GetStatus()`.
 
 - `BeforeStep` / `AfterStep` / `Input` / `Output` — API and behavior unchanged
 - `StepConfig`, `StepOption`, `RetryOption` — unchanged
-- `StepStatus` — no new exported values; `scheduled` is private
+- `StepStatus` — no new values; only documented public statuses are ever observable
 - `Condition` system — unchanged
 - `SubWorkflow` embedding pattern — unchanged, just gains `PrependInterceptors`
 - No breaking changes to existing workflow definitions

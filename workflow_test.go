@@ -420,3 +420,55 @@ func TestWorkflow_NoInterceptors_NoRegression(t *testing.T) {
 	assert.NoError(t, w.Do(context.Background()))
 	assert.Equal(t, Succeeded, w.StateOf(step).GetStatus())
 }
+
+// TestSkippedStep_DoesNotConsumeLease verifies that a Skipped step does NOT
+// occupy a concurrency lease nor spawn a worker goroutine. With
+// MaxConcurrency=1 and a chain a → b(skip) → c, b being skipped must not
+// block c from running concurrently with a's *next* tick — and most
+// importantly, b must not even briefly hold the only lease.
+//
+// We assert this by attaching an AttemptInterceptor that records every step
+// that actually runs through the worker path. b must not appear there.
+func TestSkippedStep_DoesNotConsumeLease(t *testing.T) {
+	t.Parallel()
+
+	var ranSteps []string
+	mu := sync.Mutex{}
+	ic := AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
+		mu.Lock()
+		ranSteps = append(ranSteps, String(s))
+		mu.Unlock()
+		return next(ctx)
+	})
+
+	a, b, c := NoOp("a"), NoOp("b"), NoOp("c")
+	w := &Workflow{
+		MaxConcurrency:      1,
+		AttemptInterceptors: []AttemptInterceptor{ic},
+	}
+	w.Add(
+		Step(a),
+		Step(b).DependsOn(a).When(func(_ context.Context, _ map[Steper]StepResult) StepStatus {
+			return Skipped
+		}),
+		Step(c).DependsOn(b).When(AllSucceededOrSkipped),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- w.Do(context.Background()) }()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("workflow did not complete within 5s")
+	}
+
+	// Skipped step b must not have entered the worker path.
+	assert.Equal(t, Skipped, w.StateOf(b).GetStatus())
+	mu.Lock()
+	defer mu.Unlock()
+	for _, name := range ranSteps {
+		assert.NotEqual(t, "b", name, "skipped step must not consume a worker lease / fire AttemptInterceptor")
+	}
+	assert.ElementsMatch(t, []string{"a", "c"}, ranSteps)
+}
