@@ -342,6 +342,78 @@ func TestStepExecution_StepInterceptorOrder(t *testing.T) {
 	assert.Equal(t, []string{"A:before", "B:before", "B:after", "A:after"}, order)
 }
 
+// TestStepExecution_StepInterceptorChain_NoVariableCapture guards against the
+// classic Go closure-over-loop-variable bug in the chain builder. With 3+
+// interceptors, a buggy closure would either reorder calls, call the same
+// interceptor multiple times, or self-recurse via `next`. We verify (a) the
+// exact order of before/after across 4 interceptors, (b) the inner step runs
+// exactly once, and (c) no stack explosion.
+func TestStepExecution_StepInterceptorChain_NoVariableCapture(t *testing.T) {
+	t.Parallel()
+	var order []string
+	var stepRan int
+	makeIC := func(name string) StepInterceptor {
+		return StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+			order = append(order, name+":before")
+			err := next(ctx)
+			order = append(order, name+":after")
+			return err
+		})
+	}
+	step := Func("s", func(ctx context.Context) error {
+		stepRan++
+		return nil
+	})
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{makeIC("A"), makeIC("B"), makeIC("C"), makeIC("D")},
+	}
+	w.Add(Step(step))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, 1, stepRan, "inner step must run exactly once")
+	assert.Equal(t, []string{
+		"A:before", "B:before", "C:before", "D:before",
+		"D:after", "C:after", "B:after", "A:after",
+	}, order)
+}
+
+// TestStepExecution_AttemptInterceptorChain_NoVariableCapture mirrors the above
+// for AttemptInterceptors. With retries, the chain is built once but invoked
+// per attempt — any closure capture bug would surface as wrong order, missing
+// before/after pairs, or recursion.
+func TestStepExecution_AttemptInterceptorChain_NoVariableCapture(t *testing.T) {
+	t.Parallel()
+	var order []string
+	makeIC := func(name string) AttemptInterceptor {
+		return AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
+			order = append(order, fmt.Sprintf("%s:before:%d", name, attempt))
+			err := next(ctx)
+			order = append(order, fmt.Sprintf("%s:after:%d", name, attempt))
+			return err
+		})
+	}
+	calls := 0
+	step := Func("s", func(ctx context.Context) error {
+		calls++
+		if calls < 3 {
+			return errors.New("boom")
+		}
+		return nil
+	})
+	w := &Workflow{
+		AttemptInterceptors: []AttemptInterceptor{makeIC("X"), makeIC("Y"), makeIC("Z")},
+	}
+	w.Add(Step(step).Retry(func(o *RetryOption) {
+		o.Attempts = 3
+		o.Backoff = &backoff.ZeroBackOff{}
+	}))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []string{
+		"X:before:0", "Y:before:0", "Z:before:0", "Z:after:0", "Y:after:0", "X:after:0",
+		"X:before:1", "Y:before:1", "Z:before:1", "Z:after:1", "Y:after:1", "X:after:1",
+		"X:before:2", "Y:before:2", "Z:before:2", "Z:after:2", "Y:after:2", "X:after:2",
+	}, order)
+}
+
 func TestStepExecution_AttemptInterceptorOrder(t *testing.T) {
 	t.Parallel()
 	var order []string

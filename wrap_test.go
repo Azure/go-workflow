@@ -315,7 +315,7 @@ func TestSubWorkflow_PrependInterceptorsIdempotentAcrossDo(t *testing.T) {
 		// reset both parent and child step states so the workflow is re-runnable
 		assert.NoError(t, parent.Reset())
 		assert.NoError(t, parent.Do(context.Background()))
-		assert.Equal(t, int32(2), count.Load(),
+		assert.Equalf(t, int32(2), count.Load(),
 			"run %d: parent interceptor must fire exactly 2 times (outer sub + inner), accumulation detected", i)
 	}
 }

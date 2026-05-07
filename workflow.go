@@ -540,15 +540,19 @@ func (ex *stepExecution) run(ctx context.Context) {
 	stepNext := func(ctx context.Context) error { return ex.executeWithRetry(ctx) }
 	stepICs := ex.w.effectiveStepInterceptors()
 	for i := len(stepICs) - 1; i >= 0; i-- {
+		// ic and nextLocal are declared inside the loop body with :=, so they
+		// are fresh variables on every iteration and the closure below captures
+		// each iteration's instance independently. The explicit naming is to
+		// make the per-iteration scoping obvious to readers.
 		ic := stepICs[i]
-		next := stepNext
+		nextLocal := stepNext
 		stepNext = func(ctx context.Context) error {
 			if ex.w.DontPanic {
 				return catchPanicAsError(func() error {
-					return ic.InterceptStep(ctx, ex.step, next)
+					return ic.InterceptStep(ctx, ex.step, nextLocal)
 				})
 			}
-			return ic.InterceptStep(ctx, ex.step, next)
+			return ic.InterceptStep(ctx, ex.step, nextLocal)
 		}
 	}
 
@@ -603,16 +607,18 @@ func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 	}
 	attemptICs := ex.w.effectiveAttemptInterceptors()
 	for i := len(attemptICs) - 1; i >= 0; i-- {
+		// ic and nextLocal are declared inside the loop body with :=, so they
+		// are fresh variables on every iteration and the closure below captures
+		// each iteration's instance independently.
 		ic := attemptICs[i]
-		next := chain
-		icLocal := ic
+		nextLocal := chain
 		chain = func(ctx context.Context) error {
 			if ex.w.DontPanic {
 				return catchPanicAsError(func() error {
-					return icLocal.InterceptAttempt(ctx, ex.step, ex.attempt, next)
+					return ic.InterceptAttempt(ctx, ex.step, ex.attempt, nextLocal)
 				})
 			}
-			return icLocal.InterceptAttempt(ctx, ex.step, ex.attempt, next)
+			return ic.InterceptAttempt(ctx, ex.step, ex.attempt, nextLocal)
 		}
 	}
 	// Wrap the full attempt chain (including interceptors) so ex.attempt is always

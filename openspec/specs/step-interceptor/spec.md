@@ -136,11 +136,16 @@ type InterceptorReceiver interface {
 ```
 
 `stepExecution` calls `PrependInterceptors` exactly once per step, in `executeWithRetry`
-before the retry loop begins. The implementation SHALL use `make`+`copy` to construct fresh
-slices, so:
+before the retry loop begins. Inheritance is **per-run scoped**:
 
-- Parent backing arrays are never aliased.
-- Repeated `Do()` runs (across `Reset()` cycles) do not accumulate prepended interceptors.
+- The user-supplied `StepInterceptors` / `AttemptInterceptors` slices SHALL NOT be mutated.
+- The inherited prefix SHALL be stored on private `inheritedStep` / `inheritedAttempt`
+  fields and combined with the base only when constructing the run-time chain.
+- The inherited fields SHALL be cleared via `defer` at the start of every `Do()` so all
+  exit paths (success, preflight error, panic) reset the per-run state.
+- The public `Reset()` method SHALL also clear the inherited fields. The internal
+  `reset()` (called by `Do()` itself) SHALL NOT, since clearing there would wipe the
+  prefix the parent just wrote and break inheritance.
 
 `SubWorkflow.PrependInterceptors` SHALL delegate to the embedded `Workflow.PrependInterceptors`.
 
@@ -160,9 +165,11 @@ slices, so:
 - **WHEN** a sub-workflow step is retried N times
 - **THEN** parent interceptors are prepended exactly once, not N times
 
-#### Scenario: PrependInterceptors does not accumulate across Reset
-- **WHEN** a workflow that received prepended interceptors is reset and run again as a child
-- **THEN** the parent's interceptors are present exactly once, not duplicated
+#### Scenario: PrependInterceptors does not accumulate across repeated Do() runs
+- **GIVEN** a parent containing a child sub-workflow
+- **WHEN** the parent's `Do()` is invoked N times in succession
+- **THEN** each invocation results in the parent's interceptors firing exactly once per
+  step (no compounding across runs)
 
 ---
 
@@ -203,3 +210,32 @@ regardless of interceptor behaviour.
 #### Scenario: Attempt counter increments even when interceptor short-circuits
 - **WHEN** an `AttemptInterceptor` returns without calling `next`
 - **THEN** the next attempt (if retried) still receives `attempt = previous + 1`
+
+---
+
+### Requirement: DontPanic protects interceptor panics
+
+When `Workflow.DontPanic` is `true`, panics raised inside user-provided `StepInterceptor`
+or `AttemptInterceptor` implementations SHALL be caught and converted to errors using the
+same `catchPanicAsError` mechanism already applied to `Before` / `Do` / `After`. This
+prevents:
+
+- Process crashes from a faulty user interceptor.
+- `MaxConcurrency` lease leaks (an unrecovered panic skips the deferred `unlease`).
+- Loss of `signalStatusChange`, which would otherwise hang the main `Do()` loop.
+
+When `DontPanic` is `false` (the default), interceptor panics propagate as in normal Go
+semantics.
+
+#### Scenario: Panicking StepInterceptor under DontPanic
+- **GIVEN** a Workflow with `DontPanic = true` and a `StepInterceptor` that panics
+- **WHEN** the Workflow runs
+- **THEN** `Do()` returns an error within a bounded time
+- **AND** the step's `StepResult.Err` carries the panic value
+- **AND** the workflow does not hang waiting for a status signal
+
+#### Scenario: Panicking AttemptInterceptor under DontPanic
+- **GIVEN** a Workflow with `DontPanic = true` and an `AttemptInterceptor` that panics
+- **WHEN** the Workflow runs
+- **THEN** `Do()` returns an error within a bounded time
+- **AND** the step's `StepResult.Err` carries the panic value
