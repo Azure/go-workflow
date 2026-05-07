@@ -254,18 +254,17 @@ func (w *Workflow) IsTerminated() bool {
 }
 
 // Reset resets the Workflow to ready for a new run.
-//
-// Unlike the internal reset() (which Do() calls at its own start), Reset() also
-// clears interceptors inherited from a parent during a previous run. The internal
-// reset() must not clear them, because the parent writes them just before calling
-// child.Do(), and child.Do() then calls reset() — clearing there would wipe the
-// just-written prefix and break inheritance.
 func (w *Workflow) Reset() error {
 	if !w.isRunning.TryLock() {
 		return ErrWorkflowIsRunning
 	}
 	defer w.isRunning.Unlock()
 	w.reset()
+	// Unlike the internal reset() (which Do() calls at its own start), Reset() also
+	// clears interceptors inherited from a parent during a previous run. The internal
+	// reset() must not clear them, because the parent writes them just before calling
+	// child.Do(), and child.Do() then calls reset() — clearing there would wipe the
+	// just-written prefix and break inheritance.
 	w.inheritedStep = nil
 	w.inheritedAttempt = nil
 	return nil
