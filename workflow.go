@@ -44,13 +44,20 @@ type Workflow struct {
 	Clock          clock.Clock // Clock for retry and unit test
 	DefaultOption  *StepOption // DefaultOption is the default option for all Steps
 
-	StepInterceptors    []StepInterceptor    // per-step global interceptors
-	AttemptInterceptors []AttemptInterceptor // per-attempt global interceptors
+	StepInterceptors    []StepInterceptor    // per-step global interceptors (immutable base)
+	AttemptInterceptors []AttemptInterceptor // per-attempt global interceptors (immutable base)
 	IsolateInterceptors bool                 // if true, do not inherit interceptors from a parent workflow
 
 	StepBuilder // StepBuilder to call BuildStep() for Steps
 
 	steps map[Steper]*State // the internal states of Steps
+
+	// inheritedStep / inheritedAttempt are populated by PrependInterceptors at the
+	// start of each Do() (parent → child) and cleared by reset(). They are never
+	// merged into StepInterceptors / AttemptInterceptors so the user-supplied base
+	// stays untouched and repeated runs do not accumulate.
+	inheritedStep    []StepInterceptor
+	inheritedAttempt []AttemptInterceptor
 
 	statusChange *sync.Cond     // a condition to signal the status change to proceed tick
 	leaseBucket  chan struct{}  // constraint max concurrency of running Steps, nil means no limit
@@ -266,19 +273,50 @@ func (w *Workflow) reset() {
 // so a Workflow used directly as a step (or embedded via SubWorkflow) can
 // inherit interceptors from its parent. If IsolateInterceptors is true,
 // the call is a no-op and the workflow uses only its own interceptors.
+//
+// The inherited slices are stored separately from StepInterceptors /
+// AttemptInterceptors so the user-supplied base is never mutated and
+// repeated runs do not accumulate.
 func (w *Workflow) PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor) {
 	if w.IsolateInterceptors {
 		return
 	}
-	combined := make([]StepInterceptor, len(step)+len(w.StepInterceptors))
-	copy(combined, step)
-	copy(combined[len(step):], w.StepInterceptors)
-	w.StepInterceptors = combined
+	if len(step) > 0 {
+		merged := make([]StepInterceptor, 0, len(step)+len(w.inheritedStep))
+		merged = append(merged, step...)
+		merged = append(merged, w.inheritedStep...)
+		w.inheritedStep = merged
+	}
+	if len(attempt) > 0 {
+		mergedA := make([]AttemptInterceptor, 0, len(attempt)+len(w.inheritedAttempt))
+		mergedA = append(mergedA, attempt...)
+		mergedA = append(mergedA, w.inheritedAttempt...)
+		w.inheritedAttempt = mergedA
+	}
+}
 
-	combinedA := make([]AttemptInterceptor, len(attempt)+len(w.AttemptInterceptors))
-	copy(combinedA, attempt)
-	copy(combinedA[len(attempt):], w.AttemptInterceptors)
-	w.AttemptInterceptors = combinedA
+// effectiveStepInterceptors returns the chain to invoke for this run:
+// inherited (from parent, if any) prepended to the user-configured base.
+// The result is never written back to either field.
+func (w *Workflow) effectiveStepInterceptors() []StepInterceptor {
+	if len(w.inheritedStep) == 0 {
+		return w.StepInterceptors
+	}
+	out := make([]StepInterceptor, 0, len(w.inheritedStep)+len(w.StepInterceptors))
+	out = append(out, w.inheritedStep...)
+	out = append(out, w.StepInterceptors...)
+	return out
+}
+
+// effectiveAttemptInterceptors mirrors effectiveStepInterceptors for AttemptInterceptors.
+func (w *Workflow) effectiveAttemptInterceptors() []AttemptInterceptor {
+	if len(w.inheritedAttempt) == 0 {
+		return w.AttemptInterceptors
+	}
+	out := make([]AttemptInterceptor, 0, len(w.inheritedAttempt)+len(w.AttemptInterceptors))
+	out = append(out, w.inheritedAttempt...)
+	out = append(out, w.AttemptInterceptors...)
+	return out
 }
 
 // Do starts the Step execution in topological order,
@@ -311,6 +349,11 @@ func (w *Workflow) Do(ctx context.Context) error {
 	w.statusChange.L.Unlock()
 	// ensure all goroutines are exited
 	w.waitGroup.Wait()
+	// Clear inherited interceptors set by a parent during this run so that the
+	// next time this workflow runs (under any parent, or standalone) it starts
+	// fresh and PrependInterceptors does not accumulate across runs.
+	w.inheritedStep = nil
+	w.inheritedAttempt = nil
 	// return the error
 	err := make(ErrWorkflow)
 	for step, state := range w.steps {
@@ -450,8 +493,9 @@ func (ex *stepExecution) run(ctx context.Context) {
 
 		// Build StepInterceptor chain; innermost next is executeWithRetry.
 		stepNext := func(ctx context.Context) error { return ex.executeWithRetry(ctx) }
-		for i := len(ex.w.StepInterceptors) - 1; i >= 0; i-- {
-			ic := ex.w.StepInterceptors[i]
+		stepICs := ex.w.effectiveStepInterceptors()
+		for i := len(stepICs) - 1; i >= 0; i-- {
+			ic := stepICs[i]
 			next := stepNext
 			stepNext = func(ctx context.Context) error {
 				return ic.InterceptStep(ctx, ex.step, next)
@@ -484,9 +528,11 @@ func (ex *stepExecution) run(ctx context.Context) {
 func (ex *stepExecution) executeWithRetry(ctx context.Context) error {
 	option := ex.state.Option()
 
-	// Propagate interceptors to SubWorkflow once — before the retry loop starts.
+	// Propagate the effective chain (inherited prefix + this workflow's own base)
+	// so multi-level nesting (grandparent → parent → child) accumulates correctly
+	// within one run, while the user-supplied base on each workflow stays untouched.
 	if recv, ok := ex.step.(InterceptorReceiver); ok {
-		recv.PrependInterceptors(ex.w.StepInterceptors, ex.w.AttemptInterceptors)
+		recv.PrependInterceptors(ex.w.effectiveStepInterceptors(), ex.w.effectiveAttemptInterceptors())
 	}
 
 	attemptChain := ex.buildAttemptChain()
@@ -506,8 +552,9 @@ func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 	chain := func(ctx context.Context) error {
 		return ex.runAttempt(ctx)
 	}
-	for i := len(ex.w.AttemptInterceptors) - 1; i >= 0; i-- {
-		ic := ex.w.AttemptInterceptors[i]
+	attemptICs := ex.w.effectiveAttemptInterceptors()
+	for i := len(attemptICs) - 1; i >= 0; i-- {
+		ic := attemptICs[i]
 		next := chain
 		icLocal := ic
 		chain = func(ctx context.Context) error {

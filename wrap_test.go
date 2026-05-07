@@ -287,6 +287,39 @@ func TestWorkflow_AsStep_InheritsInterceptors(t *testing.T) {
 	assert.True(t, found, "parent interceptor should see inner step via Workflow.PrependInterceptors")
 }
 
+// TestSubWorkflow_PrependInterceptorsIdempotentAcrossDo ensures that running the
+// same parent (with a sub-workflow child) multiple times does NOT accumulate
+// prepended interceptors on the child. The parent's interceptor should fire
+// exactly twice per run (outer sub step + inner step), regardless of how many
+// times Do() is called.
+func TestSubWorkflow_PrependInterceptorsIdempotentAcrossDo(t *testing.T) {
+	t.Parallel()
+
+	var count atomic.Int32
+	ic := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		count.Add(1)
+		return next(ctx)
+	})
+
+	innerStep := NoOp("inner")
+	type mySubStep struct{ SubWorkflow }
+	sub := &mySubStep{}
+	sub.Add(Step(innerStep))
+
+	parent := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	parent.Add(Step(sub))
+
+	const runs = 3
+	for i := 0; i < runs; i++ {
+		count.Store(0)
+		// reset both parent and child step states so the workflow is re-runnable
+		assert.NoError(t, parent.Reset())
+		assert.NoError(t, parent.Do(context.Background()))
+		assert.Equal(t, int32(2), count.Load(),
+			"run %d: parent interceptor must fire exactly 2 times (outer sub + inner), accumulation detected", i)
+	}
+}
+
 func TestSubWorkflow_IsolateInterceptors(t *testing.T) {
 	t.Parallel()
 
