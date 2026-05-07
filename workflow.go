@@ -52,10 +52,20 @@ type Workflow struct {
 
 	steps map[Steper]*State // the internal states of Steps
 
-	// inheritedStep / inheritedAttempt are populated by PrependInterceptors at the
-	// start of each Do() (parent → child) and cleared by reset(). They are never
-	// merged into StepInterceptors / AttemptInterceptors so the user-supplied base
-	// stays untouched and repeated runs do not accumulate.
+	// inheritedStep / inheritedAttempt are populated by PrependInterceptors when
+	// this workflow runs as a child step under a parent. The lifecycle is:
+	//   1. Parent writes them BEFORE calling child.Do() (in executeWithRetry).
+	//   2. child.Do() reads them while building the effective interceptor chain.
+	//   3. child.Do()'s defer clears them after waitGroup.Wait() (covers all
+	//      exit paths: success, preflight error, panic).
+	//
+	// They are NOT cleared by the internal reset() — reset() runs at the start
+	// of Do(), which would wipe out what the parent just wrote and break
+	// inheritance. The public Reset() method does clear them, since users call
+	// Reset() between runs and expect a fully-fresh state.
+	//
+	// They are never merged into StepInterceptors / AttemptInterceptors so the
+	// user-supplied base stays untouched and repeated runs do not accumulate.
 	inheritedStep    []StepInterceptor
 	inheritedAttempt []AttemptInterceptor
 
@@ -244,12 +254,20 @@ func (w *Workflow) IsTerminated() bool {
 }
 
 // Reset resets the Workflow to ready for a new run.
+//
+// Unlike the internal reset() (which Do() calls at its own start), Reset() also
+// clears interceptors inherited from a parent during a previous run. The internal
+// reset() must not clear them, because the parent writes them just before calling
+// child.Do(), and child.Do() then calls reset() — clearing there would wipe the
+// just-written prefix and break inheritance.
 func (w *Workflow) Reset() error {
 	if !w.isRunning.TryLock() {
 		return ErrWorkflowIsRunning
 	}
 	defer w.isRunning.Unlock()
 	w.reset()
+	w.inheritedStep = nil
+	w.inheritedAttempt = nil
 	return nil
 }
 
@@ -329,6 +347,14 @@ func (w *Workflow) Do(ctx context.Context) error {
 		return ErrWorkflowIsRunning
 	}
 	defer w.isRunning.Unlock()
+	// Clear inherited interceptors set by a parent during this run on every exit
+	// path, so the next time this workflow runs (under any parent, or standalone)
+	// it starts fresh and PrependInterceptors does not accumulate. Using defer
+	// ensures even early exits (Empty, preflight failure, panic) reset state.
+	defer func() {
+		w.inheritedStep = nil
+		w.inheritedAttempt = nil
+	}()
 	// if no steps to run
 	if w.Empty() {
 		return nil
@@ -349,11 +375,6 @@ func (w *Workflow) Do(ctx context.Context) error {
 	w.statusChange.L.Unlock()
 	// ensure all goroutines are exited
 	w.waitGroup.Wait()
-	// Clear inherited interceptors set by a parent during this run so that the
-	// next time this workflow runs (under any parent, or standalone) it starts
-	// fresh and PrependInterceptors does not accumulate across runs.
-	w.inheritedStep = nil
-	w.inheritedAttempt = nil
 	// return the error
 	err := make(ErrWorkflow)
 	for step, state := range w.steps {
@@ -513,12 +534,20 @@ func (ex *stepExecution) run(ctx context.Context) {
 	// By the time we get here, tick() has already evaluated the Condition
 	// (terminal results are settled inline) and set the status to Running.
 	// Build the StepInterceptor chain; innermost next is executeWithRetry.
+	// When DontPanic is true, each interceptor invocation is wrapped in
+	// catchPanicAsError so a panicking user interceptor cannot crash the
+	// process or leave the lease unreleased / status unsignalled.
 	stepNext := func(ctx context.Context) error { return ex.executeWithRetry(ctx) }
 	stepICs := ex.w.effectiveStepInterceptors()
 	for i := len(stepICs) - 1; i >= 0; i-- {
 		ic := stepICs[i]
 		next := stepNext
 		stepNext = func(ctx context.Context) error {
+			if ex.w.DontPanic {
+				return catchPanicAsError(func() error {
+					return ic.InterceptStep(ctx, ex.step, next)
+				})
+			}
 			return ic.InterceptStep(ctx, ex.step, next)
 		}
 	}
@@ -578,6 +607,11 @@ func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 		next := chain
 		icLocal := ic
 		chain = func(ctx context.Context) error {
+			if ex.w.DontPanic {
+				return catchPanicAsError(func() error {
+					return icLocal.InterceptAttempt(ctx, ex.step, ex.attempt, next)
+				})
+			}
 			return icLocal.InterceptAttempt(ctx, ex.step, ex.attempt, next)
 		}
 	}

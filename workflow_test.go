@@ -472,3 +472,62 @@ func TestSkippedStep_DoesNotConsumeLease(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{"a", "c"}, ranSteps)
 }
+
+// TestInterceptorPanic_DontPanic ensures that when DontPanic is true, a panic
+// inside a user StepInterceptor is converted to an error rather than crashing
+// the process or leaving the lease unreleased / status unsignalled.
+func TestInterceptorPanic_DontPanic(t *testing.T) {
+	t.Parallel()
+	step := NoOp("a")
+	w := &Workflow{
+		DontPanic: true,
+		StepInterceptors: []StepInterceptor{
+			StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+				panic("boom from StepInterceptor")
+			}),
+		},
+	}
+	w.Add(Step(step))
+
+	done := make(chan error, 1)
+	go func() { done <- w.Do(context.Background()) }()
+	select {
+	case err := <-done:
+		// Workflow returns ErrWorkflow because the step ended in Failed.
+		assert.Error(t, err)
+		stepErr := w.StateOf(step).GetStepResult().Err
+		assert.Error(t, stepErr)
+		assert.Contains(t, stepErr.Error(), "boom from StepInterceptor")
+	case <-time.After(5 * time.Second):
+		t.Fatal("workflow hung after panicking interceptor — lease leak suspected")
+	}
+}
+
+// TestAttemptInterceptorPanic_DontPanic mirrors the StepInterceptor panic test
+// but for AttemptInterceptor. It ensures the panic is caught for retried
+// attempts as well.
+func TestAttemptInterceptorPanic_DontPanic(t *testing.T) {
+	t.Parallel()
+	step := NoOp("a")
+	w := &Workflow{
+		DontPanic: true,
+		AttemptInterceptors: []AttemptInterceptor{
+			AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
+				panic("boom from AttemptInterceptor")
+			}),
+		},
+	}
+	w.Add(Step(step))
+
+	done := make(chan error, 1)
+	go func() { done <- w.Do(context.Background()) }()
+	select {
+	case err := <-done:
+		assert.Error(t, err)
+		stepErr := w.StateOf(step).GetStepResult().Err
+		assert.Error(t, stepErr)
+		assert.Contains(t, stepErr.Error(), "boom from AttemptInterceptor")
+	case <-time.After(5 * time.Second):
+		t.Fatal("workflow hung after panicking AttemptInterceptor — lease leak suspected")
+	}
+}

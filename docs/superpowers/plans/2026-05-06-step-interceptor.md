@@ -1,5 +1,22 @@
 # Step Interceptor Implementation Plan
 
+> ⚠️ **OUTDATED — DO NOT USE AS A REFERENCE FOR THE SHIPPED IMPLEMENTATION.**
+>
+> This plan was written before the design was simplified. The shipped PR drops the
+> `EventSink` / `WorkflowEvent` / `EventType` vocabulary entirely (users plug their
+> own event types into the interceptors), removes the `StepInfo` / `AttemptInfo`
+> wrappers (interceptors receive `Steper` and `uint64` directly), removes
+> `TerminalReason` (Skipped/Canceled steps bypass the interceptor chain entirely),
+> and removes the `scheduled` `StepStatus` sentinel (`tick()` evaluates Condition
+> inline and sets `Running` directly). Files referenced here that do not exist in
+> the final tree (`event.go`, `event_test.go`) were never created.
+>
+> The current design and rationale live in
+> [`docs/superpowers/specs/2026-05-06-step-interceptor-design.md`](../specs/2026-05-06-step-interceptor-design.md).
+> The synced main spec lives in
+> [`openspec/specs/step-interceptor/spec.md`](../../../openspec/specs/step-interceptor/spec.md).
+> This plan is kept only as a record of the original direction.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a two-layer interceptor system (`StepInterceptor` + `AttemptInterceptor`) to go-workflow, enabling structured global observability with built-in `EventSink` adapters.
