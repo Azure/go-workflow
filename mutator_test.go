@@ -40,3 +40,53 @@ func TestMutate_skipsNonMatchingType(t *testing.T) {
 	assert.Nil(t, b)
 	assert.Equal(t, 0, called)
 }
+
+type mutWrapper struct{ inner Steper }
+
+func (w *mutWrapper) Do(context.Context) error { return nil }
+func (w *mutWrapper) Unwrap() Steper           { return w.inner }
+
+func TestMutate_matchesInnerViaUnwrap(t *testing.T) {
+	inner := &mutFoo{Field: "before"}
+	wrapper := &mutWrapper{inner: inner}
+
+	called := 0
+	m := Mutate[*mutFoo](func(ctx context.Context, f *mutFoo) Builder {
+		called++
+		assert.Same(t, inner, f, "should receive the inner *mutFoo, not the wrapper")
+		return nil
+	})
+	matched, target, _ := m.applyTo(context.Background(), wrapper)
+	assert.True(t, matched)
+	assert.Same(t, inner, target)
+	assert.Equal(t, 1, called)
+}
+
+func TestMutate_outerWrapperWinsWhenItIsTheTarget(t *testing.T) {
+	inner := &mutFoo{}
+	wrapper := &mutWrapper{inner: inner}
+
+	called := 0
+	m := Mutate[*mutWrapper](func(ctx context.Context, w *mutWrapper) Builder {
+		called++
+		assert.Same(t, wrapper, w)
+		return nil
+	})
+	matched, _, _ := m.applyTo(context.Background(), wrapper)
+	assert.True(t, matched)
+	assert.Equal(t, 1, called)
+}
+
+func TestMutate_doesNotCrossWorkflowBoundary(t *testing.T) {
+	// A *Workflow sits between the outer step and the inner *mutFoo.
+	// applyTo must NOT descend into it; that's what PrependMutators is for.
+	innerFoo := &mutFoo{}
+	innerWf := new(Workflow).Add(Step(innerFoo))
+
+	m := Mutate[*mutFoo](func(ctx context.Context, f *mutFoo) Builder {
+		t.Fatalf("mutator must not descend into nested workflow")
+		return nil
+	})
+	matched, _, _ := m.applyTo(context.Background(), innerWf)
+	assert.False(t, matched)
+}

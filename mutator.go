@@ -47,11 +47,9 @@ func (m mutatorFunc[T]) applyTo(ctx context.Context, step Steper) (bool, Steper,
 		}
 		// Stop at workflow boundaries: do NOT descend into a nested workflow's
 		// inner steps from here. Inner steps are reached via PrependMutators.
-		// The `s != step` guard allows the top-level step to be checked even
-		// when it is itself a workflow; only inner workflows are skipped.
 		if _, isWorkflow := s.(interface {
 			StateOf(Steper) *State
-		}); isWorkflow && s != step {
+		}); isWorkflow {
 			return TraverseEndBranch
 		}
 		return TraverseContinue
