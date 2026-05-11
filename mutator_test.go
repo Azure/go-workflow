@@ -106,3 +106,14 @@ func TestMutate_doesNotCrossWorkflowBoundaryInsideWrapper(t *testing.T) {
 	matched, _, _ := m.applyTo(context.Background(), wrapper)
 	assert.False(t, matched)
 }
+
+func TestState_MutatorsAppliedDefault(t *testing.T) {
+	s := &State{}
+	assert.False(t, s.MutatorsApplied())
+}
+
+func TestState_SetMutatorsApplied(t *testing.T) {
+	s := &State{}
+	s.SetMutatorsApplied()
+	assert.True(t, s.MutatorsApplied())
+}
