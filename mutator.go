@@ -14,6 +14,9 @@ type Mutator interface {
 // propagate their [Mutator]s into the inner workflow before it schedules its
 // own steps.
 type MutatorReceiver interface {
+	// PrependMutators inserts mw at the front of the receiver's Mutators
+	// list, so propagated parent Mutators run before locally-registered
+	// child Mutators.
 	PrependMutators(mw []Mutator)
 }
 
@@ -44,6 +47,8 @@ func (m mutatorFunc[T]) applyTo(ctx context.Context, step Steper) (bool, Steper,
 		}
 		// Stop at workflow boundaries: do NOT descend into a nested workflow's
 		// inner steps from here. Inner steps are reached via PrependMutators.
+		// The `s != step` guard allows the top-level step to be checked even
+		// when it is itself a workflow; only inner workflows are skipped.
 		if _, isWorkflow := s.(interface {
 			StateOf(Steper) *State
 		}); isWorkflow && s != step {
