@@ -686,7 +686,7 @@ func (ex *stepExecution) run(ctx context.Context) {
 func (ex *stepExecution) executeWithRetry(ctx context.Context) error {
 	option := ex.state.Option()
 
-	if recv, ok := ex.step.(InterceptorReceiver); ok {
+	if recv := findInterceptorReceiver(ex.step); recv != nil {
 		recv.PrependInterceptors(ex.w.effectiveStepInterceptors(), ex.w.effectiveAttemptInterceptors())
 	}
 

@@ -349,3 +349,47 @@ func TestSubWorkflow_IsolateInterceptors(t *testing.T) {
 	// child only sees the inner step
 	assert.Equal(t, int32(1), childCount.Load())
 }
+
+// TestWorkflow_AsStep_InheritsThroughNamedStep ensures that wrapping a child
+// *Workflow in a Steper-only wrapper (NamedStep embeds the Steper interface,
+// so PrependInterceptors is NOT promoted) does not break parent-interceptor
+// inheritance: the parent walks the Step tree via Unwrap to find the
+// InterceptorReceiver, so wrappers are transparent.
+func TestWorkflow_AsStep_InheritsThroughNamedStep(t *testing.T) {
+	t.Parallel()
+
+	var stepped []Steper
+	mu := sync.Mutex{}
+	ic := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		mu.Lock()
+		stepped = append(stepped, s)
+		mu.Unlock()
+		return next(ctx)
+	})
+
+	innerStep := NoOp("inner")
+	child := &Workflow{}
+	child.Add(Step(innerStep))
+
+	// Wrap child in NamedStep — this is the wrapper produced by flow.Name().
+	// NamedStep embeds the Steper interface, so it does NOT promote
+	// PrependInterceptors. Inheritance must therefore go through Unwrap.
+	named := &NamedStep{Name: "child", Steper: child}
+
+	parent := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	parent.Add(Step(named))
+	assert.NoError(t, parent.Do(context.Background()))
+
+	// Parent's interceptor must see both the wrapped child step and the inner step.
+	var sawNamed, sawInner bool
+	for _, s := range stepped {
+		if s == named {
+			sawNamed = true
+		}
+		if s == innerStep {
+			sawInner = true
+		}
+	}
+	assert.True(t, sawNamed, "parent interceptor should fire for the NamedStep itself")
+	assert.True(t, sawInner, "parent interceptor should fire for the inner step (inheritance through Unwrap)")
+}

@@ -135,6 +135,12 @@ type InterceptorReceiver interface {
 }
 ```
 
+`stepExecution` locates the `InterceptorReceiver` for a step by walking the Step tree via
+`Unwrap` (the same protocol used by `As[T]` / `Has[T]`) and selecting the first receiver
+found in pre-order. This means a sub-workflow MAY be wrapped in any Steper-only wrapper
+(notably `flow.Name` / `NamedStep`, whose embedded `Steper` interface does not promote
+`PrependInterceptors`) without losing inheritance.
+
 `stepExecution` calls `PrependInterceptors` exactly once per step, in `executeWithRetry`
 before the retry loop begins. Inheritance is **per-run scoped**:
 
@@ -160,6 +166,16 @@ before the retry loop begins. Inheritance is **per-run scoped**:
   containing step `S`
 - **WHEN** the parent runs
 - **THEN** X is invoked for both the outer step and the inner step S
+
+#### Scenario: Inheritance survives Steper-only wrappers (NamedStep / flow.Name)
+- **GIVEN** a parent Workflow with a `StepInterceptor` X, and a child `*Workflow`
+  containing step `S` that is added to the parent via `flow.Name(child, "name")` (which
+  wraps the child in a `NamedStep` whose embedded `Steper` interface does not promote
+  `PrependInterceptors`)
+- **WHEN** the parent runs
+- **THEN** X is invoked for both the wrapping `NamedStep` and the inner step S
+- **AND** inheritance works because `stepExecution` looks up `InterceptorReceiver` via
+  `Unwrap`, not via a direct type assertion on the registered Step
 
 #### Scenario: PrependInterceptors does not duplicate across retries
 - **WHEN** a sub-workflow step is retried N times

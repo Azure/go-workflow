@@ -48,6 +48,31 @@ func (f AttemptInterceptorFunc) InterceptAttempt(ctx context.Context, step Stepe
 // Implementations should be careful not to mutate the user-supplied base
 // chain or accumulate inherited entries across runs (see Workflow's
 // `inheritedStep` / `inheritedAttempt` design).
+//
+// The parent looks for an InterceptorReceiver by walking the Step tree via
+// Unwrap (using the same protocol as As[T] / Has[T]). This means inheritance
+// keeps working when the sub-workflow is wrapped in a Name / NamedStep / any
+// other Steper wrapper that exposes Unwrap. The first receiver found in
+// pre-order is used.
 type InterceptorReceiver interface {
 	PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor)
+}
+
+// findInterceptorReceiver returns the first InterceptorReceiver in the Step
+// tree rooted at s, walking via Unwrap in pre-order. Returns nil if none of
+// the unwrapped Steps satisfies InterceptorReceiver.
+//
+// This lets a sub-workflow be wrapped in a Steper-only wrapper (e.g.
+// NamedStep, which embeds the Steper interface and therefore does not
+// promote PrependInterceptors) without losing parent-interceptor inheritance.
+func findInterceptorReceiver(s Steper) InterceptorReceiver {
+	var found InterceptorReceiver
+	Traverse(s, func(s Steper, _ []Steper) TraverseDecision {
+		if r, ok := s.(InterceptorReceiver); ok {
+			found = r
+			return TraverseStop
+		}
+		return TraverseContinue
+	})
+	return found
 }
