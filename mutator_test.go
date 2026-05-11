@@ -90,3 +90,19 @@ func TestMutate_doesNotCrossWorkflowBoundary(t *testing.T) {
 	matched, _, _ := m.applyTo(context.Background(), innerWf)
 	assert.False(t, matched)
 }
+
+func TestMutate_doesNotCrossWorkflowBoundaryInsideWrapper(t *testing.T) {
+	// wrapper -> *Workflow -> *mutFoo. The wrapper itself is not a workflow,
+	// so Traverse will descend past it; the *Workflow must then halt the
+	// descent so the inner *mutFoo is NOT reached.
+	innerFoo := &mutFoo{}
+	innerWf := new(Workflow).Add(Step(innerFoo))
+	wrapper := &mutWrapper{inner: innerWf}
+
+	m := Mutate[*mutFoo](func(ctx context.Context, f *mutFoo) Builder {
+		t.Fatalf("mutator must not descend into nested workflow even when wrapped")
+		return nil
+	})
+	matched, _, _ := m.applyTo(context.Background(), wrapper)
+	assert.False(t, matched)
+}
