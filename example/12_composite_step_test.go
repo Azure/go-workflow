@@ -73,37 +73,3 @@ func ExampleCompositeStep() {
 	// CompositeStep: [Failed]
 	// 	SimpleStep Failed!
 }
-
-func ExampleCompositeViaWorkflow() {
-	var (
-		composite = &CompositeViaWorkflow{SimpleStep: SimpleStep{
-			Value: "Action!",
-		}}
-		w = new(flow.Workflow).Add(
-			flow.Step(composite),
-		)
-	)
-	_ = w.Do(context.Background())
-	// Output:
-	// Bootstrap
-	// SimpleStep: Action!
-}
-
-type CompositeViaWorkflow struct {
-	SimpleStep
-	w *flow.Workflow
-}
-
-func (c *CompositeViaWorkflow) Unwrap() flow.Steper          { return c.w }
-func (c *CompositeViaWorkflow) Do(ctx context.Context) error { return c.w.Do(ctx) }
-func (c *CompositeViaWorkflow) BuildStep() {
-	c.w = &flow.Workflow{}
-	var (
-		bootstrap = new(Bootstrap)
-		cleanup   = new(Cleanup)
-		simple    = &c.SimpleStep
-	)
-	c.w.Add(
-		flow.Pipe(bootstrap, simple, cleanup),
-	)
-}

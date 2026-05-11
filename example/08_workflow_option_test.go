@@ -17,7 +17,7 @@ import (
 //	type Workflow struct {
 //		MaxConcurrency int  // MaxConcurrency limits the max concurrency of running Steps
 //		DontPanic      bool // DontPanic suppress panics, instead return it as error
-//		OKToSkip       bool // OKToSkip returns nil if all Steps succeeded or skipped, otherwise only return nil if all Steps succeeded
+//		SkipAsError    bool // SkipAsError treats Skipped Steps as workflow errors (default: false — skips do not propagate)
 //	}
 
 func ExampleWorkflow_MaxConcurrency() {

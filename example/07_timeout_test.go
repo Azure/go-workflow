@@ -95,6 +95,8 @@ func (t *testTimer) C() <-chan time.Time {
 }
 
 func (t *testTimer) Start(duration time.Duration) {
+	// Ignore the requested duration and fire immediately so examples / unit
+	// tests do not have to wait through real backoff intervals.
 	t.timer = time.NewTimer(0)
 }
 

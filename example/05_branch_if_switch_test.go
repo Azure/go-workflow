@@ -36,9 +36,9 @@ func ExampleIf() {
 			Else(newIt),
 	)
 	fmt.Println(item) //
-	w.Do(context.Background())
+	_ = w.Do(context.Background())
 	fmt.Println(item) // new
-	w.Do(context.Background())
+	_ = w.Do(context.Background())
 	fmt.Println(item) // new_updated
 	// Output:
 	//
@@ -71,7 +71,7 @@ func ExampleSwitch() {
 
 		flow.Step(canOwnGun).DependsOn(canDrive), // just let them print in order
 	)
-	w.Do(context.Background())
+	_ = w.Do(context.Background())
 	fmt.Println(w.StateOf(canDrink).Status) // Skipped
 	// Output:
 	// CanDrive

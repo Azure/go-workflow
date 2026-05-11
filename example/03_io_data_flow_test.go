@@ -108,7 +108,7 @@ func ExampleAddSteps_BeforeStep() {
 		flow.Step(foo).DependsOn(bar).
 			BeforeStep(func(ctx context.Context, _ flow.Steper) (context.Context, error) {
 				fmt.Println("BeforeStep")
-				ctx = context.WithValue(ctx, "key", "value") // the value is available in Do
+				ctx = context.WithValue(ctx, ctxKey{}, "value") // the value is available in Do
 				return ctx, nil
 			}).
 			AfterStep(func(ctx context.Context, _ flow.Steper, err error) error {
@@ -137,6 +137,10 @@ type SayHello struct {
 	Who    string
 	Output string
 }
+
+// ctxKey is a private type used as a context.WithValue key, following the Go
+// convention that key types should be unexported to avoid collisions.
+type ctxKey struct{}
 
 func (s *SayHello) Do(context.Context) error {
 	s.Output = "Hello " + s.Who
