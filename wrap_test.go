@@ -2,9 +2,13 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -149,4 +153,243 @@ func TestBuildStep(t *testing.T) {
 		_ = new(Workflow).Add(Step(s))
 		assert.Equal(t, []string{"Reset", "BuildStep"}, s.calls)
 	})
+}
+
+func TestSubWorkflow_InterceptorPropagation(t *testing.T) {
+	t.Parallel()
+
+	var stepped []Steper
+	mu := sync.Mutex{}
+	ic := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		mu.Lock()
+		stepped = append(stepped, s)
+		mu.Unlock()
+		return next(ctx)
+	})
+
+	innerStep := NoOp("inner")
+	type mySubStep struct{ SubWorkflow }
+	sub := &mySubStep{}
+	sub.Add(Step(innerStep))
+
+	w := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	w.Add(Step(sub))
+
+	assert.NoError(t, w.Do(context.Background()))
+
+	// Parent interceptor must have seen both the sub step and the inner step.
+	assert.GreaterOrEqual(t, len(stepped), 2)
+	found := false
+	for _, s := range stepped {
+		if s == innerStep {
+			found = true
+		}
+	}
+	assert.True(t, found, "parent interceptor should see inner step via propagation")
+}
+
+func TestSubWorkflow_ChildInterceptorPreserved(t *testing.T) {
+	t.Parallel()
+
+	var parentStepped, childStepped []Steper
+	pmu, cmu := sync.Mutex{}, sync.Mutex{}
+
+	parentIC := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		pmu.Lock()
+		parentStepped = append(parentStepped, s)
+		pmu.Unlock()
+		return next(ctx)
+	})
+	childIC := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		cmu.Lock()
+		childStepped = append(childStepped, s)
+		cmu.Unlock()
+		return next(ctx)
+	})
+
+	innerStep := NoOp("inner")
+	type mySubStep struct{ SubWorkflow }
+	sub := &mySubStep{}
+	sub.Add(Step(innerStep))
+	sub.w.StepInterceptors = []StepInterceptor{childIC}
+
+	w := &Workflow{StepInterceptors: []StepInterceptor{parentIC}}
+	w.Add(Step(sub))
+
+	assert.NoError(t, w.Do(context.Background()))
+
+	// Parent sees sub + inner (propagated); child sees inner only.
+	assert.GreaterOrEqual(t, len(parentStepped), 2)
+	assert.GreaterOrEqual(t, len(childStepped), 1)
+}
+
+func TestSubWorkflow_InterceptorNotDuplicatedOnRetry(t *testing.T) {
+	t.Parallel()
+
+	var count atomic.Int32
+	sink := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		count.Add(1)
+		return next(ctx)
+	})
+
+	attempts := 0
+	inner := Func("inner", func(ctx context.Context) error {
+		attempts++
+		if attempts < 2 {
+			return errors.New("fail once")
+		}
+		return nil
+	})
+
+	type mySubStep struct{ SubWorkflow }
+	sub := &mySubStep{}
+	sub.Add(Step(inner).Retry(func(o *RetryOption) {
+		o.Attempts = 3
+		o.Backoff = &backoff.ZeroBackOff{}
+	}))
+
+	w := &Workflow{StepInterceptors: []StepInterceptor{sink}}
+	w.Add(Step(sub))
+	assert.NoError(t, w.Do(context.Background()))
+
+	// parent interceptor must fire exactly twice:
+	// once for the outer sub step, once for the inner step (regardless of retry count).
+	assert.Equal(t, int32(2), count.Load())
+}
+
+func TestWorkflow_AsStep_InheritsInterceptors(t *testing.T) {
+	t.Parallel()
+
+	var stepped []Steper
+	mu := sync.Mutex{}
+	ic := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		mu.Lock()
+		stepped = append(stepped, s)
+		mu.Unlock()
+		return next(ctx)
+	})
+
+	innerStep := NoOp("inner")
+	child := &Workflow{}
+	child.Add(Step(innerStep))
+
+	parent := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	parent.Add(Step(child))
+	assert.NoError(t, parent.Do(context.Background()))
+
+	// parent's interceptor should see both the child workflow step and the inner step
+	found := false
+	for _, s := range stepped {
+		if s == innerStep {
+			found = true
+		}
+	}
+	assert.True(t, found, "parent interceptor should see inner step via Workflow.PrependInterceptors")
+}
+
+// TestSubWorkflow_PrependInterceptorsIdempotentAcrossDo ensures that running the
+// same parent (with a sub-workflow child) multiple times does NOT accumulate
+// prepended interceptors on the child. The parent's interceptor should fire
+// exactly twice per run (outer sub step + inner step), regardless of how many
+// times Do() is called.
+func TestSubWorkflow_PrependInterceptorsIdempotentAcrossDo(t *testing.T) {
+	t.Parallel()
+
+	var count atomic.Int32
+	ic := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		count.Add(1)
+		return next(ctx)
+	})
+
+	innerStep := NoOp("inner")
+	type mySubStep struct{ SubWorkflow }
+	sub := &mySubStep{}
+	sub.Add(Step(innerStep))
+
+	parent := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	parent.Add(Step(sub))
+
+	const runs = 3
+	for i := 0; i < runs; i++ {
+		count.Store(0)
+		// reset both parent and child step states so the workflow is re-runnable
+		assert.NoError(t, parent.Reset())
+		assert.NoError(t, parent.Do(context.Background()))
+		assert.Equalf(t, int32(2), count.Load(),
+			"run %d: parent interceptor must fire exactly 2 times (outer sub + inner), accumulation detected", i)
+	}
+}
+
+func TestSubWorkflow_IsolateInterceptors(t *testing.T) {
+	t.Parallel()
+
+	var parentCount, childCount atomic.Int32
+	parentIC := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		parentCount.Add(1)
+		return next(ctx)
+	})
+	childIC := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		childCount.Add(1)
+		return next(ctx)
+	})
+
+	innerStep := NoOp("inner")
+	type mySubStep struct{ SubWorkflow }
+	sub := &mySubStep{}
+	sub.Add(Step(innerStep))
+	sub.w.StepInterceptors = []StepInterceptor{childIC}
+	sub.w.IsolateInterceptors = true
+
+	w := &Workflow{StepInterceptors: []StepInterceptor{parentIC}}
+	w.Add(Step(sub))
+	assert.NoError(t, w.Do(context.Background()))
+
+	// parent only sees the outer sub step (1), not the inner step (since isolated)
+	assert.Equal(t, int32(1), parentCount.Load())
+	// child only sees the inner step
+	assert.Equal(t, int32(1), childCount.Load())
+}
+
+// TestWorkflow_AsStep_InheritsThroughNamedStep ensures that wrapping a child
+// *Workflow in a Steper-only wrapper (NamedStep embeds the Steper interface,
+// so PrependInterceptors is NOT promoted) does not break parent-interceptor
+// inheritance: the parent walks the Step tree via Unwrap to find the
+// InterceptorReceiver, so wrappers are transparent.
+func TestWorkflow_AsStep_InheritsThroughNamedStep(t *testing.T) {
+	t.Parallel()
+
+	var stepped []Steper
+	mu := sync.Mutex{}
+	ic := StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+		mu.Lock()
+		stepped = append(stepped, s)
+		mu.Unlock()
+		return next(ctx)
+	})
+
+	innerStep := NoOp("inner")
+	child := &Workflow{}
+	child.Add(Step(innerStep))
+
+	// Wrap child in NamedStep — this is the wrapper produced by flow.Name().
+	// NamedStep embeds the Steper interface, so it does NOT promote
+	// PrependInterceptors. Inheritance must therefore go through Unwrap.
+	named := &NamedStep{Name: "child", Steper: child}
+
+	parent := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	parent.Add(Step(named))
+	assert.NoError(t, parent.Do(context.Background()))
+
+	// Parent's interceptor must see both the wrapped child step and the inner step.
+	var sawNamed, sawInner bool
+	for _, s := range stepped {
+		if s == named {
+			sawNamed = true
+		}
+		if s == innerStep {
+			sawInner = true
+		}
+	}
+	assert.True(t, sawNamed, "parent interceptor should fire for the NamedStep itself")
+	assert.True(t, sawInner, "parent interceptor should fire for the inner step (inheritance through Unwrap)")
 }

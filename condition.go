@@ -6,19 +6,30 @@ import (
 	"fmt"
 )
 
-// StepStatus describes the status of a Step.
+// StepStatus describes the lifecycle state of a Step inside a Workflow.
+//
+// A step starts at Pending, is moved to Running by the scheduler when it is
+// dispatched to a goroutine, and ends in one of the four terminal states:
+// Failed, Succeeded, Canceled or Skipped. Use IsTerminated() to test for
+// "done".
+//
+// Steps that the scheduler decides not to run (Skipped / Canceled, settled
+// inline by the Condition check) move from Pending straight to a terminal
+// state without ever entering Running.
 type StepStatus string
 
 const (
-	Pending   StepStatus = ""          // Pending means the Step has not started yet.
-	Running   StepStatus = "Running"   // Running means the Step is in progress.
-	Failed    StepStatus = "Failed"    // Failed means the Step has terminated and failed.
-	Succeeded StepStatus = "Succeeded" // Succeeded means the Step has terminated and succeeded.
-	Canceled  StepStatus = "Canceled"  // Canceled means the Step has terminated and been canceled.
-	Skipped   StepStatus = "Skipped"   // Skipped means the Step has terminated and been skipped.
+	Pending   StepStatus = ""          // not yet started.
+	Running   StepStatus = "Running"   // currently executing in a worker goroutine.
+	Failed    StepStatus = "Failed"    // terminal: Do (or a callback) returned a non-nil error.
+	Succeeded StepStatus = "Succeeded" // terminal: Do returned nil.
+	Canceled  StepStatus = "Canceled"  // terminal: ctx was canceled, or the error wraps context.Canceled / DeadlineExceeded.
+	Skipped   StepStatus = "Skipped"   // terminal: the Condition decided not to run the step.
 )
 
-// IsTerminated returns true if the StepStatus is one of the terminated states (Failed, Succeeded, Canceled, Skipped).
+// IsTerminated reports whether the status is one of Failed, Succeeded,
+// Canceled or Skipped. The Workflow tick loop polls this to decide when
+// downstream steps may be considered.
 func (s StepStatus) IsTerminated() bool {
 	switch s {
 	case Failed, Succeeded, Canceled, Skipped:
@@ -27,6 +38,9 @@ func (s StepStatus) IsTerminated() bool {
 	return false
 }
 
+// String renders the status for logs / errors. Pending is rendered as
+// "Pending" rather than the empty string, and unknown values are tagged so
+// they stand out.
 func (s StepStatus) String() string {
 	switch s {
 	case Pending:
@@ -38,15 +52,28 @@ func (s StepStatus) String() string {
 	}
 }
 
-// Condition is a function to determine what's the next status of Step.
-// Condition makes the decision based on the status and result of all the Upstream Steps.
-// Condition is only called when all Upstream Steps are terminated.
+// Condition decides what should happen to a step once all of its upstreams
+// have terminated. It returns the next StepStatus:
+//
+//   - Running                   → the scheduler will dispatch the step to a worker.
+//   - Skipped / Canceled / etc. → the scheduler settles the step inline, with
+//     no goroutine, no concurrency lease, and no interceptor chain.
+//
+// The map passed in keys every direct upstream by its root Steper and exposes
+// its terminal StepResult. The condition is invoked with the workflow's
+// context, so it can also observe ctx.Err() to react to a top-level cancel.
 type Condition func(ctx context.Context, ups map[Steper]StepResult) StepStatus
 
 var (
-	// DefaultCondition used in workflow, defaults to AllSucceeded
+	// DefaultCondition is the Condition used when a step doesn't set its own
+	// via When(). Defaults to AllSucceeded — i.e. a step runs only if every
+	// upstream succeeded.
 	DefaultCondition Condition = AllSucceeded
-	// DefaultIsCanceled is used to determine whether an error is being regarded as canceled.
+
+	// DefaultIsCanceled classifies an error as a "cancellation" rather than a
+	// "failure". The built-in conditions and the worker's terminal-status
+	// computation both consult this hook. Override it to recognize your own
+	// cancellation sentinels.
 	DefaultIsCanceled = func(err error) bool {
 		switch {
 		case errors.Is(err, context.Canceled),
@@ -58,12 +85,15 @@ var (
 	}
 )
 
-// Always runs the step as long as all upstream steps are terminated
+// Always runs the step regardless of upstream outcomes (as long as every
+// upstream is terminated, which the scheduler guarantees before calling).
 func Always(context.Context, map[Steper]StepResult) StepStatus {
 	return Running
 }
 
-// AllSucceeded runs the step when all upstream steps are Succeeded
+// AllSucceeded runs the step only when every upstream succeeded. If any
+// upstream is in a non-Succeeded terminal state the step becomes Skipped. If
+// the workflow context is already canceled, the step becomes Canceled.
 func AllSucceeded(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Canceled
@@ -76,7 +106,8 @@ func AllSucceeded(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	return Running
 }
 
-// AnySucceeded runs the step when any upstream step is Succeeded
+// AnySucceeded runs the step as soon as at least one upstream succeeded;
+// otherwise it is Skipped. Canceled context still wins.
 func AnySucceeded(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Canceled
@@ -89,7 +120,8 @@ func AnySucceeded(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	return Skipped
 }
 
-// AllSucceededOrSkipped runs the step when all upstream steps are Succeeded or Skipped
+// AllSucceededOrSkipped tolerates Skipped upstreams: the step runs as long as
+// no upstream is Failed or Canceled. Canceled context still wins.
 func AllSucceededOrSkipped(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Canceled
@@ -102,7 +134,10 @@ func AllSucceededOrSkipped(ctx context.Context, ups map[Steper]StepResult) StepS
 	return Running
 }
 
-// BeCanceled runs the step only when the context is canceled
+// BeCanceled inverts the usual "context cancel skips me" rule: this step runs
+// only when the workflow context is already canceled, otherwise it is
+// Skipped. Useful for cleanup steps that should fire only when the workflow
+// is being torn down.
 func BeCanceled(ctx context.Context, _ map[Steper]StepResult) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Running
@@ -110,7 +145,8 @@ func BeCanceled(ctx context.Context, _ map[Steper]StepResult) StepStatus {
 	return Skipped
 }
 
-// AnyFailed runs the step when any upstream step is Failed
+// AnyFailed runs the step when at least one upstream failed; otherwise it is
+// Skipped. Useful for "on failure" branches. Canceled context still wins.
 func AnyFailed(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	if DefaultIsCanceled(ctx.Err()) {
 		return Canceled
@@ -123,7 +159,8 @@ func AnyFailed(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 	return Skipped
 }
 
-// ConditionOr will use defaultCond if cond is nil.
+// ConditionOr returns cond unchanged, or defaultCond if cond is nil. Lets
+// callers compose conditions without a nil check.
 func ConditionOr(cond, defaultCond Condition) Condition {
 	return func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
 		if cond == nil {
@@ -133,5 +170,5 @@ func ConditionOr(cond, defaultCond Condition) Condition {
 	}
 }
 
-// ConditionOrDefault will use DefaultCondition if cond is nil.
+// ConditionOrDefault is ConditionOr with the package-level DefaultCondition.
 func ConditionOrDefault(cond Condition) Condition { return ConditionOr(cond, DefaultCondition) }

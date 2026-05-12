@@ -7,21 +7,45 @@ import (
 	"github.com/cenkalti/backoff/v4"
 )
 
+// DefaultRetryOption is the policy used as the seed when a step calls Retry()
+// with no overriding mutator. It is also the policy used when Retry(nil) is
+// called explicitly.
+//
+// Note: each step takes its OWN copy of this option, with Backoff cleared to
+// nil so that the per-run retry() allocates a fresh backoff.BackOff. This
+// avoids a data race on the shared NewExponentialBackOff() instance when
+// multiple steps retry concurrently.
 var DefaultRetryOption = RetryOption{
 	Backoff:  backoff.NewExponentialBackOff(),
 	Attempts: 3,
 }
 
-// RetryOption customizes retry behavior of a Step in Workflow.
+// RetryOption controls how a step is retried.
+//
+// The semantics map onto cenkalti/backoff/v4 internals:
+//
+//   - Attempts: total number of attempts including the first try (so 3 means
+//     "try, retry, retry"). 0 means "no attempt cap"; the run is then bounded
+//     only by Backoff/ctx/notAfter.
+//   - TimeoutPerTry: deadline applied to each individual attempt's context.
+//     0 means "no per-try deadline"; the attempt is bounded by the step-level
+//     Timeout (if any) and by ctx.
+//   - Backoff: the backoff strategy. If left nil at retry time, retry()
+//     allocates a fresh ExponentialBackOff for this run (see DefaultRetryOption).
+//   - Notify / Timer: passed straight through to backoff.RetryNotifyWithTimer.
 type RetryOption struct {
-	TimeoutPerTry time.Duration // 0 means no timeout
-	Attempts      uint64        // 0 means no limit
-	// NextBackOff is called after each retry to determine the next backoff duration.
-	// Notice if attempts limits are reach, or context timeout, or BackOff fires backoff.Stop,
-	// this function will not be called.
+	TimeoutPerTry time.Duration
+	Attempts      uint64
+	// NextBackOff is invoked AFTER each failed attempt to (optionally) override
+	// the next backoff duration computed by Backoff. It is NOT called when:
+	//   - Attempts cap has been reached, or
+	//   - ctx has fired (cancel / deadline), or
+	//   - the inner Backoff returned backoff.Stop, or
+	//   - the step-level Timeout (notAfter) has elapsed.
 	//
-	// RetryEvent: the event records attempt, duration since the start, and the error of the last try.
-	// nextBackOff: the next backoff duration calculated by the inner BackOff
+	// Arguments:
+	//   re          — what just happened (attempt number, total elapsed, last error).
+	//   nextBackOff — the duration the inner Backoff suggests next.
 	NextBackOff func(ctx context.Context, re RetryEvent, nextBackOff time.Duration) time.Duration
 
 	Backoff backoff.BackOff
@@ -29,18 +53,23 @@ type RetryOption struct {
 	Timer   backoff.Timer
 }
 
-// RetryEvent is the event fired when a retry happens
+// RetryEvent is a snapshot of a single failed attempt, fed to NextBackOff.
 type RetryEvent struct {
-	Attempt uint64
-	Since   time.Duration
-	Error   error
+	Attempt uint64        // 0-based index of the attempt that just failed.
+	Since   time.Duration // time elapsed since the first attempt started.
+	Error   error         // error returned by the failed attempt.
 }
 
-// retry constructs a do function with retry enabled according to the option.
+// retry returns a wrapper that will run `do` with retry semantics derived from
+// `opt`. If opt is nil the wrapper runs `do` exactly once.
+//
+// The wrapper threads through the step-level deadline (`notAfter`) so the
+// retry loop can stop early if the deadline is about to elapse, and applies
+// `TimeoutPerTry` (if set) by deriving a per-attempt context.
 func (w *Workflow) retry(opt *RetryOption) func(
 	ctx context.Context,
 	do func(context.Context) error,
-	notAfter time.Time, // the Step level timeout ddl
+	notAfter time.Time, // step-level Timeout deadline; zero means "none".
 ) error {
 	if opt == nil {
 		return func(ctx context.Context, do func(context.Context) error, notAfter time.Time) error { return do(ctx) }
@@ -48,8 +77,9 @@ func (w *Workflow) retry(opt *RetryOption) func(
 	return func(ctx context.Context, do func(context.Context) error, notAfter time.Time) error {
 		backOff := opt.Backoff
 		if backOff == nil {
-			// Backoff was not set (or was cleared to avoid sharing DefaultRetryOption's
-			// mutable Backoff instance). Allocate a fresh one for this retry run.
+			// Backoff was not set (or was cleared to avoid sharing
+			// DefaultRetryOption's mutable Backoff instance). Allocate a
+			// fresh one so concurrent retries don't race on shared state.
 			backOff = backoff.NewExponentialBackOff()
 		}
 		backOff = backoff.WithContext(backOff, ctx)
@@ -57,6 +87,8 @@ func (w *Workflow) retry(opt *RetryOption) func(
 			backOff = &backOffStopIfTimeout{BackOff: backOff, NotAfter: notAfter, Now: w.Clock.Now}
 		}
 		if opt.Attempts > 0 {
+			// WithMaxRetries counts RETRIES, not total attempts — Attempts=N
+			// means "1 initial + (N-1) retries".
 			backOff = backoff.WithMaxRetries(backOff, opt.Attempts-1)
 		}
 		retried := func(ctx context.Context, e RetryEvent) {}
@@ -91,6 +123,10 @@ func (w *Workflow) retry(opt *RetryOption) func(
 	}
 }
 
+// backOffWithEvent is a thin BackOff decorator that lets the user-supplied
+// NextBackOff observe each retry event and override the next backoff.
+// retried() is called from inside the retry function (not from NextBackOff
+// itself) so the event reflects the attempt that just finished.
 type backOffWithEvent struct {
 	backoff.BackOff
 	nextBackOff func(context.Context, RetryEvent, time.Duration) time.Duration
@@ -99,6 +135,8 @@ type backOffWithEvent struct {
 	e   RetryEvent
 }
 
+// NextBackOff defers to the inner Backoff first; if it returned backoff.Stop
+// the retry loop is finished and the user override is not called.
 func (b *backOffWithEvent) NextBackOff() time.Duration {
 	bkof := b.BackOff.NextBackOff()
 	if b.nextBackOff == nil || bkof == backoff.Stop {
@@ -106,17 +144,25 @@ func (b *backOffWithEvent) NextBackOff() time.Duration {
 	}
 	return b.nextBackOff(b.ctx, b.e, bkof)
 }
+
+// retried is called by the retry loop after each failed attempt to publish
+// the event for the next NextBackOff() invocation.
 func (b *backOffWithEvent) retried(ctx context.Context, e RetryEvent) {
 	b.ctx = ctx
 	b.e = e
 }
 
+// backOffStopIfTimeout fires backoff.Stop as soon as the step-level deadline
+// (NotAfter) has been crossed, so the retry loop doesn't sleep into a
+// deadline that's about to elapse.
 type backOffStopIfTimeout struct {
 	backoff.BackOff
 	NotAfter time.Time
 	Now      func() time.Time
 }
 
+// NextBackOff returns backoff.Stop if the step deadline has passed (or any
+// supporting field is missing); otherwise the inner backoff value is used.
 func (b *backOffStopIfTimeout) NextBackOff() time.Duration {
 	bkof := b.BackOff.NextBackOff()
 	if b.NotAfter.IsZero() || b.Now == nil || bkof == backoff.Stop || b.Now().After(b.NotAfter) {

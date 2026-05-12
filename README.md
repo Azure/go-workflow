@@ -1,93 +1,125 @@
-# Workflow - a library organizes steps with dependencies into DAG (Directed-Acyclic-Graph) for Go
+# go-workflow
+
 [![Go Report Card](https://goreportcard.com/badge/github.com/Azure/go-workflow)](https://goreportcard.com/report/github.com/Azure/go-workflow)
 [![Go Test Status](https://github.com/Azure/go-workflow/actions/workflows/go.yml/badge.svg)](https://github.com/Azure/go-workflow/actions/workflows/go.yml)
 [![Go Test Coverage](https://raw.githubusercontent.com/Azure/go-workflow/badges/.badges/main/coverage.svg)](/.github/.testcoverage.yml)
 
-## Overview
-
-> Strongly encourage everyone to read examples in the [example](./example) directory to have a quick understanding of how to use this library.
-
-`go-workflow` helps Go developers organize steps with dependencies into a Directed-Acyclic-Graph (DAG).
-- It provides a simple and flexible way to define and execute a workflow.
-- It is easy to implement steps and compose them into a composite step.
-- It uses **goroutine** to execute steps concurrently.
-- It supports **retry**, **timeout**, and other configurations for each step.
-- It supports **callbacks** to hook before / after each step.
-
-See it in action:
+> Describe steps and the dependencies between them. We run them as a DAG — concurrently,
+> with retry, timeout, conditions and interceptors — and block until everything is done.
 
 ```go
-package yours
+// Two steps that pass data through a typed dependency.
+type Fetch struct{ URL, Body string }
+type Save struct{ Body, Path string }
 
-import (
-    "context"
-
-    flow "github.com/Azure/go-workflow"
-)
-
-type Step struct{ Value string }
-
-// All required for a step is `Do(context.Context) error`
-func (s *Step) Do(ctx context.Context) error {
-    fmt.Println(s.Value)
-    return nil
-}
+func (f *Fetch) Do(ctx context.Context) error { f.Body = httpGet(ctx, f.URL); return nil }
+func (s *Save) Do(ctx context.Context) error  { return os.WriteFile(s.Path, []byte(s.Body), 0o644) }
 
 func main() {
-    // declare steps
-    var (
-        a = new(Step)
-        b = &Step{Value: "B"}
-        c = flow.Func("declare from anonymous function", func(ctx context.Context) error {
-            fmt.Println("C")
-            return nil
-        })
-    )
-    // compose steps into a workflow!
-    w := new(flow.Workflow)
-    w.Add(
-        flow.Step(b).DependsOn(a),     // use DependsOn to define dependencies
-        flow.Steps(a, b).DependsOn(c), // final execution order: c -> a -> b
+	fetch := &Fetch{URL: "https://example.com"}
+	save := &Save{Path: "page.html"}
 
-        // other configurations, like retry, timeout, condition, etc.
-        flow.Step(c).
-            Retry(func(ro *flow.RetryOption) {
-                ro.Attempts = 3 // retry 3 times
-            }).
-            Timeout(10*time.Minute), // timeout after 10 minutes
+	w := new(flow.Workflow)
+	w.Add(
+		// Retry the fetch up to 3 times, capped at 30s total.
+		flow.Step(fetch).
+			Retry(func(o *flow.RetryOption) { o.Attempts = 3 }).
+			Timeout(30*time.Second),
 
-        // use Input to change step at runtime
-        flow.Step(a).Input(func(ctx context.Context, a *Step) error {
-            a.Value = "A"
-            return nil
-        }),
-    )
-    // execute the workflow and block until all steps are terminated
-    err := w.Do(context.Background())
+		// save runs only after fetch succeeds, and reads its output as its input.
+		flow.Step(save).DependsOn(fetch).
+			Input(func(_ context.Context, s *Save) error {
+				s.Body = fetch.Body
+				return nil
+			}),
+	)
+
+	if err := w.Do(context.Background()); err != nil {
+		log.Fatal(err) // *flow.ErrWorkflow — one entry per failing step.
+	}
 }
 ```
 
-## Document from AI
-You can also check the document from deepwiki: https://deepwiki.com/Azure/go-workflow
+## Why
+
+- **Tiny interface.** A step is anything with `Do(context.Context) error`. No codegen, no DSL.
+- **Dependencies as code.** `Step(x).DependsOn(y)`, `Pipe(...)`, `BatchPipe(...)`, `If/Switch`.
+- **Concurrent by default.** Each ready step runs in its own goroutine; cap with `MaxConcurrency`.
+- **Per-step controls.** Retry with backoff, timeout, conditions, typed `Input`/`Output`, before/after hooks.
+- **Composable.** A `Workflow` is itself a `Step`, so workflows nest — interceptors and options
+  flow into children automatically.
+- **No surprises.** `Workflow.Do` blocks until every goroutine has exited and every step is terminal.
+
+## Install
+
+```bash
+go get github.com/Azure/go-workflow
+```
+
+Requires Go 1.23+.
+
+## How a step ends up
+
+```
+Pending → Running → Succeeded | Failed | Canceled | Skipped
+```
+
+`Skipped` and `Canceled` are settled inline by the scheduler when a step's `Condition` decides
+it shouldn't run — no goroutine, no concurrency lease, no interceptor chain. A failing step does
+**not** abort siblings; only downstream steps see it (and become `Skipped` under the default
+`AllSucceeded` condition).
+
+`Workflow.Do` returns `nil` on success, or an `ErrWorkflow` (`map[Steper]StepResult`) you can
+range over. `ErrCycleDependency` is returned from preflight if your graph isn't a DAG.
+
+## Wiring the graph
+
+| Helper                                 | Means                                                                          |
+|----------------------------------------|--------------------------------------------------------------------------------|
+| `flow.Step(s)`                         | Add one typed step (enables typed `Input`/`Output`).                           |
+| `flow.Steps(s1, s2, …)`                | Add several independent steps (run in parallel).                               |
+| `flow.Pipe(a, b, c)`                   | Linear pipeline `a → b → c`.                                                   |
+| `flow.BatchPipe(Steps(a,b), Steps(c))` | Every step in batch _i_ depends on every step in batch _i-1_.                  |
+| `flow.If(...)`, `flow.Switch(...)`     | Conditional branches based on the result of a target step.                     |
+
+Common chainables on the result: `DependsOn`, `When(cond)`, `Retry(...)`, `Timeout(d)`,
+`Input(fn)`, `Output(fn)`, `BeforeStep(fn)`, `AfterStep(fn)`. `Add(...)` is repeatable —
+calling it again merges new config into existing steps.
+
+## Workflow knobs
+
+Set fields on `flow.Workflow` before `Do`:
+
+| Field                  | Effect                                                                       |
+|------------------------|------------------------------------------------------------------------------|
+| `MaxConcurrency`       | Max running steps at once. `0` = unlimited.                                  |
+| `DontPanic`            | Recover panics into `ErrPanic` instead of crashing.                          |
+| `SkipAsError`          | Treat `Skipped` as workflow failure (default: skipped is OK).                |
+| `DefaultOption`        | Base `*StepOption` applied (then overridable) to every step.                 |
+| `StepInterceptors`     | Wrap full step lifetime (across retries).                                    |
+| `AttemptInterceptors`  | Wrap each individual attempt (`Before → Do → After`).                        |
+| `IsolateInterceptors`  | When nested as a child step, don't inherit parent interceptors.              |
+| `Clock`                | Inject a clock for deterministic tests.                                      |
+
+## Learn more
+
+- **[`example/`](./example)** — runnable, narrated examples for every feature, in increasing
+  order of complexity (`01_step_do_test.go` → `14_mock_step_test.go`). Best place to start.
+- **[`openspec/specs/`](./openspec/specs)** — formal specs for execution model, branching,
+  conditions, retry/timeout, composite steps, interceptors and workflow options.
+- **DeepWiki:** <https://deepwiki.com/Azure/go-workflow>
 
 ## Contributing
 
-This project welcomes contributions and suggestions.  Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
+This project welcomes contributions. Most contributions require you to agree to a Contributor
+License Agreement — see <https://cla.opensource.microsoft.com>. The CLA bot will guide you on
+your first PR.
 
-When you submit a pull request, a CLA bot will automatically determine whether you need to provide
-a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
-provided by the bot. You will only need to do this once across all repos using our CLA.
-
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+This project follows the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
+Questions? <opencode@microsoft.com>.
 
 ## Trademarks
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft
-trademarks or logos is subject to and must follow
-[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
-Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
-Any use of third-party trademarks or logos are subject to those third-party's policies.
+This project may contain trademarks for Microsoft projects, products, or services. Authorized
+use must follow [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
+Third-party trademarks are subject to their own policies.

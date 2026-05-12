@@ -8,52 +8,70 @@ import (
 	"time"
 )
 
-// Steper describes the requirement for a step, which is basic unit of a Workflow.
+// Steper is the contract every Step must satisfy: a single Do method.
+// Implement it on any comparable type (typically a *struct) and the Workflow
+// can orchestrate it.
 //
-// Implement this interface to allow Workflow orchestrating your steps.
-//
-// Notice Steper will be saved in Workflow as map key, so it's supposed to be 'comparable' type like struct pointer.
-//
-// Do not use empty struct{} as Steper implementation, because all empty struct{} are equal in Go,
-// which makes it impossible to distinguish different steps in Workflow.
+// Why "comparable"? The Workflow stores steps as map keys to track their
+// state, so two distinct *Foo instances must be distinguishable. In
+// particular, do NOT use the empty `struct{}` as a Step type — every
+// `struct{}` value compares equal in Go, and the Workflow would treat them
+// all as the same step.
 type Steper interface {
 	Do(context.Context) error
 }
 
-// Builder is an interface to add steps into Workflow
+// Builder is the glue between user-facing helpers (Step, Steps, Pipe, If, …)
+// and Workflow.Add: anything that can produce a {step → config} map can be
+// passed to Add().
 type Builder interface {
 	AddToWorkflow() map[Steper]*StepConfig
 }
 
-// BeforeStep defines callback being called BEFORE step being executed.
+// BeforeStep is the signature for a hook that runs before a step's Do, on
+// every retry attempt. It may swap the context for the rest of the chain.
+// Returning a non-nil error short-circuits the remaining BeforeStep callbacks
+// and is reported as ErrBeforeStep to the After hooks.
 type BeforeStep func(context.Context, Steper) (context.Context, error)
 
-// AfterStep defines callback being called AFTER step being executed.
+// AfterStep is the signature for a hook that runs after a step's Do, on every
+// retry attempt. It receives — and can transform or swallow — the error
+// returned by Do (or by a previous AfterStep). Unlike BeforeStep, AfterStep
+// callbacks always all run; an error doesn't short-circuit them.
 type AfterStep func(context.Context, Steper, error) error
 
-// StepConfig is the configuration of a step in a Workflow.
+// StepConfig collects everything Workflow needs to know about a single step
+// besides the step itself: who it depends on, what hooks to run around it,
+// and how to configure retry/timeout/condition.
 type StepConfig struct {
-	Upstreams Set[Steper]         // Upstreams of the step, means these steps should happen-before this step
-	Before    []BeforeStep        // Before callbacks of the step, will be called before Do
-	After     []AfterStep         // After callbacks of the step, will be called before Do
-	Option    []func(*StepOption) // Option customize the step settings
+	Upstreams Set[Steper]         // steps that must be terminated before this step is considered.
+	Before    []BeforeStep        // hooks run before Do, in declaration order, per attempt.
+	After     []AfterStep         // hooks run after  Do, in declaration order, per attempt.
+	Option    []func(*StepOption) // option mutators folded together to compute the effective StepOption.
 }
 
-// StepOption customizes the behavior of how Workflow orchestrates the step.
+// StepOption is the resolved per-step configuration the scheduler consults at
+// runtime. Built by folding StepConfig.Option in declaration order — later
+// mutators win for fields they touch (so Timeout/When/Retry follow
+// "last-one-wins").
 type StepOption struct {
-	RetryOption *RetryOption   // RetryOption customize how the step should be retried, default (nil) means no retry.
-	Condition   Condition      // Condition decides whether Workflow should execute the step, default to DefaultCondition.
-	Timeout     *time.Duration // Timeout sets the step level timeout, default (nil) means no timeout.
+	RetryOption *RetryOption   // nil means: no retry, run once.
+	Condition   Condition      // nil means: use the package-level DefaultCondition (AllSucceeded).
+	Timeout     *time.Duration // nil means: no step-level deadline (the step runs until ctx is done).
 }
 
-// Steps bakes Steper(s) ready to be added into Workflow.
+// Steps registers one or more independent Steps to be added into the Workflow.
 //
-// The Steper(s) declared are mutually independent, meaning they will be executed in parallel.
+// Steps in the same Steps(...) call are NOT linked to each other: by default
+// they may run concurrently. Use DependsOn / When / Retry / Timeout etc. on
+// the returned AddSteps to attach common configuration.
 //
 //	workflow.Add(
-//		Steps(a, b, c),					// a, b, c will be executed in parallel
-//		Steps(a, b, c).DependsOn(d, e), // d, e will be executed in parallel, then a, b, c in parallel
+//	    Steps(a, b, c),                 // a, b and c are independent (run in parallel).
+//	    Steps(a, b, c).DependsOn(d, e), // d and e first; then a, b, c become eligible.
 //	)
+//
+// Use Step (singular, generic) instead when you need typed Input/Output hooks.
 func Steps(steps ...Steper) AddSteps {
 	rv := make(AddSteps)
 	for _, step := range steps {
@@ -62,14 +80,17 @@ func Steps(steps ...Steper) AddSteps {
 	return rv
 }
 
-// Step bakes typed Steper(s) ready to be added into Workflow.
-//
-// The main difference between Step() and Steps() is that,
-// Step() allows to add Input callbacks for the step (since this is a generic function).
+// Step is the typed counterpart of Steps. Because it is generic over the
+// concrete step type S, it can offer Input / Output callbacks that receive
+// the step as its real type — no type assertion needed.
 //
 //	Step(a).Input(func(ctx context.Context, a *A) error {
-//		// fill a
-//	}))
+//	    a.Field = "filled at runtime"
+//	    return nil
+//	})
+//
+// All Steps(...) helpers (DependsOn, When, Retry, …) are also available on
+// the returned AddStep[S].
 func Step[S Steper](steps ...S) AddStep[S] {
 	return AddStep[S]{
 		AddSteps: Steps(ToSteps(steps)...),
@@ -77,17 +98,17 @@ func Step[S Steper](steps ...S) AddStep[S] {
 	}
 }
 
-// Pipe creates a pipeline in Workflow.
+// Pipe wires the given Steps into a strict linear pipeline.
 //
 //	workflow.Add(
-//		Pipe(a, b, c), // a -> b -> c
+//	    Pipe(a, b, c), // a -> b -> c
 //	)
 //
-// The above code is equivalent to:
+// Equivalent to:
 //
 //	workflow.Add(
-//		Step(b).DependsOn(a),
-//		Step(c).DependsOn(b),
+//	    Step(b).DependsOn(a),
+//	    Step(c).DependsOn(b),
 //	)
 func Pipe(steps ...Steper) AddSteps {
 	as := Steps(steps...)
@@ -97,21 +118,23 @@ func Pipe(steps ...Steper) AddSteps {
 	return as
 }
 
-// BatchPipe creates a batched pipeline in Workflow.
+// BatchPipe wires batches of Steps into a "fully-connected" pipeline: every
+// step in batch i+1 depends on every step in batch i. Steps within the same
+// batch remain independent of each other.
 //
 //	workflow.Add(
-//		BatchPipe(
-//			Steps(a, b),
-//			Steps(c, d, e),
-//			Steps(f),
-//		),
+//	    BatchPipe(
+//	        Steps(a, b),
+//	        Steps(c, d, e),
+//	        Steps(f),
+//	    ),
 //	)
 //
-// The above code is equivalent to:
+// Equivalent to:
 //
 //	workflow.Add(
-//		Steps(c, d, e).DependsOn(a, b),
-//		Steps(f).DependsOn(c, d, e),
+//	    Steps(c, d, e).DependsOn(a, b),
+//	    Steps(f).DependsOn(c, d, e),
 //	)
 func BatchPipe(batch ...AddSteps) AddSteps {
 	as := Steps()
@@ -124,11 +147,12 @@ func BatchPipe(batch ...AddSteps) AddSteps {
 	return as
 }
 
-// DependsOn declares dependency on the given Steps.
+// DependsOn declares that the configured step(s) must run AFTER all of the
+// given upstream steps have terminated.
 //
-//	Step(a).DependsOn(b, c)
+//	Step(a).DependsOn(b, c) // b and c happen-before a.
 //
-// Then b, c should happen-before a.
+// Calling DependsOn multiple times is additive (the upstream sets are unioned).
 func (as AddSteps) DependsOn(ups ...Steper) AddSteps {
 	for down := range as {
 		as[down].Upstreams.Add(ups...)
@@ -136,17 +160,20 @@ func (as AddSteps) DependsOn(ups ...Steper) AddSteps {
 	return as
 }
 
-// Input adds BeforeStep callback for the Step(s).
+// Input registers a typed BeforeStep callback. It runs at runtime, BEFORE Do,
+// on EVERY retry attempt. Use it to populate fields on the step from data
+// that's only available once upstreams have finished.
 //
-// Input callbacks will be called before Do,
-// and the order will respect the order of declarations.
+// Input callbacks fire in declaration order — both within a single Input(...)
+// call and across multiple Input(...) calls on the same step:
 //
 //	Step(a).
-//		Input(/* 1. this Input will be called first */).
-//		Input(/* 2. this Input will be called after 1. */)
-//	Step(a).Input(/* 3. this Input is after all */)
+//	    Input(/* 1. fires first  */).
+//	    Input(/* 2. fires second */)
+//	Step(a).Input(/* 3. fires last */)
 //
-// The Input callbacks are executed at runtime and per-try.
+// Returning a non-nil error short-circuits the remaining Before chain and is
+// surfaced as ErrBeforeStep.
 func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 	for _, step := range as.Steps {
 		step := step // capture range variable
@@ -162,12 +189,12 @@ func (as AddStep[S]) Input(fns ...func(context.Context, S) error) AddStep[S] {
 	return as
 }
 
-// Output can pass the results of the Step to outer scope.
-// Output is only triggered when the Step is successful (returns nil error).
+// Output registers a typed AfterStep callback. It is the symmetric companion
+// of Input: it runs at runtime, AFTER Do, on every retry attempt — but ONLY
+// when Do (and the prior After chain) returned nil. Use it to extract fields
+// off a successful step into outer scope.
 //
-// Output actually adds AfterStep callback for the Step(s).
-//
-// The Output callbacks are executed at runtime and per-try.
+// If you need to observe failures too, use AfterStep instead.
 func (as AddStep[S]) Output(fns ...func(context.Context, S) error) AddStep[S] {
 	for _, step := range as.Steps {
 		step := step // capture range variable
@@ -186,12 +213,12 @@ func (as AddStep[S]) Output(fns ...func(context.Context, S) error) AddStep[S] {
 	return as
 }
 
-// BeforeStep adds BeforeStep callback for the Step(s).
+// BeforeStep registers an untyped BeforeStep callback.
 //
-// The BeforeStep callback will be called before Do, and return when first error occurs.
-// The order of execution will respect the order of declarations.
-// The BeforeStep callbacks are able to change the context.Context feed into Do.
-// The BeforeStep callbacks are executed at runtime and per-try.
+// BeforeStep callbacks run before Do, in declaration order, on every retry
+// attempt. They may swap the context.Context that flows into Do (and into
+// subsequent BeforeStep callbacks). The first non-nil error short-circuits
+// the chain.
 func (as AddSteps) BeforeStep(befores ...BeforeStep) AddSteps {
 	for step := range as {
 		as[step].Before = append(as[step].Before, befores...)
@@ -199,23 +226,22 @@ func (as AddSteps) BeforeStep(befores ...BeforeStep) AddSteps {
 	return as
 }
 
-// AfterStep adds AfterStep callback for the Step(s).
+// AfterStep registers an untyped AfterStep callback.
 //
-// The AfterStep callback will be called after Do, and pass the error to next AfterStep callback.
-// The order of execution will respect the order of declarations.
-// The AfterStep callbacks are able to change the error returned by Do.
-// The AfterStep callbacks are executed at runtime and per-try.
+// AfterStep callbacks run after Do, in declaration order, on every retry
+// attempt. The error from Do (or from a previous AfterStep) is threaded
+// through, so each callback can observe, transform or swallow it. ALL
+// callbacks always run — an error never short-circuits the After chain.
 //
-// Tip:
-//
-// Remember to check error when overriding your own AfterStep function.
+// Tip: when you only care about the success path, remember to forward errors:
 //
 //	Steps(a).AfterStep(func(ctx context.Context, step Steper, err error) error {
-//		if err != nil {
-//			// do something when error happens
-//		}
-//		// do something when success
-//		return err // you can decide whether pass through the error or not
+//	    if err != nil {
+//	        // handle / log the failure
+//	        return err          // typically: forward unchanged
+//	    }
+//	    // success-only post-processing
+//	    return nil
 //	})
 func (as AddSteps) AfterStep(afters ...AfterStep) AddSteps {
 	for step := range as {
@@ -224,8 +250,10 @@ func (as AddSteps) AfterStep(afters ...AfterStep) AddSteps {
 	return as
 }
 
-// Timeout sets the Step level timeout.
-// Last one wins.
+// Timeout sets a step-level deadline that bounds the entire step lifetime
+// (all retry attempts together). Last call wins.
+//
+// For a per-attempt deadline, set RetryOption.TimeoutPerTry inside Retry().
 func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
 	for step := range as {
 		as[step].Option = append(as[step].Option, func(so *StepOption) {
@@ -235,24 +263,20 @@ func (as AddSteps) Timeout(timeout time.Duration) AddSteps {
 	return as
 }
 
-// When set the Condition for the Step.
-// Last one wins.
+// When sets the Condition that decides whether the step actually runs. Last
+// call wins.
 //
-// Tip:
-//
-// Remember to check upstreams when overriding your own Condition function.
+// Tip: when composing with built-in conditions, return early so you don't
+// accidentally promote a Skipped/Canceled decision to Running:
 //
 //	Steps(a).When(func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
-//		// check upstreams leveraging built-in Conditions
-//		status := flow.AllSucceeded(ctx, ups)
-//		if status != flow.Running {
-//			return status // return fast if the Condition not satisfied
-//		}
-//		// your custom logic
-//		if ... {
-//			return flow.Running
-//		}
-//		return flow.Skipped
+//	    if status := flow.AllSucceeded(ctx, ups); status != flow.Running {
+//	        return status // upstreams aren't all green — bail with their decision
+//	    }
+//	    if myExtraCheck() {
+//	        return flow.Running
+//	    }
+//	    return flow.Skipped
 //	})
 func (as AddSteps) When(cond Condition) AddSteps {
 	for step := range as {
@@ -263,16 +287,19 @@ func (as AddSteps) When(cond Condition) AddSteps {
 	return as
 }
 
-// Retry customize how the Step should be retried.
+// Retry configures retry behavior for the step. The mutator(s) are applied to
+// a fresh RetryOption seeded from DefaultRetryOption (so calling Retry with
+// no mutator — e.g. Retry(nil) — opts in to the default retry policy).
 //
-// Step will use DefaultRetryOption when this option is configured with nil.
+// Note: the field is named Attempts (total attempts including the first try),
+// not MaxAttempts.
 //
 //	w.Add(
-//		Step(a), // not retry
-//		Step(b).Retry(func(opt *RetryOption) { // will retry 3 times
-//			opt.MaxAttempts = 3
-//		}),
-//		Step(c).Retry(nil), // will use DefaultRetryOption!
+//	    Step(a),                                      // no retry, run once.
+//	    Step(b).Retry(func(opt *RetryOption) {        // up to 3 attempts.
+//	        opt.Attempts = 3
+//	    }),
+//	    Step(c).Retry(nil),                           // use DefaultRetryOption as-is.
 //	)
 func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 	for step := range as {
@@ -296,10 +323,12 @@ func (as AddSteps) Retry(opts ...func(*RetryOption)) AddSteps {
 	return as
 }
 
-// AddToWorkflow implements Builder
+// AddToWorkflow makes AddSteps satisfy Builder so it can be passed to
+// Workflow.Add directly.
 func (as AddSteps) AddToWorkflow() map[Steper]*StepConfig { return as }
 
-// Merge another AddSteps into one.
+// Merge folds other AddSteps maps into this one, unioning per-step
+// configuration (upstreams unioned, callbacks/options concatenated).
 func (as AddSteps) Merge(others ...AddSteps) AddSteps {
 	for _, other := range others {
 		for k, v := range other {
@@ -312,111 +341,61 @@ func (as AddSteps) Merge(others ...AddSteps) AddSteps {
 	return as
 }
 
-// DependsOn declares dependency on the given Steps.
-//
-//	Step(a).DependsOn(b, c)
-//
-// Then b, c should happen-before a.
+// DependsOn — typed shim that forwards to the AddSteps method so chaining on
+// Step() returns the typed AddStep[S] (preserving Input/Output access).
 func (as AddStep[S]) DependsOn(ups ...Steper) AddStep[S] {
 	as.AddSteps = as.AddSteps.DependsOn(ups...)
 	return as
 }
 
-// BeforeStep adds BeforeStep callback for the Step(s).
-//
-// The BeforeStep callback will be called before Do, and return when first error occurs.
-// The order of execution will respect the order of declarations.
-// The BeforeStep callbacks are able to change the context.Context feed into Do.
-// The BeforeStep callbacks are executed at runtime and per-try.
+// BeforeStep — typed shim; see AddSteps.BeforeStep.
 func (as AddStep[S]) BeforeStep(befores ...BeforeStep) AddStep[S] {
 	as.AddSteps = as.AddSteps.BeforeStep(befores...)
 	return as
 }
 
-// AfterStep adds AfterStep callback for the Step(s).
-//
-// The AfterStep callback will be called after Do, and pass the error to next AfterStep callback.
-// The order of execution will respect the order of declarations.
-// The AfterStep callbacks are able to change the error returned by Do.
-// The AfterStep callbacks are executed at runtime and per-try.
-//
-// Tip:
-//
-// Remember to check error when overriding your own AfterStep function.
-//
-//	Step(a).AfterStep(func(ctx context.Context, step Steper, err error) error {
-//		if err != nil {
-//			// do something when error happens
-//		}
-//		// do something when success
-//		return err // you can decide whether pass through the error or not
-//	})
+// AfterStep — typed shim; see AddSteps.AfterStep.
 func (as AddStep[S]) AfterStep(afters ...AfterStep) AddStep[S] {
 	as.AddSteps = as.AddSteps.AfterStep(afters...)
 	return as
 }
 
-// Timeout sets the Step level timeout.
-// Last one wins.
+// Timeout — typed shim; see AddSteps.Timeout.
 func (as AddStep[S]) Timeout(timeout time.Duration) AddStep[S] {
 	as.AddSteps = as.AddSteps.Timeout(timeout)
 	return as
 }
 
-// When set the Condition for the Step.
-// Last one wins.
-//
-// Tip:
-//
-// Remember to check upstreams when overriding your own Condition function.
-//
-//	Steps(a).When(func(ctx context.Context, ups map[Steper]StepResult) StepStatus {
-//		// check upstreams leveraging built-in Conditions
-//		status := flow.AllSucceeded(ctx, ups)
-//		if status != flow.Running {
-//			return status // return fast if the Condition not satisfied
-//		}
-//		// your custom logic
-//		if ... {
-//			return flow.Running
-//		}
-//		return flow.Skipped
-//	})
+// When — typed shim; see AddSteps.When.
 func (as AddStep[S]) When(when Condition) AddStep[S] {
 	as.AddSteps = as.AddSteps.When(when)
 	return as
 }
 
-// Retry customize how the Step should be retried.
-//
-// Step will use DefaultRetryOption when this option is configured with nil.
-//
-//	w.Add(
-//		Step(a), // not retry
-//		Step(b).Retry(func(opt *RetryOption) { // will retry 3 times
-//			opt.MaxAttempts = 3
-//		}),
-//		Step(c).Retry(nil), // will use DefaultRetryOption!
-//	)
+// Retry — typed shim; see AddSteps.Retry.
 func (as AddStep[S]) Retry(fns ...func(*RetryOption)) AddStep[S] {
 	as.AddSteps = as.AddSteps.Retry(fns...)
 	return as
 }
 
-// AddStep is a typed wrapper of AddSteps.
+// AddStep is the typed view returned by Step[S]. It embeds AddSteps so every
+// untyped helper (DependsOn, When, Retry, …) is available, and adds the
+// typed Input/Output helpers on top.
 type AddStep[S Steper] struct {
 	AddSteps
 	Steps []S
 }
 
-// AddSteps helps to add Steper(s) into Workflow.
+// AddSteps is the {step → config} map produced by Steps(...) / Pipe(...) /
+// BatchPipe(...). It satisfies Builder via AddToWorkflow.
 type AddSteps map[Steper]*StepConfig
 
-// ToSteps converts []<Steper implementation> to []Steper.
+// ToSteps widens a typed slice []S to []Steper. Useful when you want to add
+// a homogeneous slice of steps without an explicit per-element conversion.
 //
-//	steps := []someStepImpl{ ... }
+//	steps := []*MyStep{ ... }
 //	flow.Add(
-//		Steps(ToSteps(steps)...),
+//	    Steps(ToSteps(steps)...),
 //	)
 func ToSteps[S Steper](steps []S) []Steper {
 	rv := []Steper{}
@@ -426,7 +405,8 @@ func ToSteps[S Steper](steps []S) []Steper {
 	return rv
 }
 
-// Merge merges another StepConfig into this one.
+// Merge folds another StepConfig into this one in place: upstream sets are
+// unioned, callbacks and options are concatenated. A nil other is a no-op.
 func (sc *StepConfig) Merge(other *StepConfig) {
 	if other == nil {
 		return
@@ -440,10 +420,11 @@ func (sc *StepConfig) Merge(other *StepConfig) {
 	sc.Option = append(sc.Option, other.Option...)
 }
 
-// Set is a simple generic set implementation based on map.
+// Set is a tiny generic set built on map. Used internally for upstream sets,
+// the BuildStep memo, etc.
 type Set[T comparable] map[T]struct{}
 
-// Has checks whether the set contains the given value.
+// Has reports whether v is in the set. Nil-safe.
 func (s Set[T]) Has(v T) bool {
 	if s == nil {
 		return false
@@ -452,7 +433,8 @@ func (s Set[T]) Has(v T) bool {
 	return ok
 }
 
-// Add adds the given values into the set.
+// Add inserts the given values into the set, lazily allocating the backing
+// map if needed.
 func (s *Set[T]) Add(vs ...T) {
 	if *s == nil {
 		*s = make(Set[T])
@@ -462,14 +444,14 @@ func (s *Set[T]) Add(vs ...T) {
 	}
 }
 
-// Union adds all values from the given sets into the set.
+// Union folds all elements from the given sets into this one.
 func (s *Set[T]) Union(sets ...Set[T]) {
 	for _, set := range sets {
 		s.Add(set.Flatten()...)
 	}
 }
 
-// Flatten converts the set into a slice of values.
+// Flatten returns the set's elements as a slice in unspecified order.
 func (s Set[T]) Flatten() []T {
 	r := make([]T, 0, len(s))
 	for v := range s {
@@ -478,8 +460,7 @@ func (s Set[T]) Flatten() []T {
 	return r
 }
 
-// Seq returns an iterator over the set.
-// The order of values is indeterminate.
+// Seq returns an iter.Seq over the set's elements. Order is unspecified.
 func (s Set[T]) Seq() iter.Seq[T] {
 	return func(yield func(T) bool) {
 		for v := range s {
@@ -490,18 +471,16 @@ func (s Set[T]) Seq() iter.Seq[T] {
 	}
 }
 
-// Keys returns the keys of the map m.
-// The keys will be in an indeterminate order.
+// Keys returns the keys of m in unspecified order.
 //
-// Deprecated: use maps.Keys() from standard library instead.
+// Deprecated: prefer slices.Collect(maps.Keys(m)) from the standard library.
 func Keys[M ~map[K]V, K comparable, V any](m M) []K {
 	return slices.Collect(maps.Keys(m))
 }
 
-// Values returns the values of the map m.
-// The values will be in an indeterminate order.
+// Values returns the values of m in unspecified order.
 //
-// Deprecated: use maps.Values() from standard library instead.
+// Deprecated: prefer slices.Collect(maps.Values(m)) from the standard library.
 func Values[M ~map[K]V, K comparable, V any](m M) []V {
 	return slices.Collect(maps.Values(m))
 }

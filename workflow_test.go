@@ -2,12 +2,14 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -302,4 +304,302 @@ func TestMaxConcurrencyDeadlockStress(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestStepExecution_BasicSuccess(t *testing.T) {
+	t.Parallel()
+	var stepped []Steper
+	step := NoOp("a")
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{
+			StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+				stepped = append(stepped, s)
+				return next(ctx)
+			}),
+		},
+	}
+	w.Add(Step(step))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []Steper{step}, stepped)
+}
+
+func TestStepExecution_StepInterceptorOrder(t *testing.T) {
+	t.Parallel()
+	var order []string
+	makeIC := func(name string) StepInterceptor {
+		return StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+			order = append(order, name+":before")
+			err := next(ctx)
+			order = append(order, name+":after")
+			return err
+		})
+	}
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{makeIC("A"), makeIC("B")},
+	}
+	w.Add(Step(NoOp("s")))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []string{"A:before", "B:before", "B:after", "A:after"}, order)
+}
+
+// TestStepExecution_StepInterceptorChain_NoVariableCapture guards against the
+// classic Go closure-over-loop-variable bug in the chain builder. With 3+
+// interceptors, a buggy closure would either reorder calls, call the same
+// interceptor multiple times, or self-recurse via `next`. We verify (a) the
+// exact order of before/after across 4 interceptors, (b) the inner step runs
+// exactly once, and (c) no stack explosion.
+func TestStepExecution_StepInterceptorChain_NoVariableCapture(t *testing.T) {
+	t.Parallel()
+	var order []string
+	var stepRan int
+	makeIC := func(name string) StepInterceptor {
+		return StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+			order = append(order, name+":before")
+			err := next(ctx)
+			order = append(order, name+":after")
+			return err
+		})
+	}
+	step := Func("s", func(ctx context.Context) error {
+		stepRan++
+		return nil
+	})
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{makeIC("A"), makeIC("B"), makeIC("C"), makeIC("D")},
+	}
+	w.Add(Step(step))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, 1, stepRan, "inner step must run exactly once")
+	assert.Equal(t, []string{
+		"A:before", "B:before", "C:before", "D:before",
+		"D:after", "C:after", "B:after", "A:after",
+	}, order)
+}
+
+// TestStepExecution_AttemptInterceptorChain_NoVariableCapture mirrors the above
+// for AttemptInterceptors. With retries, the chain is built once but invoked
+// per attempt — any closure capture bug would surface as wrong order, missing
+// before/after pairs, or recursion.
+func TestStepExecution_AttemptInterceptorChain_NoVariableCapture(t *testing.T) {
+	t.Parallel()
+	var order []string
+	makeIC := func(name string) AttemptInterceptor {
+		return AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
+			order = append(order, fmt.Sprintf("%s:before:%d", name, attempt))
+			err := next(ctx)
+			order = append(order, fmt.Sprintf("%s:after:%d", name, attempt))
+			return err
+		})
+	}
+	calls := 0
+	step := Func("s", func(ctx context.Context) error {
+		calls++
+		if calls < 3 {
+			return errors.New("boom")
+		}
+		return nil
+	})
+	w := &Workflow{
+		AttemptInterceptors: []AttemptInterceptor{makeIC("X"), makeIC("Y"), makeIC("Z")},
+	}
+	w.Add(Step(step).Retry(func(o *RetryOption) {
+		o.Attempts = 3
+		o.Backoff = &backoff.ZeroBackOff{}
+	}))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []string{
+		"X:before:0", "Y:before:0", "Z:before:0", "Z:after:0", "Y:after:0", "X:after:0",
+		"X:before:1", "Y:before:1", "Z:before:1", "Z:after:1", "Y:after:1", "X:after:1",
+		"X:before:2", "Y:before:2", "Z:before:2", "Z:after:2", "Y:after:2", "X:after:2",
+	}, order)
+}
+
+func TestStepExecution_AttemptInterceptorOrder(t *testing.T) {
+	t.Parallel()
+	var order []string
+	makeIC := func(name string) AttemptInterceptor {
+		return AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
+			order = append(order, name+":before")
+			err := next(ctx)
+			order = append(order, name+":after")
+			return err
+		})
+	}
+	w := &Workflow{
+		AttemptInterceptors: []AttemptInterceptor{makeIC("X"), makeIC("Y")},
+	}
+	w.Add(Step(NoOp("s")))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []string{"X:before", "Y:before", "Y:after", "X:after"}, order)
+}
+
+func TestStepExecution_SkippedStep(t *testing.T) {
+	t.Parallel()
+	interceptorCalled := false
+	step := NoOp("a")
+	w := &Workflow{
+		StepInterceptors: []StepInterceptor{
+			StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+				interceptorCalled = true
+				return next(ctx)
+			}),
+		},
+	}
+	w.Add(Step(step).When(func(_ context.Context, _ map[Steper]StepResult) StepStatus {
+		return Skipped
+	}))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.False(t, interceptorCalled, "interceptor must not be called for skipped steps")
+}
+
+func TestStepExecution_RetryingStep(t *testing.T) {
+	t.Parallel()
+	var attempts []uint64
+	mu := sync.Mutex{}
+	boom := errors.New("boom")
+	callCount := 0
+	step := Func("s", func(ctx context.Context) error {
+		callCount++
+		if callCount < 3 {
+			return boom
+		}
+		return nil
+	})
+	w := &Workflow{
+		AttemptInterceptors: []AttemptInterceptor{
+			AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
+				mu.Lock()
+				attempts = append(attempts, attempt)
+				mu.Unlock()
+				return next(ctx)
+			}),
+		},
+	}
+	w.Add(Step(step).Retry(func(o *RetryOption) {
+		o.Attempts = 3
+		o.Backoff = &backoff.ZeroBackOff{}
+	}))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []uint64{0, 1, 2}, attempts)
+}
+
+func TestWorkflow_NoInterceptors_NoRegression(t *testing.T) {
+	t.Parallel()
+	// Workflows without interceptors must not regress existing behaviour.
+	step := NoOp("a")
+	w := &Workflow{}
+	w.Add(Step(step))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, Succeeded, w.StateOf(step).GetStatus())
+}
+
+// TestSkippedStep_DoesNotConsumeLease verifies that a Skipped step does NOT
+// occupy a concurrency lease nor spawn a worker goroutine. With
+// MaxConcurrency=1 and a chain a → b(skip) → c, b being skipped must not
+// block c from running concurrently with a's *next* tick — and most
+// importantly, b must not even briefly hold the only lease.
+//
+// We assert this by attaching an AttemptInterceptor that records every step
+// that actually runs through the worker path. b must not appear there.
+func TestSkippedStep_DoesNotConsumeLease(t *testing.T) {
+	t.Parallel()
+
+	var ranSteps []string
+	mu := sync.Mutex{}
+	ic := AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
+		mu.Lock()
+		ranSteps = append(ranSteps, String(s))
+		mu.Unlock()
+		return next(ctx)
+	})
+
+	a, b, c := NoOp("a"), NoOp("b"), NoOp("c")
+	w := &Workflow{
+		MaxConcurrency:      1,
+		AttemptInterceptors: []AttemptInterceptor{ic},
+	}
+	w.Add(
+		Step(a),
+		Step(b).DependsOn(a).When(func(_ context.Context, _ map[Steper]StepResult) StepStatus {
+			return Skipped
+		}),
+		Step(c).DependsOn(b).When(AllSucceededOrSkipped),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- w.Do(context.Background()) }()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("workflow did not complete within 5s")
+	}
+
+	// Skipped step b must not have entered the worker path.
+	assert.Equal(t, Skipped, w.StateOf(b).GetStatus())
+	mu.Lock()
+	defer mu.Unlock()
+	for _, name := range ranSteps {
+		assert.NotEqual(t, "b", name, "skipped step must not consume a worker lease / fire AttemptInterceptor")
+	}
+	assert.ElementsMatch(t, []string{"a", "c"}, ranSteps)
+}
+
+// TestInterceptorPanic_DontPanic ensures that when DontPanic is true, a panic
+// inside a user StepInterceptor is converted to an error rather than crashing
+// the process or leaving the lease unreleased / status unsignalled.
+func TestInterceptorPanic_DontPanic(t *testing.T) {
+	t.Parallel()
+	step := NoOp("a")
+	w := &Workflow{
+		DontPanic: true,
+		StepInterceptors: []StepInterceptor{
+			StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+				panic("boom from StepInterceptor")
+			}),
+		},
+	}
+	w.Add(Step(step))
+
+	done := make(chan error, 1)
+	go func() { done <- w.Do(context.Background()) }()
+	select {
+	case err := <-done:
+		// Workflow returns ErrWorkflow because the step ended in Failed.
+		assert.Error(t, err)
+		stepErr := w.StateOf(step).GetStepResult().Err
+		assert.Error(t, stepErr)
+		assert.Contains(t, stepErr.Error(), "boom from StepInterceptor")
+	case <-time.After(5 * time.Second):
+		t.Fatal("workflow hung after panicking interceptor — lease leak suspected")
+	}
+}
+
+// TestAttemptInterceptorPanic_DontPanic mirrors the StepInterceptor panic test
+// but for AttemptInterceptor. It ensures the panic is caught for retried
+// attempts as well.
+func TestAttemptInterceptorPanic_DontPanic(t *testing.T) {
+	t.Parallel()
+	step := NoOp("a")
+	w := &Workflow{
+		DontPanic: true,
+		AttemptInterceptors: []AttemptInterceptor{
+			AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
+				panic("boom from AttemptInterceptor")
+			}),
+		},
+	}
+	w.Add(Step(step))
+
+	done := make(chan error, 1)
+	go func() { done <- w.Do(context.Background()) }()
+	select {
+	case err := <-done:
+		assert.Error(t, err)
+		stepErr := w.StateOf(step).GetStepResult().Err
+		assert.Error(t, stepErr)
+		assert.Contains(t, stepErr.Error(), "boom from AttemptInterceptor")
+	case <-time.After(5 * time.Second):
+		t.Fatal("workflow hung after panicking AttemptInterceptor — lease leak suspected")
+	}
 }
