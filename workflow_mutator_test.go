@@ -222,3 +222,20 @@ func TestMutator_multipleMutatorsRunInSliceOrder(t *testing.T) {
 	assert.NoError(t, w.Do(context.Background()))
 	assert.Equal(t, []string{"m1", "m2"}, order)
 }
+
+func TestMutator_mergeAtFirstScheduling_NotAtAdd(t *testing.T) {
+	g := &wfGreet{}
+	called := 0
+	w := &flow.Workflow{
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+				called++
+				return nil
+			}),
+		},
+	}
+	w.Add(flow.Step(g))
+	assert.Equal(t, 0, called, "Add must not invoke mutators")
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, 1, called)
+}
