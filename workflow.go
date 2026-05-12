@@ -417,11 +417,14 @@ func (w *Workflow) tick(ctx context.Context) bool {
 		}
 		// Apply Mutators exactly once per step, before reading Option /
 		// evaluating Condition / starting the first attempt. This way the
-		// Option/Before/After contributions from Mutators are visible to the
-		// rest of this iteration.
+		// Option/Before/After contributions from Mutators are visible to
+		// the rest of this iteration. The flag is flipped BEFORE the merge
+		// runs so that a panicking mutator (caught by applyMutators's
+		// recover when DontPanic is set in Task 9) does not cause re-entry
+		// on the next tick.
 		if !state.MutatorsApplied() {
-			w.applyMutators(ctx, step, state)
 			state.SetMutatorsApplied()
+			w.applyMutators(ctx, step, state)
 		}
 		option := state.Option()
 		cond := DefaultCondition
