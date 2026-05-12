@@ -131,6 +131,29 @@ func (w *Workflow) addStep(step Steper, config *StepConfig) {
 	}
 }
 
+// applyMutators runs each Mutator in w.Mutators against step. For every match,
+// the returned Builder's config keyed on the matched layer is merged into the
+// state of step (the wrapper key in this workflow). Called once per step,
+// just before its first attempt.
+func (w *Workflow) applyMutators(ctx context.Context, step Steper, state *State) {
+	if len(w.Mutators) == 0 {
+		return
+	}
+	for _, m := range w.Mutators {
+		matched, target, b := m.applyTo(ctx, step)
+		if !matched || b == nil {
+			continue
+		}
+		for s, cfg := range b.AddToWorkflow() {
+			if s == target {
+				state.MergeConfig(cfg)
+			}
+			// configs keyed on other steps are silently dropped — Mutator
+			// scope is the matched layer only.
+		}
+	}
+}
+
 // setUpstream will put the upstream into proper state.
 func (w *Workflow) setUpstream(step, up Steper) {
 	if step == nil || up == nil {
@@ -391,6 +414,14 @@ func (w *Workflow) tick(ctx context.Context) bool {
 		ups := w.UpstreamOf(step)
 		if isAnyUpstreamNotTerminated(ups) {
 			continue
+		}
+		// Apply Mutators exactly once per step, before reading Option /
+		// evaluating Condition / starting the first attempt. This way the
+		// Option/Before/After contributions from Mutators are visible to the
+		// rest of this iteration.
+		if !state.MutatorsApplied() {
+			w.applyMutators(ctx, step, state)
+			state.SetMutatorsApplied()
 		}
 		option := state.Option()
 		cond := DefaultCondition

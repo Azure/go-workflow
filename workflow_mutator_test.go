@@ -40,3 +40,32 @@ func TestSubWorkflow_PrependMutators(t *testing.T) {
 	s.PrependMutators([]flow.Mutator{m})
 	// No panic / no error → behaviour verified by integration test in Task 7
 }
+
+type wfGreet struct {
+	Greeting string
+	Who      string
+}
+
+func (g *wfGreet) Do(context.Context) error { return nil }
+
+func TestMutator_mergesInputBeforeFirstAttempt(t *testing.T) {
+	called := 0
+	g := &wfGreet{Greeting: "Hi"}
+	w := &flow.Workflow{
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+				called++
+				return flow.Step(gg).Input(func(_ context.Context, gg *wfGreet) error {
+					gg.Who = "world"
+					return nil
+				})
+			}),
+		},
+	}
+	w.Add(flow.Step(g))
+
+	err := w.Do(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, called, "mutator must run exactly once")
+	assert.Equal(t, "world", g.Who, "mutator-contributed Input must run before Do")
+}
