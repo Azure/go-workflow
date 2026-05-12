@@ -1,15 +1,4 @@
-//go:build mutator_design
-
-// This file is a DESIGN-PHASE reference for the proposed flow.Mutator API
-// (openspec/changes/2026-05-06-step-mutator). It does NOT compile against the
-// current tree because flow.Mutator / flow.Mutate / Workflow.Mutators do not
-// yet exist. The build tag `mutator_design` keeps it out of the default build.
-//
-// When the implementation lands, drop the build tag (rename file or remove the
-// header) and these become live ExampleXxx tests.
-//
-// The intent of this file is to let reviewers see the *final user-facing
-// shape* of the Mutator API before any implementation is written.
+// Examples of the flow.Mutator API.
 
 package flow_test
 
@@ -78,9 +67,10 @@ func ExampleMutate_input() {
 			}),
 		},
 	}
+	hello := &Greet{Greeting: "Hello"}
+	bob := &Greet{Greeting: "Hi", Who: "Bob"}
 	w.Add(
-		flow.Step(&Greet{Greeting: "Hello"}),       // Who left blank, will be filled in
-		flow.Step(&Greet{Greeting: "Hi", Who: "Bob"}), // already set, Mutator does not override
+		flow.Pipe(hello, bob), // sequential so output order is deterministic
 	)
 	_ = w.Do(context.Background())
 	// Output:
@@ -99,7 +89,7 @@ func ExampleMutate_retryOverride() {
 		Mutators: []flow.Mutator{
 			flow.Mutate[*Greet](func(_ context.Context, g *Greet) flow.Builder {
 				return flow.Step(g).
-					Retry(func(o *flow.RetryOption) { o.MaxAttempts = 3 }).
+					Retry(func(o *flow.RetryOption) { o.Attempts = 3 }).
 					Timeout(2 * time.Second)
 			}),
 		},
@@ -273,7 +263,7 @@ func ExampleMutate_unwrap() {
 			}),
 		},
 	}
-	w.Add(flow.Step(flow.Name("named-greet", greet)))
+	w.Add(flow.Name(greet, "named-greet"))
 	_ = w.Do(context.Background())
 	// Output:
 	// Hi, world!

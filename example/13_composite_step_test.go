@@ -74,6 +74,13 @@ func ExampleCompositeStep() {
 	// 	SimpleStep Failed!
 }
 
+// ExampleCompositeViaWorkflow demonstrates the legacy BuildStep-based
+// composite step pattern.
+//
+// Deprecated: BuildStep is being removed in the next major version. See
+// ExampleMutate_subWorkflow in 15_mutator_test.go for the new pattern that
+// constructs the inner workflow inside Do() and uses flow.Mutate for
+// cross-cutting modification.
 func ExampleCompositeViaWorkflow() {
 	var (
 		composite = &CompositeViaWorkflow{SimpleStep: SimpleStep{
