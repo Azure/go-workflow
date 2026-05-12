@@ -810,25 +810,18 @@ func catchPanicAsError(f func() error) error {
 }
 
 // SubWorkflow makes any user struct behave as a Step that contains a
-// Workflow.
-//
-// Deprecated: SubWorkflow is unnecessary. Workflow itself implements Steper
-// (and InterceptorReceiver), so you can simply embed *Workflow — or just hold
-// a Workflow field — directly:
+// Workflow. Embed it in your own struct to get Add/Do/Reset and the
+// InterceptorReceiver delegation for free:
 //
 //	type MyStep struct {
-//	    *flow.Workflow
+//	    flow.SubWorkflow
 //	}
 //
 //	func (s *MyStep) BuildStep() {
-//	    s.Workflow = &flow.Workflow{}
-//	    s.Workflow.Add(
+//	    s.Add(
 //	        flow.Step(/* stepX */),
 //	    )
 //	}
-//
-// Existing code using SubWorkflow continues to work, but new code should
-// embed Workflow directly. SubWorkflow may be removed in a future release.
 type SubWorkflow struct{ w Workflow }
 
 func (s *SubWorkflow) Unwrap() Steper                    { return &s.w }
