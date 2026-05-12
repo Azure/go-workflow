@@ -44,6 +44,10 @@ type Workflow struct {
 	Clock          clock.Clock // Clock for retry and unit test
 	DefaultOption  *StepOption // DefaultOption is the default option for all Steps
 
+	// Mutators are evaluated against every step in this workflow before that
+	// step's first attempt. See [Mutator] / [Mutate].
+	Mutators []Mutator
+
 	StepBuilder // StepBuilder to call BuildStep() for Steps
 
 	steps map[Steper]*State // the internal states of Steps
@@ -72,6 +76,17 @@ func (w *Workflow) Add(was ...Builder) *Workflow {
 		}
 	}
 	return w
+}
+
+// PrependMutators inserts mw at the front of w.Mutators, preserving the
+// invariant that propagated parent Mutators run before locally-registered
+// child Mutators. Safe to call multiple times; the once-per-step flag on
+// State prevents double application.
+func (w *Workflow) PrependMutators(mw []Mutator) {
+	if len(mw) == 0 {
+		return
+	}
+	w.Mutators = append(append([]Mutator{}, mw...), w.Mutators...)
 }
 
 // AddStep adds a Step into Workflow with the given phase and config.
@@ -556,3 +571,10 @@ func (s *SubWorkflow) Do(ctx context.Context) error      { return s.w.Do(ctx) }
 
 // Reset resets the sub-workflow to ready for BuildStep()
 func (s *SubWorkflow) Reset() { s.w = Workflow{} }
+
+// PrependMutators forwards mw to the inner workflow. Implements [MutatorReceiver]
+// so parent workflows can propagate Mutators into a sub-workflow before its
+// scheduling pass begins.
+func (s *SubWorkflow) PrependMutators(mw []Mutator) {
+	s.w.PrependMutators(mw)
+}
