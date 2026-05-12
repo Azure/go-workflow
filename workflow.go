@@ -424,6 +424,12 @@ func (w *Workflow) tick(ctx context.Context) bool {
 		// on the next tick.
 		if !state.MutatorsApplied() {
 			state.SetMutatorsApplied()
+			// Propagate this workflow's Mutators into nested workflows so
+			// they can apply against inner steps when those steps are
+			// scheduled by the inner workflow.
+			if recv, ok := step.(MutatorReceiver); ok && len(w.Mutators) > 0 {
+				recv.PrependMutators(w.Mutators)
+			}
 			w.applyMutators(ctx, step, state)
 		}
 		option := state.Option()

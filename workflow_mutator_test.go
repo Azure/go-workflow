@@ -117,3 +117,68 @@ func TestMutator_nilSliceIsNoOp(t *testing.T) {
 	assert.NoError(t, w.Do(context.Background()))
 	assert.Equal(t, "Bob", g.Who)
 }
+
+type wfComposite struct {
+	flow.SubWorkflow
+	Inner wfGreet
+}
+
+func (c *wfComposite) Do(ctx context.Context) error {
+	// Lazy build inside Do — replaces BuildStep pattern.
+	c.Add(flow.Step(&c.Inner))
+	return c.SubWorkflow.Do(ctx)
+}
+
+func TestMutator_reachesIntoSubWorkflow(t *testing.T) {
+	c := &wfComposite{Inner: wfGreet{Greeting: "Hello"}}
+	w := &flow.Workflow{
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfGreet](func(ctx context.Context, g *wfGreet) flow.Builder {
+				g.Who = "world"
+				return nil
+			}),
+		},
+	}
+	w.Add(flow.Step(c))
+
+	err := w.Do(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, "world", c.Inner.Who, "parent Mutator must reach inner step via PrependMutators")
+}
+
+func TestMutator_reachesIntoNestedWorkflow(t *testing.T) {
+	innerG := &wfGreet{Greeting: "Hi"}
+	innerW := new(flow.Workflow).Add(flow.Step(innerG))
+
+	w := &flow.Workflow{
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfGreet](func(ctx context.Context, g *wfGreet) flow.Builder {
+				g.Who = "world"
+				return nil
+			}),
+		},
+	}
+	w.Add(flow.Step(innerW))
+
+	err := w.Do(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, "world", innerG.Who)
+}
+
+func TestMutator_reachesLazilyAddedInnerStep(t *testing.T) {
+	c := &wfComposite{Inner: wfGreet{Greeting: "Yo"}}
+	called := 0
+	w := &flow.Workflow{
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfGreet](func(ctx context.Context, g *wfGreet) flow.Builder {
+				called++
+				g.Who = "lazy"
+				return nil
+			}),
+		},
+	}
+	w.Add(flow.Step(c))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, 1, called)
+	assert.Equal(t, "lazy", c.Inner.Who)
+}
