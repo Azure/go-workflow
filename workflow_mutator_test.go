@@ -2,6 +2,7 @@ package flow_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	flow "github.com/Azure/go-workflow"
@@ -68,4 +69,51 @@ func TestMutator_mergesInputBeforeFirstAttempt(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, called, "mutator must run exactly once")
 	assert.Equal(t, "world", g.Who, "mutator-contributed Input must run before Do")
+}
+
+type wfFlaky struct {
+	attempts int
+	failTill int
+}
+
+func (f *wfFlaky) Do(context.Context) error {
+	f.attempts++
+	if f.attempts <= f.failTill {
+		return errors.New("transient")
+	}
+	return nil
+}
+
+func TestMutator_runsExactlyOnceAcrossRetries(t *testing.T) {
+	mutatorCalls := 0
+	inputCalls := 0
+	f := &wfFlaky{failTill: 2}
+	w := &flow.Workflow{
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfFlaky](func(ctx context.Context, ff *wfFlaky) flow.Builder {
+				mutatorCalls++
+				return flow.Step(ff).
+					Retry(func(o *flow.RetryOption) { o.Attempts = 3 }).
+					Input(func(_ context.Context, _ *wfFlaky) error {
+						inputCalls++
+						return nil
+					})
+			}),
+		},
+	}
+	w.Add(flow.Step(f))
+
+	err := w.Do(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, mutatorCalls, "mutator user-fn runs once")
+	assert.Equal(t, 3, inputCalls, "mutator-contributed Input runs per attempt")
+	assert.Equal(t, 3, f.attempts)
+}
+
+func TestMutator_nilSliceIsNoOp(t *testing.T) {
+	g := &wfGreet{Greeting: "Hi", Who: "Bob"}
+	w := &flow.Workflow{} // Mutators == nil
+	w.Add(flow.Step(g))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, "Bob", g.Who)
 }
