@@ -139,17 +139,28 @@ func (w *Workflow) applyMutators(ctx context.Context, step Steper, state *State)
 	if len(w.Mutators) == 0 {
 		return
 	}
+	do := func(fn func() error) error { return fn() }
+	if w.DontPanic {
+		do = catchPanicAsError
+	}
 	for _, m := range w.Mutators {
-		matched, target, b := m.applyTo(ctx, step)
-		if !matched || b == nil {
-			continue
-		}
-		for s, cfg := range b.AddToWorkflow() {
-			if s == target {
-				state.MergeConfig(cfg)
+		err := do(func() error {
+			matched, target, b := m.applyTo(ctx, step)
+			if !matched || b == nil {
+				return nil
 			}
-			// configs keyed on other steps are silently dropped — Mutator
-			// scope is the matched layer only.
+			for s, cfg := range b.AddToWorkflow() {
+				if s == target {
+					state.MergeConfig(cfg)
+				}
+				// configs keyed on other steps are silently dropped — Mutator
+				// scope is the matched layer only.
+			}
+			return nil
+		})
+		if err != nil {
+			state.SetError(err)
+			return // a panicking mutator is fatal for this step
 		}
 	}
 }
@@ -431,6 +442,22 @@ func (w *Workflow) tick(ctx context.Context) bool {
 				recv.PrependMutators(w.Mutators)
 			}
 			w.applyMutators(ctx, step, state)
+			// If applyMutators caught a panic (DontPanic), the state already
+			// holds an error. Short-circuit: mark the step Failed immediately
+			// so it never reaches the goroutine that would overwrite the error.
+			if err := state.GetError(); err != nil {
+				state.SetStepResult(StepResult{
+					Status:     Failed,
+					Err:        err,
+					FinishedAt: w.Clock.Now(),
+				})
+				w.waitGroup.Add(1)
+				go func() {
+					defer w.waitGroup.Done()
+					w.signalStatusChange()
+				}()
+				continue
+			}
 		}
 		option := state.Option()
 		cond := DefaultCondition

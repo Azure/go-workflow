@@ -254,3 +254,63 @@ func TestMutator_matchesThroughNameWrapper(t *testing.T) {
 	assert.NoError(t, w.Do(context.Background()))
 	assert.Equal(t, "world", g.Who)
 }
+
+type ctxKey string
+
+const wfCtxKey ctxKey = "k"
+
+func TestMutator_receivesWorkflowCtx(t *testing.T) {
+	g := &wfGreet{}
+	got := ""
+	w := &flow.Workflow{
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+				if v, ok := ctx.Value(wfCtxKey).(string); ok {
+					got = v
+				}
+				return nil
+			}),
+		},
+	}
+	w.Add(flow.Step(g))
+	ctx := context.WithValue(context.Background(), wfCtxKey, "value-from-do")
+	assert.NoError(t, w.Do(ctx))
+	assert.Equal(t, "value-from-do", got)
+}
+
+func TestMutator_unrelatedBuilderEntryIgnored(t *testing.T) {
+	g := &wfGreet{Greeting: "Hi", Who: "Bob"}
+	other := &wfGreet{Who: "untouched"}
+	w := &flow.Workflow{
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+				if gg == g {
+					// Mistakenly return a Builder keyed on `other` instead of `gg`.
+					return flow.Step(other).Input(func(_ context.Context, o *wfGreet) error {
+						o.Who = "stolen"
+						return nil
+					})
+				}
+				return nil
+			}),
+		},
+	}
+	w.Add(flow.Step(g)) // only g is in the workflow
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, "untouched", other.Who, "config keyed on a different step is dropped")
+}
+
+func TestMutator_panicCaughtWhenDontPanic(t *testing.T) {
+	g := &wfGreet{}
+	w := &flow.Workflow{
+		DontPanic: true,
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+				panic("boom")
+			}),
+		},
+	}
+	w.Add(flow.Step(g))
+	err := w.Do(context.Background())
+	assert.Error(t, err)
+}
