@@ -182,3 +182,43 @@ func TestMutator_reachesLazilyAddedInnerStep(t *testing.T) {
 	assert.Equal(t, 1, called)
 	assert.Equal(t, "lazy", c.Inner.Who)
 }
+
+func TestMutator_planInputBeforeMutatorInput(t *testing.T) {
+	g := &wfGreet{Greeting: "Hi"}
+	order := []string{}
+	w := &flow.Workflow{
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+				return flow.Step(gg).Input(func(_ context.Context, _ *wfGreet) error {
+					order = append(order, "mutator")
+					return nil
+				})
+			}),
+		},
+	}
+	w.Add(
+		flow.Step(g).Input(func(_ context.Context, _ *wfGreet) error {
+			order = append(order, "plan")
+			return nil
+		}),
+	)
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []string{"plan", "mutator"}, order)
+}
+
+func TestMutator_multipleMutatorsRunInSliceOrder(t *testing.T) {
+	g := &wfGreet{}
+	order := []string{}
+	mk := func(name string) flow.Mutator {
+		return flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+			return flow.Step(gg).Input(func(_ context.Context, _ *wfGreet) error {
+				order = append(order, name)
+				return nil
+			})
+		})
+	}
+	w := &flow.Workflow{Mutators: []flow.Mutator{mk("m1"), mk("m2")}}
+	w.Add(flow.Step(g))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, []string{"m1", "m2"}, order)
+}
