@@ -46,6 +46,7 @@ stay in sync with the library.
 | [10_observability](10_observability_test.go)       | `StepInterceptor` / `AttemptInterceptor` for cross-cutting logging, tracing, metrics. |
 | [11_debugging](11_debugging_test.go)               | `ErrWorkflow` and `Workflow.StateOf` for post-run inspection. |
 | [12_testing_workflows](12_testing_workflows_test.go) | `flow.Mock` to substitute Step behaviour in tests. |
+| [13_mutators](13_mutators_test.go)                 | `Mutate[T]` to contribute config (defaults, Retry, callbacks) to every Step of a type — even inside sub-Workflows. |
 
 ## Conventions used in these examples
 

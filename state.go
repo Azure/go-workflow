@@ -18,7 +18,8 @@ import (
 // Use the GetXxx / SetXxx helpers rather than touching StepResult directly.
 type State struct {
 	StepResult
-	Config *StepConfig
+	Config          *StepConfig
+	mutatorsApplied bool
 	sync.RWMutex
 }
 
@@ -35,6 +36,22 @@ func (s *State) SetStatus(ss StepStatus) {
 	s.Lock()
 	defer s.Unlock()
 	s.Status = ss
+}
+
+// MutatorsApplied reports whether the workflow has already merged Mutator
+// contributions into this Step's Config.
+func (s *State) MutatorsApplied() bool {
+	s.RLock()
+	defer s.RUnlock()
+	return s.mutatorsApplied
+}
+
+// SetMutatorsApplied marks Mutator contributions as merged for this Step.
+// The runtime calls this exactly once per step, just before the first attempt.
+func (s *State) SetMutatorsApplied() {
+	s.Lock()
+	defer s.Unlock()
+	s.mutatorsApplied = true
 }
 
 // GetStepResult returns a snapshot of the full StepResult under read lock.

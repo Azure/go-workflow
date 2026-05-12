@@ -32,6 +32,11 @@ type StepBuilder struct{ built Set[Steper] }
 //
 // In both build cases the walker returns TraverseEndBranch so the parent
 // composite's children aren't double-visited from this side.
+//
+// Deprecated: this lazy-initialization hook will be removed in the next major
+// version of go-workflow. Use [Mutate] for cross-cutting modification, and
+// construct sub-workflows inside Do() instead. See
+// openspec/changes/2026-05-06-step-mutator/design.md.
 func (sb *StepBuilder) BuildStep(s Steper) {
 	if sb.built == nil {
 		sb.built = make(Set[Steper])

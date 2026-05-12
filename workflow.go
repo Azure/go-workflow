@@ -51,6 +51,10 @@ type Workflow struct {
 	Clock          clock.Clock // injected clock for retries / timeouts (deterministic in tests).
 	DefaultOption  *StepOption // applied as the FIRST option for every Step (per-step Option calls override it).
 
+	// Mutators are evaluated against every step in this workflow before that
+	// step's first attempt. See [Mutator] / [Mutate].
+	Mutators []Mutator
+
 	// Workflow-level interceptors. The base slices are never mutated by
 	// inheritance (see PrependInterceptors / effective*Interceptors below),
 	// so multiple Do() runs stay deterministic.
@@ -113,6 +117,17 @@ func (w *Workflow) Add(was ...Builder) *Workflow {
 	return w
 }
 
+// PrependMutators inserts mw at the front of w.Mutators, preserving the
+// invariant that propagated parent Mutators run before locally-registered
+// child Mutators. Safe to call multiple times; the once-per-step flag on
+// State prevents double application.
+func (w *Workflow) PrependMutators(mw []Mutator) {
+	if len(mw) == 0 {
+		return
+	}
+	w.Mutators = append(append([]Mutator{}, mw...), w.Mutators...)
+}
+
 // addStep registers `step` as a root in this workflow if it isn't already
 // reachable from one. If the new step embeds previously-registered roots, those
 // roots are demoted (their state is folded into the new root's state) so the
@@ -158,6 +173,40 @@ func (w *Workflow) addStep(step Steper, config *StepConfig) {
 		config.Upstreams = nil
 		// merge config to the state in the lowest workflow
 		w.StateOf(step).MergeConfig(config)
+	}
+}
+
+// applyMutators runs each Mutator in w.Mutators against step. For every match,
+// the returned Builder's config keyed on the matched layer is merged into the
+// state of step (the wrapper key in this workflow). Called once per step,
+// just before its first attempt.
+func (w *Workflow) applyMutators(ctx context.Context, step Steper, state *State) {
+	if len(w.Mutators) == 0 {
+		return
+	}
+	do := func(fn func() error) error { return fn() }
+	if w.DontPanic {
+		do = catchPanicAsError
+	}
+	for _, m := range w.Mutators {
+		err := do(func() error {
+			matched, target, b := m.applyTo(ctx, step)
+			if !matched || b == nil {
+				return nil
+			}
+			for s, cfg := range b.AddToWorkflow() {
+				if s == target {
+					state.MergeConfig(cfg)
+				}
+				// configs keyed on other steps are silently dropped — Mutator
+				// scope is the matched layer only.
+			}
+			return nil
+		})
+		if err != nil {
+			state.SetError(err)
+			return // a panicking mutator is fatal for this step
+		}
 	}
 }
 
@@ -577,6 +626,36 @@ func (w *Workflow) tick(ctx context.Context) bool {
 				continue
 			}
 
+			// Apply Mutators exactly once per step, before reading Option /
+			// evaluating Condition / starting the first attempt. This way the
+			// Option/Before/After contributions from Mutators are visible to
+			// the rest of this iteration. The flag is flipped BEFORE the merge
+			// runs so that a panicking mutator (caught by applyMutators's
+			// recover when DontPanic is set) does not cause re-entry on the
+			// next tick.
+			if !state.MutatorsApplied() {
+				state.SetMutatorsApplied()
+				// Propagate this workflow's Mutators into nested workflows so
+				// they can apply against inner steps when those steps are
+				// scheduled by the inner workflow.
+				if recv, ok := step.(MutatorReceiver); ok && len(w.Mutators) > 0 {
+					recv.PrependMutators(w.Mutators)
+				}
+				w.applyMutators(ctx, step, state)
+				// If applyMutators caught a panic (DontPanic), the state already
+				// holds an error. Settle the step inline as Failed so it never
+				// reaches the worker goroutine.
+				if err := state.GetError(); err != nil {
+					state.SetStepResult(StepResult{
+						Status:     Failed,
+						Err:        err,
+						FinishedAt: w.Clock.Now(),
+					})
+					progressed = true
+					continue
+				}
+			}
+
 			// Evaluate Condition inline. If terminal (Skipped/Canceled), settle
 			// the step here — no goroutine, no lease, no interceptor chain.
 			cond := DefaultCondition
@@ -830,7 +909,19 @@ func (s *SubWorkflow) Do(ctx context.Context) error      { return s.w.Do(ctx) }
 
 // Reset clears the inner workflow so a subsequent BuildStep() can rebuild
 // from scratch.
+//
+// Deprecated: Reset is only invoked by the deprecated [StepBuilder.BuildStep]
+// path. With the [Mutator] mechanism (see [Mutate]) and Do()-time sub-workflow
+// construction, Reset is no longer needed and will be removed in the next
+// major version of go-workflow.
 func (s *SubWorkflow) Reset() { s.w = Workflow{} }
+
+// PrependMutators forwards mw to the inner workflow. Implements [MutatorReceiver]
+// so parent workflows can propagate Mutators into a sub-workflow before its
+// scheduling pass begins.
+func (s *SubWorkflow) PrependMutators(mw []Mutator) {
+	s.w.PrependMutators(mw)
+}
 
 // PrependInterceptors satisfies InterceptorReceiver by delegating to the
 // embedded Workflow — so a parent workflow's interceptors flow into the
