@@ -19,8 +19,8 @@ import (
 //     decorators. Your domain types ARE the workflow.
 //   - A Workflow is a DAG of Steps; Steps with no path between them run
 //     in parallel.
-//   - Data flows naturally through your structs' fields — downstreams hold
-//     pointers to upstreams.
+//   - Use `Input` to flow data from upstream Steps into a downstream
+//     Step's fields, right before its `Do` runs.
 //
 // **The scenario**
 //
@@ -34,8 +34,9 @@ import (
 //	    └── FetchPosts ─┘
 //
 // `FetchUser` and `FetchPosts` have no dependency on each other so the
-// Workflow runs them concurrently. `BuildProfile` waits until both are done,
-// then reads their results from the pointers it holds.
+// Workflow runs them concurrently. `BuildProfile` waits until both are
+// done; an `Input` callback then copies their outputs into BuildProfile's
+// own fields, and `Do` reads them.
 //
 // Read on for 02_steps_and_deps_test.go to see more wiring shapes.
 func ExampleWorkflow_quickstart() {
@@ -55,13 +56,20 @@ func ExampleWorkflow_quickstart() {
 	// Configuration goes in via the constructor; results come out via fields.
 	user := &FetchUser{BaseURL: server.URL}
 	posts := &FetchPosts{BaseURL: server.URL}
-	profile := &BuildProfile{User: user, Posts: posts}
+	profile := &BuildProfile{}
 
-	// Wire the graph. profile depends on user AND posts; the workflow runs
-	// the two upstreams in parallel and only then runs profile.
+	// Wire the graph and the data flow in one go. Input(fn) registers fn
+	// to run after every upstream has terminated and before profile.Do —
+	// so user.Name and posts.Posts are safe to read inside fn.
 	w := new(flow.Workflow)
 	w.Add(
-		flow.Step(profile).DependsOn(user, posts),
+		flow.Step(profile).
+			DependsOn(user, posts).
+			Input(func(ctx context.Context, p *BuildProfile) error {
+				p.Name = user.Name
+				p.Posts = posts.Posts
+				return nil
+			}),
 	)
 
 	if err := w.Do(context.Background()); err != nil {
@@ -100,20 +108,23 @@ func (f *FetchPosts) Do(ctx context.Context) error {
 	return getJSON(ctx, f.BaseURL+"/posts", &f.Posts)
 }
 
-// BuildProfile is the downstream Step. It holds pointers to its upstreams
-// directly, so when its Do runs (after both upstreams have terminated) it
-// just reads .Name and .Posts. No callbacks, no generics — that's the
-// recommended way to flow data between steps when the dependency is known
-// at construction time.
+// BuildProfile is the downstream Step. Its inputs (Name, Posts) are
+// plain fields populated by the Input callback at wiring time — see
+// the Input(...) call in ExampleWorkflow_quickstart above. Do then just
+// reads those fields.
+//
+// Keeping data on Step fields (rather than reaching into upstream
+// objects from Do) makes BuildProfile self-contained: it can be tested
+// in isolation by setting Name and Posts and calling Do directly.
 type BuildProfile struct {
-	User  *FetchUser
-	Posts *FetchPosts
+	Name  string   // input, filled by Input callback
+	Posts []string // input, filled by Input callback
 }
 
 func (b *BuildProfile) Do(ctx context.Context) error {
-	posts := append([]string(nil), b.Posts.Posts...)
+	posts := append([]string(nil), b.Posts...)
 	sort.Strings(posts) // map iteration is unordered upstream; pin the output for the godoc check.
-	fmt.Printf("%s has %d posts: %v\n", b.User.Name, len(posts), posts)
+	fmt.Printf("%s has %d posts: %v\n", b.Name, len(posts), posts)
 	return nil
 }
 

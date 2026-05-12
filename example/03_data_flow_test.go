@@ -11,34 +11,47 @@ import (
 // # Data flow: passing values between Steps
 //
 // **What you'll learn**
-//   - Two ways to flow data between Steps:
-//     1. **Direct field access** (recommended when you can): the downstream
-//        Step holds a pointer to the upstream Step; in `Do` it reads the
-//        upstream's exported fields.
-//     2. **`Input` / `Output` callbacks**: useful when the downstream
-//        cannot or should not hold a typed reference to its upstreams
-//        (e.g. plug-in pipelines wired at runtime, or Steps configured
-//        without compile-time type knowledge of each other).
+//   - The standard pattern: each Step exposes its inputs and outputs as
+//     plain fields; `Input` callbacks copy upstream outputs into the
+//     downstream's input fields right before `Do` runs.
+//   - When you don't want to define a struct per Step, `flow.Func` /
+//     `FuncIO` / `FuncI` / `FuncO` produce ready-made generic Steps
+//     (`*flow.Function[I, O]`) that work with `Input` the same way.
 //   - When `Input` callbacks run (after upstreams terminate, before `Do`).
 
-// ExampleSteper_directFields shows the recommended pattern: data flows
-// through plain struct fields. The downstream Step holds pointers to its
-// upstreams; when its `Do` runs, the upstreams have already terminated and
-// their result fields are populated.
+// ExampleAddStep_Input shows the standard pattern, expanded into a 3-step
+// pipeline that reads a feed, counts items, and announces the count.
 //
-// This is the same pattern you saw in 01_quickstart, expanded into a
-// 3-step pipeline that reads a feed, counts items, and announces the
-// count.
-func ExampleSteper_directFields() {
-	// Construct each step. Downstream steps take pointers to upstream
-	// steps; data will flow through those pointers, not through callbacks.
+// Each Step is a plain struct: inputs are fields filled by `Input`,
+// outputs are fields written by `Do`. The downstream's `Input` callback
+// reads from upstreams (captured by closure) and writes into the
+// downstream's input fields.
+//
+// Why use Input rather than holding direct pointers to upstreams (as in
+// 01_quickstart)? Two reasons:
+//   - The Step stays self-contained: you can construct one and call its
+//     `Do` directly in a unit test by setting the input fields yourself.
+//   - The wiring lives next to `DependsOn`, so the data flow and the
+//     dependency are declared together where you read the workflow.
+func ExampleAddStep_Input() {
 	feed := &fetchFeed{}
-	count := &countItems{Feed: feed}
-	announce := &announceCount{Count: count}
+	count := &countItems{}
+	announce := &announceCount{}
 
 	w := new(flow.Workflow)
 	w.Add(
-		flow.Pipe(feed, count, announce),
+		flow.Step(count).
+			DependsOn(feed).
+			Input(func(ctx context.Context, c *countItems) error {
+				c.Body = feed.Body
+				return nil
+			}),
+		flow.Step(announce).
+			DependsOn(count).
+			Input(func(ctx context.Context, a *announceCount) error {
+				a.N = count.N
+				return nil
+			}),
 	)
 
 	_ = w.Do(context.Background())
@@ -56,12 +69,12 @@ func (f *fetchFeed) Do(ctx context.Context) error {
 }
 
 type countItems struct {
-	Feed *fetchFeed // upstream — we read from Feed.Body in Do.
-	N    int        // output
+	Body string // input — copied in by Input callback
+	N    int    // output
 }
 
 func (c *countItems) Do(ctx context.Context) error {
-	for _, line := range strings.Split(c.Feed.Body, "\n") {
+	for _, line := range strings.Split(c.Body, "\n") {
 		if line == "item" {
 			c.N++
 		}
@@ -70,31 +83,28 @@ func (c *countItems) Do(ctx context.Context) error {
 }
 
 type announceCount struct {
-	Count *countItems // upstream
+	N int // input — copied in by Input callback
 }
 
 func (a *announceCount) Do(ctx context.Context) error {
-	fmt.Printf("found %d items\n", a.Count.N)
+	fmt.Printf("found %d items\n", a.N)
 	return nil
 }
 
-// ExampleAddStep_Input shows the alternative — `Input` callbacks. Reach
-// for this when:
+// ExampleFunction_inputOutput shows the convenience variant — when you
+// don't want to declare a struct just to define a Step body. `flow.Func`
+// and friends produce a generic `*flow.Function[I, O]` whose `Input`
+// field is the typed input and `Output` field is the typed output:
 //
-//   - the downstream Step is a generic helper that doesn't know its
-//     upstreams' concrete types,
-//   - the wiring is built at runtime by a different layer of code,
-//   - or you simply prefer keeping the data wiring next to the
-//     `DependsOn` declaration.
+//	flow.Func    — no input, no output (just a Do function)
+//	flow.FuncO   — no input, typed output
+//	flow.FuncI   — typed input, no output
+//	flow.FuncIO  — typed input, typed output
 //
-// `Input(fn)` registers `fn` to run after every upstream has terminated
-// and before the Step's `Do` is called, so the upstream values are safe
-// to read inside fn.
-//
-// `flow.Func / FuncIO / FuncI / FuncO` are convenience wrappers that
-// produce a generic `*flow.Function[I, O]` step — they pair naturally
-// with `Input` because the callback can mutate `f.Input` directly.
-func ExampleAddStep_Input() {
+// Mechanics are exactly the same as the struct version above: the
+// `Input` callback runs after upstreams terminate, and you copy the
+// values across.
+func ExampleFunction_inputOutput() {
 	var (
 		fetch = flow.FuncO("FetchFeed", func(ctx context.Context) (string, error) {
 			return "item\nitem\nfooter", nil
@@ -119,7 +129,7 @@ func ExampleAddStep_Input() {
 		flow.Step(count).
 			DependsOn(fetch).
 			Input(func(ctx context.Context, f *flow.Function[string, int]) error {
-				f.Input = fetch.Output // upstream output is ready when Input runs
+				f.Input = fetch.Output
 				return nil
 			}),
 		flow.Step(announce).

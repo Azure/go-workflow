@@ -14,14 +14,14 @@ stay in sync with the library.
 
 | File                            | What you'll learn |
 |---------------------------------|---|
-| [01_quickstart](01_quickstart_test.go)             | Any struct with a `Do` method is a Step. End-to-end 3-minute tour: parallel fetch + merge into a profile, with data flowing through struct pointers. |
+| [01_quickstart](01_quickstart_test.go)             | Any struct with a `Do` method is a Step. End-to-end 3-minute tour: parallel fetch + merge into a profile, with data flowing through `Input` callbacks. |
 | [02_steps_and_deps](02_steps_and_deps_test.go)     | `Step` / `Steps` / `DependsOn` / `Pipe` / `BatchPipe` / `Name`. |
 
 ### Move data through the graph
 
 | File                            | What you'll learn |
 |---------------------------------|---|
-| [03_data_flow](03_data_flow_test.go)               | Two ways to flow data: through struct fields (preferred) or via `Input` / `Output` callbacks. |
+| [03_data_flow](03_data_flow_test.go)               | The standard `Input` callback pattern (with your structs and with `Func`/`FuncIO`/`FuncI`/`FuncO`). |
 | [04_callbacks](04_callbacks_test.go)               | `BeforeStep` / `AfterStep` and how they relate to `Input`. |
 
 ### Decide what runs (and what doesn't)
