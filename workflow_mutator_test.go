@@ -239,3 +239,18 @@ func TestMutator_mergeAtFirstScheduling_NotAtAdd(t *testing.T) {
 	assert.NoError(t, w.Do(context.Background()))
 	assert.Equal(t, 1, called)
 }
+
+func TestMutator_matchesThroughNameWrapper(t *testing.T) {
+	g := &wfGreet{Greeting: "Hi"}
+	w := &flow.Workflow{
+		Mutators: []flow.Mutator{
+			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+				gg.Who = "world"
+				return nil
+			}),
+		},
+	}
+	w.Add(flow.Name(g, "named-greet"))
+	assert.NoError(t, w.Do(context.Background()))
+	assert.Equal(t, "world", g.Who)
+}
