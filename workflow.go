@@ -636,7 +636,12 @@ func (s *SubWorkflow) Unwrap() Steper                    { return &s.w }
 func (s *SubWorkflow) Add(builders ...Builder) *Workflow { return s.w.Add(builders...) }
 func (s *SubWorkflow) Do(ctx context.Context) error      { return s.w.Do(ctx) }
 
-// Reset resets the sub-workflow to ready for BuildStep()
+// Reset clears the inner workflow's state, allowing it to be re-built.
+//
+// Deprecated: Reset is only invoked by the deprecated [StepBuilder.BuildStep]
+// path. With the [Mutator] mechanism (see [Mutate]) and Do()-time sub-workflow
+// construction, Reset is no longer needed and will be removed in the next
+// major version of go-workflow.
 func (s *SubWorkflow) Reset() { s.w = Workflow{} }
 
 // PrependMutators forwards mw to the inner workflow. Implements [MutatorReceiver]

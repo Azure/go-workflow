@@ -12,8 +12,13 @@ package flow
 //	)
 type StepBuilder struct{ built Set[Steper] }
 
-// BuildStep calls BuildStep() method of the Steper if it's implemented,
-// and ensure it's called only once for each Steper.
+// BuildStep walks s and invokes any nested Step's BuildStep() method (and
+// Reset() if implemented) to allow lazy initialization of composite steps.
+//
+// Deprecated: this lazy-initialization hook will be removed in the next major
+// version of go-workflow. Use [Mutate] for cross-cutting modification, and
+// construct sub-workflows inside Do() instead. See
+// openspec/changes/2026-05-06-step-mutator/design.md.
 func (sb *StepBuilder) BuildStep(s Steper) {
 	if sb.built == nil {
 		sb.built = make(Set[Steper])
