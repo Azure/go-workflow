@@ -7,38 +7,37 @@ import (
 	flow "github.com/Azure/go-workflow"
 )
 
-// # Interceptor
+// # Observability: Interceptors
 //
-// Interceptors let you observe, time, log, inject context, or transform errors
-// for every Step in a Workflow — without touching Step implementations.
+// **What you'll learn**
+//   - Use `StepInterceptor` to observe every Step (full lifetime, including
+//     retries) — perfect for logs and tracing spans.
+//   - Use `AttemptInterceptor` to observe each individual attempt — perfect
+//     for per-try metrics or transforming an attempt's error.
+//   - Parent → child workflows inherit interceptors automatically; opt out
+//     with `IsolateInterceptors`.
 //
-// There are TWO layers, deliberately separated:
+// **Two layers, deliberately separated**
 //
 //	StepInterceptor    wraps the FULL lifetime of a Step (across all retries).
 //	                   Sees one Begin / End per Step.
 //
 //	AttemptInterceptor wraps a SINGLE attempt (Before → Do → After) inside the
-//	                   retry loop. Sees one call per attempt — useful for
-//	                   per-try metrics or transforming an attempt's error
-//	                   before it reaches the retry policy.
+//	                   retry loop. Sees one call per attempt.
 //
-// Both are middleware: each interceptor receives a `next` callback and is free
-// to short-circuit, wrap, or transform around it.
+// Both are middleware: each receives a `next` callback and is free to
+// short-circuit, wrap, or transform around it.
 //
-// Configure them on the Workflow:
+// **When to reach for which mechanism**
 //
-//	workflow := &flow.Workflow{
-//	    StepInterceptors:    []flow.StepInterceptor{logger},
-//	    AttemptInterceptors: []flow.AttemptInterceptor{metrics},
-//	}
+//	Need to log/trace every Step?               → Interceptor (this file).
+//	Need to react to upstream's terminal status → Condition (05_conditions).
+//	Need behaviour for one specific Step?       → BeforeStep / AfterStep
+//	                                              (04_callbacks).
 //
-// A few things worth knowing:
-//
-//   - Steps that are settled inline as Skipped or Canceled by their Condition
-//     bypass the interceptor chain. Use StepResult to observe those.
-//   - When a Workflow is used as a child Step, the parent's interceptors are
-//     automatically prepended to the child's chain — set IsolateInterceptors
-//     on the child to opt out.
+// **Caveats**
+//   - Steps settled inline as Skipped/Canceled by their Condition bypass
+//     the interceptor chain. Inspect `StepResult` if you need those.
 
 // ExampleStepInterceptor shows the simplest, most common use: a logger that
 // prints when each Step starts and ends. The interceptor wraps the Step's
@@ -52,8 +51,8 @@ func ExampleStepInterceptor() {
 	})
 
 	var (
-		foo = &flow.NamedStep{Name: "Foo", Steper: new(Foo)}
-		bar = &flow.NamedStep{Name: "Bar", Steper: new(Bar)}
+		foo = flow.Func("Foo", func(ctx context.Context) error { fmt.Println("Foo"); return nil })
+		bar = flow.Func("Bar", func(ctx context.Context) error { fmt.Println("Bar"); return nil })
 	)
 	workflow := &flow.Workflow{
 		StepInterceptors: []flow.StepInterceptor{logger},
@@ -89,7 +88,7 @@ func ExampleAttemptInterceptor() {
 		return err
 	})
 
-	passAfter2 := &flow.NamedStep{Name: "PassAfter2", Steper: &PassAfter{Attempt: 2}}
+	passAfter2 := &flow.NamedStep{Name: "PassAfter2", Steper: &passAfter{n: 2}}
 	workflow := &flow.Workflow{
 		StepInterceptors:    []flow.StepInterceptor{stepLog},
 		AttemptInterceptors: []flow.AttemptInterceptor{attemptLog},
@@ -98,18 +97,18 @@ func ExampleAttemptInterceptor() {
 		flow.Step(passAfter2).
 			Retry(func(ro *flow.RetryOption) {
 				ro.Attempts = 5
-				ro.Timer = new(testTimer)
+				ro.Timer = new(zeroTimer)
 			}),
 	)
 
 	_ = workflow.Do(context.Background())
 	// Output:
 	// [step ] begin PassAfter2
-	// failed at attempt 0
-	// [try=0] PassAfter2 err=failed at attempt 0
-	// failed at attempt 1
-	// [try=1] PassAfter2 err=failed at attempt 1
-	// succeed at attempt 2
+	// fail #0
+	// [try=0] PassAfter2 err=transient
+	// fail #1
+	// [try=1] PassAfter2 err=transient
+	// pass #2
 	// [try=2] PassAfter2 err=<nil>
 	// [step ] end   PassAfter2 (err=<nil>)
 }
@@ -135,13 +134,16 @@ func ExampleInterceptorReceiver() {
 	// inner has no interceptors of its own — it inherits from outer.
 	inner := new(flow.Workflow)
 	inner.Add(
-		flow.Step(Print("inner-A")).DependsOn(Print("inner-B")),
+		flow.Pipe(
+			flow.Func("inner-B", func(ctx context.Context) error { fmt.Println("inner-B"); return nil }),
+			flow.Func("inner-A", func(ctx context.Context) error { fmt.Println("inner-A"); return nil }),
+		),
 	)
 
 	// isolated has the same shape but opts out of inheritance.
 	isolated := &flow.Workflow{IsolateInterceptors: true}
 	isolated.Add(
-		flow.Step(Print("isolated-X")),
+		flow.Step(flow.Func("isolated-X", func(ctx context.Context) error { fmt.Println("isolated-X"); return nil })),
 	)
 
 	outer := &flow.Workflow{
