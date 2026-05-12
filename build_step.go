@@ -1,19 +1,37 @@
 package flow
 
-// StepBuilder allows to build the internal Steps when adding into Workflow.
+// StepBuilder is the per-Workflow memo that ensures every Step's optional
+// BuildStep() hook fires at most once.
 //
-//	type StepImpl struct {}
+// A Step type can implement BuildStep() to assemble its internal sub-steps
+// lazily — typically the first time it is added to a Workflow:
+//
+//	type StepImpl struct{}
 //	func (s *StepImpl) Unwrap() []flow.Steper { return /* internal steps */ }
 //	func (s *StepImpl) Do(ctx context.Context) error { /* ... */ }
-//	func (s *StepImpl) BuildStep() { /* build internal steps */ }
+//	func (s *StepImpl) BuildStep()                  { /* assemble children */ }
 //
 //	workflow.Add(
-//		flow.Step(new(StepImpl)), // here will call StepImpl.BuildStep() once implicitly
+//	    flow.Step(new(StepImpl)), // BuildStep() fires here, exactly once.
 //	)
+//
+// The StepBuilder is embedded in Workflow itself, so Workflow.Add transparently
+// invokes BuildStep on every newly seen step.
 type StepBuilder struct{ built Set[Steper] }
 
-// BuildStep calls BuildStep() method of the Steper if it's implemented,
-// and ensure it's called only once for each Steper.
+// BuildStep walks the tree of step (pre-order) and triggers BuildStep() on
+// each node that implements it, recording the node so future calls skip it.
+//
+// Two early-exit rules keep behaviour predictable when composing workflows:
+//
+//   - If a node implements `BuildStep(Steper)` (the StepBuilder shape itself,
+//     i.e. it manages a sub-workflow of its own), descent stops at that node —
+//     the inner workflow is responsible for building its own contents.
+//   - If a node implements `Reset()`, it is reset before BuildStep() runs, so
+//     the build always starts from a clean slate.
+//
+// In both build cases the walker returns TraverseEndBranch so the parent
+// composite's children aren't double-visited from this side.
 func (sb *StepBuilder) BuildStep(s Steper) {
 	if sb.built == nil {
 		sb.built = make(Set[Steper])

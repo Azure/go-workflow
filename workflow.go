@@ -13,69 +13,87 @@ import (
 	"github.com/benbjohnson/clock"
 )
 
-// Workflow represents a collection of connected Steps that form a directed acyclic graph (DAG).
+// Workflow orchestrates a collection of Steps connected by dependency edges
+// into a Directed Acyclic Graph (DAG).
 //
-// The Steps are connected via dependency, use Step(), Steps() or Pipe(), BatchPipe() to add Steps into Workflow.
+// You declare the graph with the helpers in step.go: Step / Steps / Pipe /
+// BatchPipe (and branching helpers If / Switch from branch.go), then hand
+// them to Workflow.Add:
 //
 //	workflow.Add(
-//		Step(a),
-//		Steps(b, c).DependsOn(a),	// a -> b, c
-//		Pipe(d, e, f),              // d -> e -> f
-//		BatchPipe(
-//			Steps(g, h),
-//			Steps(i, j),
-//		),                          // g, h -> i, j
+//	    Step(a),
+//	    Steps(b, c).DependsOn(a),    // a runs first, then b and c in parallel.
+//	    Pipe(d, e, f),               // d -> e -> f.
+//	    BatchPipe(
+//	        Steps(g, h),
+//	        Steps(i, j),
+//	    ),                           // g, h finish, then i, j run in parallel.
 //	)
 //
-// Workflow will execute Steps in a topological order, each Step will be executed in a separate goroutine.
+// Workflow.Do executes the graph in topological order. Each step that becomes
+// runnable runs in its own goroutine, with the following guarantee:
 //
-// Workflow guarantees that
+//	When a step's worker goroutine starts, every upstream step is already
+//	in a terminal status (Succeeded / Failed / Canceled / Skipped). The
+//	step's Condition then decides whether it actually runs (Running) or is
+//	settled inline as Skipped / Canceled.
 //
-//	Before a Step goroutine starts, all its Upstream Steps are `terminated`.
+// See StepStatus / Condition for the status state machine.
 //
-// Check `StepStatus` and `Condition` for details.
-//
-// Workflow supports Step-level configuration,       check Step(), Steps() and Pipe() for details.
-// Workflow supports Composite Steps,				 check Has(), As() and HasStep() for details.
+// Per-step configuration: use Step / Steps / Pipe (see step.go).
+// Composite steps:        use Has / As / HasStep (see wrap.go).
 type Workflow struct {
-	MaxConcurrency int         // MaxConcurrency limits the max concurrency of running Steps
-	DontPanic      bool        // DontPanic suppress panics, instead return it as error
-	SkipAsError    bool        // SkipAsError marks skipped Steps as an error if true, otherwise ignore them
-	Clock          clock.Clock // Clock for retry and unit test
-	DefaultOption  *StepOption // DefaultOption is the default option for all Steps
+	// Workflow-level scheduling and panic policy.
 
-	StepInterceptors    []StepInterceptor    // per-step global interceptors (immutable base)
-	AttemptInterceptors []AttemptInterceptor // per-attempt global interceptors (immutable base)
-	IsolateInterceptors bool                 // if true, do not inherit interceptors from a parent workflow
+	MaxConcurrency int         // 0 means unlimited; otherwise caps simultaneously-running steps.
+	DontPanic      bool        // if true, panics are recovered and surfaced as ErrPanic.
+	SkipAsError    bool        // if true, Skipped terminal status counts as a workflow failure.
+	Clock          clock.Clock // injected clock for retries / timeouts (deterministic in tests).
+	DefaultOption  *StepOption // applied as the FIRST option for every Step (per-step Option calls override it).
 
-	StepBuilder // StepBuilder to call BuildStep() for Steps
+	// Workflow-level interceptors. The base slices are never mutated by
+	// inheritance (see PrependInterceptors / effective*Interceptors below),
+	// so multiple Do() runs stay deterministic.
+	StepInterceptors    []StepInterceptor    // wrap each step's full lifetime (across retries).
+	AttemptInterceptors []AttemptInterceptor // wrap each individual attempt (Before → Do → After).
+	IsolateInterceptors bool                 // when true and this Workflow runs as a child step, do NOT inherit parent interceptors.
 
-	steps map[Steper]*State // the internal states of Steps
+	StepBuilder // embeds the BuildStep memo so Workflow.Add can call BuildStep on new steps once.
 
-	// inheritedStep / inheritedAttempt are populated by PrependInterceptors when
-	// this workflow runs as a child step under a parent. The lifecycle is:
-	//   1. Parent writes them BEFORE calling child.Do() (in executeWithRetry).
-	//   2. child.Do() reads them while building the effective interceptor chain.
-	//   3. child.Do()'s defer clears them after waitGroup.Wait() (covers all
-	//      exit paths: success, preflight error, panic).
+	steps map[Steper]*State // root step → its State (status + StepConfig).
+
+	// inheritedStep / inheritedAttempt hold the interceptors a parent workflow
+	// (or a SubWorkflow-bearing parent step) has prepended for the current run.
+	// Lifecycle:
 	//
-	// They are NOT cleared by the internal reset() — reset() runs at the start
-	// of Do(), which would wipe out what the parent just wrote and break
-	// inheritance. The public Reset() method does clear them, since users call
-	// Reset() between runs and expect a fully-fresh state.
+	//   1. Parent writes them BEFORE invoking child.Do() (in executeWithRetry).
+	//   2. child.Do() reads them while building its effective interceptor chain.
+	//   3. child.Do() clears them in a defer covering ALL exit paths
+	//      (success, preflight error, panic) so the next run starts fresh.
 	//
-	// They are never merged into StepInterceptors / AttemptInterceptors so the
+	// They are intentionally NOT cleared by the internal reset() (reset() runs at
+	// the very top of Do() and would wipe the parent's just-written prefix). The
+	// public Reset() does clear them, since users call Reset() between runs and
+	// expect a fully-fresh state.
+	//
+	// They are never folded into StepInterceptors / AttemptInterceptors so the
 	// user-supplied base stays untouched and repeated runs do not accumulate.
 	inheritedStep    []StepInterceptor
 	inheritedAttempt []AttemptInterceptor
 
-	statusChange *sync.Cond     // a condition to signal the status change to proceed tick
-	leaseBucket  chan struct{}  // constraint max concurrency of running Steps, nil means no limit
-	waitGroup    sync.WaitGroup // to prevent goroutine leak
-	isRunning    sync.Mutex     // indicate whether the Workflow is running
+	statusChange *sync.Cond     // signals to the tick loop when a worker terminates.
+	leaseBucket  chan struct{}  // bounded-channel "permit pool" enforcing MaxConcurrency; nil means unlimited.
+	waitGroup    sync.WaitGroup // tracks worker goroutines so Do() can wait for them on exit.
+	isRunning    sync.Mutex     // single-runner guard: TryLock fails fast if Do/Reset is re-entered.
 }
 
-// Add Steps into Workflow in phase Main.
+// Add wires Builders (Step / Steps / Pipe / BatchPipe / If / Switch / …) into
+// this Workflow. Repeated calls are additive: a step that appears in multiple
+// Add() calls has its config merged (upstreams unioned, callbacks/options
+// concatenated). Returns the Workflow for chaining.
+//
+// If DefaultOption is set, it is prepended to every step's Option list as a
+// SEED — so per-step Option calls (Retry, Timeout, When, …) still win.
 func (w *Workflow) Add(was ...Builder) *Workflow {
 	if w.steps == nil {
 		w.steps = make(map[Steper]*State)
@@ -95,23 +113,29 @@ func (w *Workflow) Add(was ...Builder) *Workflow {
 	return w
 }
 
-// AddStep adds a Step into Workflow with the given phase and config.
+// addStep registers `step` as a root in this workflow if it isn't already
+// reachable from one. If the new step embeds previously-registered roots, those
+// roots are demoted (their state is folded into the new root's state) so the
+// scheduler always operates on a single ROOT per composite tree.
+//
+// Then, if config is non-nil, declared upstreams are wired and the rest of the
+// config is merged into the resolved State (typically the lowest-level
+// containing workflow's State).
 func (w *Workflow) addStep(step Steper, config *StepConfig) {
 	if step == nil {
 		return
 	}
 	w.BuildStep(step)
 	if !HasStep(w, step) {
-		// the step is new, it becomes a new root.
-		// add the new root to the Workflow.
-		// if the step embeds a previous root step,
-		// we need to replace them with the new root.
-		// workflow will only orchestrate the root Steps,
-		// and leave the nested Steps being managed by the root Steps.
+		// New root: scan its tree for any previously-registered roots that are
+		// now nested inside it, and absorb their config so the scheduler sees a
+		// single root per composite. Panic if the new step would clash with a
+		// step that already belongs to a *different* root tree (that would be
+		// double-ownership and we have no way to resolve it).
 		var oldRoots Set[Steper]
 		Traverse(step, func(s Steper, walked []Steper) TraverseDecision {
 			if r := w.RootOf(s); r != nil {
-				if r != s { // s has another root
+				if r != s { // s already belongs to another root in this workflow.
 					panic(fmt.Errorf("add step %p(%s) failed, another step %p(%s) already has %p(%s)",
 						step, step, r, r, s, s))
 				}
@@ -137,7 +161,10 @@ func (w *Workflow) addStep(step Steper, config *StepConfig) {
 	}
 }
 
-// setUpstream will put the upstream into proper state.
+// setUpstream records `up` as an upstream of `step`, ensuring `up` itself is
+// registered as a step first. The dependency edge is added at every workflow
+// level whose tree contains both `step` and `up` — this keeps nested
+// SubWorkflows in sync so their tick loops see the same dependency.
 func (w *Workflow) setUpstream(step, up Steper) {
 	if step == nil || up == nil {
 		return
@@ -173,10 +200,15 @@ func (w *Workflow) setUpstream(step, up Steper) {
 	}
 }
 
-// Empty returns true if the Workflow don't have any Step.
+// Empty reports whether the Workflow has no steps. Nil-safe.
 func (w *Workflow) Empty() bool { return w == nil || len(w.steps) == 0 }
 
-// Steps returns all root Steps in the Workflow.
+// Steps returns the workflow's root steps. (Composite-step internals are not
+// exposed — only the values that are tracked by the scheduler.)
+//
+// Steps and Unwrap return the same slice; Unwrap also makes Workflow
+// participate in the Steper unwrapping protocol (see wrap.go), so utilities
+// like As[T] / HasStep / String can walk into nested workflows.
 func (w *Workflow) Steps() []Steper { return w.Unwrap() }
 func (w *Workflow) Unwrap() []Steper {
 	if w.Empty() {
@@ -185,7 +217,9 @@ func (w *Workflow) Unwrap() []Steper {
 	return Keys(w.steps)
 }
 
-// RootOf returns the root Step of the given Step.
+// RootOf returns the root step (the value the scheduler tracks) that contains
+// `step`, or nil if no root contains it. A step is its own root when it was
+// added directly.
 func (w *Workflow) RootOf(step Steper) Steper {
 	if w.Empty() {
 		return nil
@@ -198,8 +232,10 @@ func (w *Workflow) RootOf(step Steper) Steper {
 	return nil
 }
 
-// StateOf returns the internal state of the Step.
-// State includes Step's status, error, input, dependency and config.
+// StateOf returns the State for `step` — the per-step bookkeeping (status +
+// config). For composite steps, StateOf returns the State of the OWNING
+// workflow level (root or sub-workflow), not necessarily this top-level
+// workflow's State.
 func (w *Workflow) StateOf(step Steper) *State {
 	if w.Empty() || step == nil {
 		return nil
@@ -227,7 +263,10 @@ func (w *Workflow) StateOf(step Steper) *State {
 	return nil
 }
 
-// UpstreamOf returns all upstream Steps and their status and error.
+// UpstreamOf returns each direct upstream of `step` mapped to that upstream's
+// current StepResult. Upstream identities are normalised to their root step
+// (i.e. the value the scheduler tracks), so callers see exactly what the
+// scheduler sees.
 func (w *Workflow) UpstreamOf(step Steper) map[Steper]StepResult {
 	if w.Empty() {
 		return nil
@@ -240,7 +279,8 @@ func (w *Workflow) UpstreamOf(step Steper) map[Steper]StepResult {
 	return rv
 }
 
-// IsTerminated returns true if all Steps terminated.
+// IsTerminated reports whether every step in the workflow has reached a
+// terminal status. The tick loop polls this to decide when to exit.
 func (w *Workflow) IsTerminated() bool {
 	if w.Empty() {
 		return true
@@ -253,23 +293,31 @@ func (w *Workflow) IsTerminated() bool {
 	return true
 }
 
-// Reset resets the Workflow to ready for a new run.
+// Reset prepares the Workflow for a fresh run from outside (the user's POV).
+// It rejects with ErrWorkflowIsRunning if a Do call is currently in flight.
+//
+// Difference vs the internal reset(): Reset() ALSO clears the inherited
+// interceptor slices set by a parent during a previous run. The internal
+// reset() must NOT clear them — see the inheritedStep / inheritedAttempt
+// lifecycle docs above.
 func (w *Workflow) Reset() error {
 	if !w.isRunning.TryLock() {
 		return ErrWorkflowIsRunning
 	}
 	defer w.isRunning.Unlock()
 	w.reset()
-	// Unlike the internal reset() (which Do() calls at its own start), Reset() also
-	// clears interceptors inherited from a parent during a previous run. The internal
-	// reset() must not clear them, because the parent writes them just before calling
-	// child.Do(), and child.Do() then calls reset() — clearing there would wipe the
-	// just-written prefix and break inheritance.
 	w.inheritedStep = nil
 	w.inheritedAttempt = nil
 	return nil
 }
 
+// reset is the per-Do internal reset: clear all step results back to Pending,
+// install a fresh statusChange Cond, ensure Clock is set, and re-allocate the
+// concurrency lease bucket sized for MaxConcurrency.
+//
+// Crucially, this does NOT touch inheritedStep / inheritedAttempt — those were
+// just written by the parent before invoking Do() and must survive into the
+// run.
 func (w *Workflow) reset() {
 	for _, state := range w.steps {
 		state.SetStepResult(StepResult{Status: Pending})
@@ -279,21 +327,22 @@ func (w *Workflow) reset() {
 	}
 	w.statusChange = sync.NewCond(new(sync.Mutex))
 	if w.MaxConcurrency > 0 {
-		// use buffered channel as a sized bucket
-		// a Step needs to create a lease in the bucket to run,
-		// and remove the lease from the bucket when it's done.
+		// Buffered channel as a sized permit pool: a Step takes a slot via
+		// `w.leaseBucket <- struct{}{}` to begin running, and frees it via
+		// `<-w.leaseBucket` when it terminates.
 		w.leaseBucket = make(chan struct{}, w.MaxConcurrency)
 	}
 }
 
-// PrependInterceptors implements InterceptorReceiver on Workflow itself,
-// so a Workflow used directly as a step (or embedded via SubWorkflow) can
-// inherit interceptors from its parent. If IsolateInterceptors is true,
-// the call is a no-op and the workflow uses only its own interceptors.
+// PrependInterceptors implements InterceptorReceiver on Workflow itself, so a
+// Workflow used directly as a step (or via SubWorkflow) can inherit
+// interceptors from its parent for the duration of one run. With
+// IsolateInterceptors == true the call is a no-op (the workflow uses only
+// its own configured interceptors).
 //
 // The inherited slices are stored separately from StepInterceptors /
-// AttemptInterceptors so the user-supplied base is never mutated and
-// repeated runs do not accumulate.
+// AttemptInterceptors so the user-supplied base is never mutated and repeated
+// runs do not accumulate inherited entries.
 func (w *Workflow) PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor) {
 	if w.IsolateInterceptors {
 		return
@@ -312,9 +361,10 @@ func (w *Workflow) PrependInterceptors(step []StepInterceptor, attempt []Attempt
 	}
 }
 
-// effectiveStepInterceptors returns the chain to invoke for this run:
-// inherited (from parent, if any) prepended to the user-configured base.
-// The result is never written back to either field.
+// effectiveStepInterceptors returns the chain to invoke for THIS run: the
+// inherited prefix (from a parent, if any) followed by this workflow's own
+// configured base. The result is computed each call and is never written
+// back to either field.
 func (w *Workflow) effectiveStepInterceptors() []StepInterceptor {
 	if len(w.inheritedStep) == 0 {
 		return w.StepInterceptors
@@ -336,34 +386,49 @@ func (w *Workflow) effectiveAttemptInterceptors() []AttemptInterceptor {
 	return out
 }
 
-// Do starts the Step execution in topological order,
-// and waits until all Steps terminated.
+// Do runs the Workflow synchronously: it spawns a goroutine for every
+// runnable step, blocks the calling goroutine on a tick loop until every
+// step has reached a terminal status, then returns.
 //
-// Do will block the current goroutine.
+// Concurrency: only one Do (or Reset) may be in flight at a time per
+// Workflow instance — re-entrant calls return ErrWorkflowIsRunning.
+//
+// Return value:
+//   - nil  if every step finished Succeeded (and, if SkipAsError == false,
+//     Skipped also counts as success).
+//   - ErrWorkflow (a map of step → StepResult) otherwise. ErrCycleDependency
+//     is returned by preflight if the graph isn't a DAG.
 func (w *Workflow) Do(ctx context.Context) error {
-	// assert the Workflow is not running
+	// Single-runner guard.
 	if !w.isRunning.TryLock() {
 		return ErrWorkflowIsRunning
 	}
 	defer w.isRunning.Unlock()
-	// Clear inherited interceptors set by a parent during this run on every exit
-	// path, so the next time this workflow runs (under any parent, or standalone)
-	// it starts fresh and PrependInterceptors does not accumulate. Using defer
-	// ensures even early exits (Empty, preflight failure, panic) reset state.
+
+	// Clear inherited interceptors set by a parent during this run on EVERY
+	// exit path, so a subsequent run (under any parent, or standalone) starts
+	// fresh and PrependInterceptors does not accumulate. Defer ensures even
+	// early exits (Empty, preflight failure, panic) reset state.
 	defer func() {
 		w.inheritedStep = nil
 		w.inheritedAttempt = nil
 	}()
-	// if no steps to run
+
+	// Nothing to do.
 	if w.Empty() {
 		return nil
 	}
+
 	w.reset()
-	// preflight check
+
+	// Reject cycles before launching any work.
 	if err := w.preflight(); err != nil {
 		return err
 	}
-	// each time one Step terminated, tick forward
+
+	// Tick loop: each time a step terminates it Signal()s the cond, we wake
+	// up and tick() again. Inline-settled steps may unblock more steps within
+	// the same tick (no signal needed for those — see tick()).
 	w.statusChange.L.Lock()
 	for {
 		if done := w.tick(ctx); done {
@@ -372,9 +437,11 @@ func (w *Workflow) Do(ctx context.Context) error {
 		w.statusChange.Wait()
 	}
 	w.statusChange.L.Unlock()
-	// ensure all goroutines are exited
+
+	// Drain worker goroutines so we don't return while children are still alive.
 	w.waitGroup.Wait()
-	// return the error
+
+	// Build the per-step error map and decide the overall outcome.
 	err := make(ErrWorkflow)
 	for step, state := range w.steps {
 		err[step] = state.GetStepResult()
@@ -388,8 +455,14 @@ func (w *Workflow) Do(ctx context.Context) error {
 	return err
 }
 
-const scanned StepStatus = "scanned" // a private status for preflight
+// scanned is a private status used only by preflight() to mark steps it has
+// proven to be reachable in topological order. It is replaced by Pending
+// before Do() starts dispatching.
+const scanned StepStatus = "scanned"
 
+// stepExecution is the per-step worker context handed to the goroutine that
+// runs a single step. attempt is bumped after each completed attempt by the
+// retry loop.
 type stepExecution struct {
 	w       *Workflow
 	step    Steper
@@ -397,6 +470,8 @@ type stepExecution struct {
 	attempt uint64
 }
 
+// isAllUpstreamScanned reports whether every upstream of a step has been
+// proved reachable by preflight (has the private "scanned" status).
 func isAllUpstreamScanned(ups map[Steper]StepResult) bool {
 	for _, up := range ups {
 		if up.Status != scanned {
@@ -405,6 +480,10 @@ func isAllUpstreamScanned(ups map[Steper]StepResult) bool {
 	}
 	return true
 }
+
+// isAnyUpstreamNotTerminated reports whether at least one upstream is still
+// running / pending. The tick loop uses this to skip steps whose upstreams
+// haven't all settled yet.
 func isAnyUpstreamNotTerminated(ups map[Steper]StepResult) bool {
 	for _, up := range ups {
 		if !up.Status.IsTerminated() {
@@ -413,11 +492,18 @@ func isAnyUpstreamNotTerminated(ups map[Steper]StepResult) bool {
 	}
 	return false
 }
+
+// preflight verifies the dependency graph is a DAG. It iteratively marks
+// every step whose upstreams are all already marked, until no further
+// progress is possible. Anything left unmarked sits in a cycle and is
+// reported via ErrCycleDependency.
+//
+// On success, all step statuses are reset to Pending so the tick loop can
+// dispatch them.
 func (w *Workflow) preflight() error {
-	// assert all dependency would not form a cycle
-	// start scanning, mark Step as Scanned only when its all dependencies are Scanned
+	// Topo-scan: mark Steps whose upstreams are all marked, repeat until fixed point.
 	for {
-		hasNewScanned := false // whether a new Step being marked as Scanned this turn
+		hasNewScanned := false
 		for step, state := range w.steps {
 			if state.GetStatus() == scanned {
 				continue
@@ -427,12 +513,12 @@ func (w *Workflow) preflight() error {
 				state.SetStatus(scanned)
 			}
 		}
-		if !hasNewScanned { // break when no new Step being Scanned
+		if !hasNewScanned {
 			break
 		}
 	}
-	// check whether still have Steps not Scanned,
-	// not Scanned Steps are in a cycle.
+
+	// Anything still unscanned participates in a cycle.
 	stepsInCycle := make(ErrCycleDependency)
 	for step, state := range w.steps {
 		if state.GetStatus() == scanned {
@@ -447,29 +533,32 @@ func (w *Workflow) preflight() error {
 	if len(stepsInCycle) > 0 {
 		return stepsInCycle
 	}
-	// reset all Steps' status to Pending
+
+	// Reset everyone to Pending for the real run.
 	for _, step := range w.steps {
 		step.SetStepResult(StepResult{Status: Pending})
 	}
 	return nil
 }
 
-// tick will not block, it starts a goroutine for each runnable Step.
-// tick returns true if all steps in all phases are terminated.
+// tick is one round of the scheduler. It is non-blocking — it spawns
+// goroutines for every Pending step that is now eligible. Returns true iff
+// every step has reached a terminal status.
 //
-// The Step's Condition is evaluated here (in the tick goroutine, holding
-// statusChange.L) so that:
-//   - Steps whose Condition resolves to a terminal status (Skipped/Canceled)
-//     are settled inline without spawning a goroutine or consuming a
-//     concurrency lease.
-//   - Steps that will execute have their status set to Running before the
-//     worker goroutine is spawned, so a subsequent tick cannot double-spawn
-//     them.
+// Why Condition is evaluated HERE (under statusChange.L) rather than inside
+// the worker goroutine:
+//
+//   - Steps whose Condition resolves to a TERMINAL status (Skipped/Canceled)
+//     are settled INLINE — no goroutine, no concurrency lease, no
+//     interceptor chain. This keeps zero-cost branches truly cheap.
+//   - Steps that WILL execute have their status set to Running before the
+//     worker is spawned, so a subsequent tick cannot double-spawn them.
 //
 // Inline-settled steps may unblock downstream steps in the same tick. Because
-// no goroutine is spawned for them, no signalStatusChange is fired — so we
-// loop until a single pass produces no inline progress, otherwise the main
-// loop in Do() would Wait() forever for a signal that never comes.
+// no goroutine is spawned for them, no signalStatusChange will fire — so we
+// loop within tick() until a single pass produces no inline progress;
+// otherwise the main Do() loop would Wait() forever for a signal that never
+// comes.
 func (w *Workflow) tick(ctx context.Context) bool {
 	for {
 		if w.IsTerminated() {
@@ -521,28 +610,35 @@ func (w *Workflow) tick(ctx context.Context) bool {
 	}
 }
 
+// signalStatusChange wakes the tick loop. Called from a worker goroutine
+// after the worker has updated its step's status to terminal.
 func (w *Workflow) signalStatusChange() {
 	w.statusChange.L.Lock()
 	defer w.statusChange.L.Unlock()
 	w.statusChange.Signal()
 }
 
+// run executes one step from start to terminal status: it builds the
+// StepInterceptor chain (innermost call is executeWithRetry, which loops over
+// attempts), runs it, classifies the result into a StepStatus, records the
+// final StepResult, releases the concurrency lease, and signals the scheduler.
 func (ex *stepExecution) run(ctx context.Context) {
 	defer ex.w.waitGroup.Done()
 
-	// By the time we get here, tick() has already evaluated the Condition
-	// (terminal results are settled inline) and set the status to Running.
-	// Build the StepInterceptor chain; innermost next is executeWithRetry.
-	// When DontPanic is true, each interceptor invocation is wrapped in
+	// Build the StepInterceptor chain. tick() has already evaluated the
+	// Condition (terminal results were settled inline) and set the status to
+	// Running, so we can dive straight in.
+	//
+	// When DontPanic is true, EVERY interceptor invocation is wrapped in
 	// catchPanicAsError so a panicking user interceptor cannot crash the
 	// process or leave the lease unreleased / status unsignalled.
 	stepNext := func(ctx context.Context) error { return ex.executeWithRetry(ctx) }
 	stepICs := ex.w.effectiveStepInterceptors()
 	for i := len(stepICs) - 1; i >= 0; i-- {
-		// ic and nextLocal are declared inside the loop body with :=, so they
-		// are fresh variables on every iteration and the closure below captures
-		// each iteration's instance independently. The explicit naming is to
-		// make the per-iteration scoping obvious to readers.
+		// `ic` and `nextLocal` are declared inside the loop body with `:=`,
+		// so they are fresh on every iteration and the closure below captures
+		// each iteration's instance independently. The explicit naming makes
+		// the per-iteration scoping obvious.
 		ic := stepICs[i]
 		nextLocal := stepNext
 		stepNext = func(ctx context.Context) error {
@@ -556,6 +652,10 @@ func (ex *stepExecution) run(ctx context.Context) {
 	}
 
 	err := stepNext(ctx)
+
+	// Classify the error into a terminal StepStatus. Cancellation errors
+	// (context.Canceled / DeadlineExceeded / DefaultIsCanceled-recognised)
+	// are reported as Canceled rather than Failed.
 	status := StatusFromError(err)
 	if status == Failed {
 		switch {
@@ -571,19 +671,22 @@ func (ex *stepExecution) run(ctx context.Context) {
 		Err:        err,
 		FinishedAt: ex.w.Clock.Now(),
 	})
-	// Release the lease BEFORE signalling, so that when the main loop wakes up
-	// in tick() it can immediately acquire a new lease.
+
+	// Release the lease BEFORE signalling, so when the tick loop wakes up it
+	// can immediately acquire a fresh lease for the next runnable step.
 	ex.w.unlease()
 	ex.w.signalStatusChange()
 }
 
+// executeWithRetry runs a single step's full attempt sequence under the
+// configured retry policy and step-level Timeout. Before running, it
+// propagates the effective interceptor chain into nested workflows so
+// multi-level nesting (grandparent → parent → child) accumulates correctly
+// for THIS run, while the user-supplied bases stay untouched.
 func (ex *stepExecution) executeWithRetry(ctx context.Context) error {
 	option := ex.state.Option()
 
-	// Propagate the effective chain (inherited prefix + this workflow's own base)
-	// so multi-level nesting (grandparent → parent → child) accumulates correctly
-	// within one run, while the user-supplied base on each workflow stays untouched.
-	if recv, ok := ex.step.(InterceptorReceiver); ok {
+	if recv := findInterceptorReceiver(ex.step); recv != nil {
 		recv.PrependInterceptors(ex.w.effectiveStepInterceptors(), ex.w.effectiveAttemptInterceptors())
 	}
 
@@ -600,15 +703,18 @@ func (ex *stepExecution) executeWithRetry(ctx context.Context) error {
 	return ex.w.retry(option.RetryOption)(ctx, attemptChain, notAfter)
 }
 
+// buildAttemptChain wraps a single attempt (Before → Do → After) with the
+// per-attempt interceptors, returning a function suitable for the retry loop.
+// The chain is wrapped one final time in a function that always increments
+// ex.attempt after each completed attempt — even when an interceptor
+// short-circuits — so the attempt counter remains accurate.
 func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 	chain := func(ctx context.Context) error {
 		return ex.runAttempt(ctx)
 	}
 	attemptICs := ex.w.effectiveAttemptInterceptors()
 	for i := len(attemptICs) - 1; i >= 0; i-- {
-		// ic and nextLocal are declared inside the loop body with :=, so they
-		// are fresh variables on every iteration and the closure below captures
-		// each iteration's instance independently.
+		// Same per-iteration capture pattern as run(); see comment there.
 		ic := attemptICs[i]
 		nextLocal := chain
 		chain = func(ctx context.Context) error {
@@ -620,8 +726,6 @@ func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 			return ic.InterceptAttempt(ctx, ex.step, ex.attempt, nextLocal)
 		}
 	}
-	// Wrap the full attempt chain (including interceptors) so ex.attempt is always
-	// incremented after each attempt regardless of whether interceptors short-circuit.
 	inner := chain
 	return func(ctx context.Context) error {
 		defer func() { ex.attempt++ }()
@@ -629,6 +733,13 @@ func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 	}
 }
 
+// runAttempt executes one attempt: Before callbacks → Do → After callbacks.
+//
+// The `do` wrapper is either a direct invocation, or — when DontPanic is true
+// — catchPanicAsError, which converts a panic to an ErrPanic-tagged error.
+// The Before chain may swap the context that is threaded into Do (and the
+// After chain). After callbacks always run, even if Before or Do failed; they
+// receive the latest error and can transform it.
 func (ex *stepExecution) runAttempt(ctx context.Context) error {
 	do := func(fn func() error) error { return fn() }
 	if ex.w.DontPanic {
@@ -649,6 +760,10 @@ func (ex *stepExecution) runAttempt(ctx context.Context) error {
 	return do(func() error { return ex.state.After(ctxStep, ex.step, err) })
 }
 
+// lease takes one slot from the concurrency permit pool. Returns true if the
+// caller may now run, or false if the pool is full (the tick loop will retry
+// on the next signal). When MaxConcurrency is unset (leaseBucket == nil), the
+// answer is always true.
 func (w *Workflow) lease() bool {
 	if w.leaseBucket == nil {
 		return true
@@ -660,13 +775,18 @@ func (w *Workflow) lease() bool {
 		return false
 	}
 }
+
+// unlease returns one slot to the concurrency permit pool, or is a no-op if
+// MaxConcurrency is unset.
 func (w *Workflow) unlease() {
 	if w.leaseBucket != nil {
 		<-w.leaseBucket
 	}
 }
 
-// catchPanicAsError catches panic from f and return it as error.
+// catchPanicAsError invokes f, recovers any panic, and returns it as an
+// ErrPanic carrying a filtered stack trace (only frames inside this module
+// are kept, to keep the trace readable).
 func catchPanicAsError(f func() error) error {
 	var returnErr error
 	func(err *error) {
@@ -689,28 +809,18 @@ func catchPanicAsError(f func() error) error {
 	return returnErr
 }
 
-// SubWorkflow is a helper struct to let you create a step with a sub-workflow.
-// Embed this struct to your struct definition.
-//
-// Usage:
+// SubWorkflow makes any user struct behave as a Step that contains a
+// Workflow. Embed it in your own struct to get Add/Do/Reset and the
+// InterceptorReceiver delegation for free:
 //
 //	type MyStep struct {
-//		flow.SubWorkflow
+//	    flow.SubWorkflow
 //	}
 //
 //	func (s *MyStep) BuildStep() {
-//		s.Reset() // reset the workflow
-//		s.Add(
-//			flow.Step(/* stepX */),
-//		)
-//	}
-//
-//	func main() {
-//		w := &flow.Workflow{}
-//		myStep := &MyStep{}
-//		w.Add(flow.Step(myStep)) // BuildStep() will be called when adding the step
-//		...
-//		stepX := flow.As[*StepX](w) // we can get the inner stepX from the workflow
+//	    s.Add(
+//	        flow.Step(/* stepX */),
+//	    )
 //	}
 type SubWorkflow struct{ w Workflow }
 
@@ -718,11 +828,13 @@ func (s *SubWorkflow) Unwrap() Steper                    { return &s.w }
 func (s *SubWorkflow) Add(builders ...Builder) *Workflow { return s.w.Add(builders...) }
 func (s *SubWorkflow) Do(ctx context.Context) error      { return s.w.Do(ctx) }
 
-// Reset resets the sub-workflow to ready for BuildStep()
+// Reset clears the inner workflow so a subsequent BuildStep() can rebuild
+// from scratch.
 func (s *SubWorkflow) Reset() { s.w = Workflow{} }
 
-// PrependInterceptors implements InterceptorReceiver by delegating to the
-// embedded Workflow.
+// PrependInterceptors satisfies InterceptorReceiver by delegating to the
+// embedded Workflow — so a parent workflow's interceptors flow into the
+// SubWorkflow's inner Workflow exactly as if it were used directly.
 func (s *SubWorkflow) PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor) {
 	s.w.PrependInterceptors(step, attempt)
 }

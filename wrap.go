@@ -6,89 +6,79 @@ import (
 	"strings"
 )
 
-// # What is a Composite Step?
+// # Composite Steps
 //
-// Consider this case, Alice writes a Step implementation,
+// A "composite step" is a Step that is implemented by combining (embedding,
+// wrapping or aggregating) one or more other Steps. The Workflow only
+// schedules its top-level (root) steps; the inner Steps remain the composite
+// step's own concern. To let the Workflow see through the composition (so
+// utilities like Has[T], As[T], HasStep, dependency wiring and BuildStep can
+// reach the inner steps), the composite exposes them via Unwrap().
+//
+// ## Example: aggregating two steps
 //
 //	type DoSomeThing struct{}
-//	func (d *DoSomeThing) Do(context.Context) error { /* do fancy things */ }
-//
-// After that, Bob finds the above implementation is useful, but still not enough.
-// So Bob combines the above Steps into a new Step,
+//	func (d *DoSomeThing) Do(context.Context) error { /* ... */ }
 //
 //	type DoManyThings struct {
-//		DoSomeThing
-//		DoOtherThing
+//	    DoSomeThing
+//	    DoOtherThing
 //	}
-//	func (d *DoManyThings) Do(context.Context) error { /* do fancy things then other thing */ }
+//	func (d *DoManyThings) Do(context.Context) error { /* fan out ... */ }
 //
-// Let's call the above DoManyThings a Composite Step, the below Decorator is another example.
+// ## Example: wrapping (decorator)
 //
-//	type Decorator struct { Steper }
+//	type Decorator struct{ Steper }
 //	func (d *Decorator) Do(ctx context.Context) error {
-//		/* do something before */
-//		err := d.Steper.Do(ctx)
-//		/* do something after */
-//		return err
+//	    /* before */
+//	    err := d.Steper.Do(ctx)
+//	    /* after */
+//	    return err
 //	}
 //
-// Since Workflow only requires a Step to satisfy the below interface:
+// Workflow itself implements Steper, so any Workflow can be embedded as a
+// step inside another Workflow (see SubWorkflow in workflow.go).
 //
-//	type Steper interface {
-//		Do(context.Context) error
-//	}
+// ## Reaching into composites
 //
-// It's easy, intuitive, flexible and yet powerful to use Composite Steps.
+// If you no longer hold a direct reference to an inner step but still need
+// to inspect or modify it (e.g. to mock it for tests, or attach an
+// Input/Output), expose it with one of the two Unwrap shapes recognised by
+// Traverse():
 //
-// Actually, Workflow itself also implements Steper interface,
-// meaning you can use Workflow as a Step in another Workflow!
-
-// # How to audit / retrieve / update all steps from the Workflow?
-//
-//	workflow := func() *Workflow {
-//		...
-//		workflow.Add(Step(doSomeThing))
-//		return workflow
-//	}
-//
-//	from now on, we don't have reference to the internal steps in Workflow directly, like doSomeThing
-//	however, it's totally possible have necessary to update doSomeThing,
-//	like modify its input, configuration, or even its behavior (by decorator).
-//
-// # Introduce Unwrap()
-//
-// Kindly remind that, this nesting problem is not a new issue in Go.
-// In Go, we have a very common error pattern:
-//
-//	type MyError struct { Err error }
-//	func (e *MyError) Error() string { return fmt.Sprintf("MyError(%v)", e.Err) }
-//
-// The solution is using Unwrap() method:
-//
-//	func (e *MyError) Unwrap() error { return e.Err }
-//
-// Then standard package errors provides Is() and As() functions to help us deal with warped errors.
-// We also provides a similar Has() and As() functions for Steper.
-//
-// Users only need to implement the below methods for your Step implementations:
-//
-//	type WrapStep struct { Steper }
+//	type WrapStep struct{ Steper }
 //	func (w *WrapStep) Unwrap() Steper { return w.Steper }
-//	// or
-//	type WrapSteps struct { Steps []Steper }
+//
+//	type WrapSteps struct{ Steps []Steper }
 //	func (w *WrapSteps) Unwrap() []Steper { return w.Steps }
 //
-// to expose your inner Steps.
+// Then Has[T], As[T], HasStep and Traverse will all walk through the
+// composite to find what you're after — mirroring the standard library's
+// errors.Is / errors.As pattern for wrapped errors.
 
+// TraverseDecision is the value a Traverse visitor returns to direct the walk.
 type TraverseDecision int
 
 const (
-	TraverseContinue  = iota // TraverseContinue continue the traversal
-	TraverseStop             // TraverseStop stop and exit the traversal immediately
-	TraverseEndBranch        // TraverseEndBranch end the current branch, but continue sibling branches
+	TraverseContinue  = iota // keep walking into this node's children.
+	TraverseStop             // stop the entire traversal immediately.
+	TraverseEndBranch        // skip this node's children, continue with siblings.
 )
 
-// Traverse performs a pre-order traversal of the tree of step.
+// Traverse performs a pre-order depth-first walk of the Step tree rooted at s.
+//
+// For each node visited, the callback receives:
+//   - the Step itself,
+//   - the path of Steps walked to reach it (excluding the current node).
+//
+// The callback's TraverseDecision controls whether to descend, prune, or
+// stop. A nil callback is treated as TraverseStop.
+//
+// The walk understands two Unwrap shapes:
+//   - `Unwrap() Steper`     — single child, descend into it.
+//   - `Unwrap() []Steper`   — multiple children, descend into each in order.
+//
+// Anything else is a leaf.
 func Traverse(s Steper, f func(Steper, []Steper) TraverseDecision, walked ...Steper) TraverseDecision {
 	if f == nil {
 		return TraverseStop
@@ -117,7 +107,8 @@ func Traverse(s Steper, f func(Steper, []Steper) TraverseDecision, walked ...Ste
 	}
 }
 
-// Has reports whether there is any step inside matches target type.
+// Has reports whether the Step tree rooted at s contains any node assignable
+// to T. Mirrors errors.As's "is there a wrapped error of this type?".
 func Has[T Steper](s Steper) bool {
 	find := false
 	Traverse(s, func(s Steper, walked []Steper) TraverseDecision {
@@ -130,8 +121,8 @@ func Has[T Steper](s Steper) bool {
 	return find
 }
 
-// As finds all steps in the tree of step that matches target type, and returns them.
-// The sequence of the returned steps is pre-order traversal.
+// As collects every node in the Step tree assignable to T, in pre-order.
+// Returns nil (zero-length) if there are no matches.
 func As[T Steper](s Steper) []T {
 	var rv []T
 	Traverse(s, func(s Steper, walked []Steper) TraverseDecision {
@@ -143,7 +134,8 @@ func As[T Steper](s Steper) []T {
 	return rv
 }
 
-// HasStep reports whether there is any step matches target step.
+// HasStep reports whether the Step tree rooted at step contains the exact
+// instance target (pointer-equality). Returns false if target is nil.
 func HasStep(step, target Steper) bool {
 	if target == nil {
 		return false
@@ -159,7 +151,16 @@ func HasStep(step, target Steper) bool {
 	return find
 }
 
-// String unwraps step and returns a proper string representation.
+// String renders a Step (and any composite contents) as a debug-friendly
+// multi-line string. The format prefers, in order:
+//
+//   - the Step's own String() method, if any;
+//   - "<Type>(<addr>) { ... }" for single-child wrappers;
+//   - "<Type>(<addr>) { each child on its own line }" for multi-child wrappers;
+//   - "<Type>(<addr>)" for leaves.
+//
+// This is also what LogValue uses, so it's the canonical text form of a Step
+// across logs, errors and panics.
 func String(step Steper) string {
 	if step == nil {
 		return "<nil>"
@@ -180,15 +181,19 @@ func String(step Steper) string {
 	}
 }
 
-// LogValue is used with log/slog, you can use it like:
+// LogValue produces a slog-friendly handle for a Step that defers the
+// (potentially expensive) String() call until the slog backend actually
+// renders the field:
 //
 //	logger.With("step", LogValue(step))
 //
-// To prevent expensive String() calls,
+// If you don't care about laziness, the equivalent eager form is:
 //
 //	logger.With("step", String(step))
 func LogValue(step Steper) logValue { return logValue{Steper: step} }
 
+// logValue carries a Step around with custom String / LogValue / MarshalJSON
+// implementations so it serializes via String() for any sink.
 type logValue struct{ Steper }
 
 func (lv logValue) String() string       { return String(lv.Steper) }
