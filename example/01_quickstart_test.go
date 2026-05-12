@@ -14,13 +14,17 @@ import (
 // # Quickstart: a 3-minute tour of go-workflow
 //
 // **What you'll learn**
-//   - A Workflow is a DAG of Steps; Steps with no path between them run in parallel.
-//   - Pass data between Steps via typed Input / Output.
-//   - One call to Workflow.Do executes the whole graph.
+//   - Any struct of yours becomes a Step by adding one method:
+//     `Do(context.Context) error`. No interface to embed, no generics, no
+//     decorators. Your domain types ARE the workflow.
+//   - A Workflow is a DAG of Steps; Steps with no path between them run
+//     in parallel.
+//   - Data flows naturally through your structs' fields — downstreams hold
+//     pointers to upstreams.
 //
 // **The scenario**
 //
-// Build a user profile that is the union of two pieces of data fetched from
+// Build a user profile that combines two pieces of data fetched from
 // independent endpoints:
 //
 //	    ┌── FetchUser ──┐
@@ -29,12 +33,11 @@ import (
 //	    │               │
 //	    └── FetchPosts ─┘
 //
-// FetchUser and FetchPosts have no dependency on each other so the Workflow
-// runs them concurrently. BuildProfile waits until both are done, then
-// reads their Output via the typed Input callback.
+// `FetchUser` and `FetchPosts` have no dependency on each other so the
+// Workflow runs them concurrently. `BuildProfile` waits until both are done,
+// then reads their results from the pointers it holds.
 //
-// Open the next file (02_steps_and_deps_test.go) to dig into how dependencies
-// are declared.
+// Read on for 02_steps_and_deps_test.go to see more wiring shapes.
 func ExampleWorkflow_quickstart() {
 	// httptest stand-ins for two real services. In a real program these
 	// would be remote HTTP calls; the rest of the file works the same way.
@@ -48,35 +51,17 @@ func ExampleWorkflow_quickstart() {
 	}))
 	defer server.Close()
 
-	var (
-		// Two independent fetchers. FuncO declares "no input, typed output".
-		fetchUser = flow.FuncO("FetchUser", func(ctx context.Context) (string, error) {
-			return getJSON[map[string]string](ctx, server.URL+"/user")["name"], nil
-		})
-		fetchPosts = flow.FuncO("FetchPosts", func(ctx context.Context) ([]string, error) {
-			return getJSON[[]string](ctx, server.URL+"/posts"), nil
-		})
+	// Construct the steps. Each one is just a value of our own struct type.
+	// Configuration goes in via the constructor; results come out via fields.
+	user := &FetchUser{BaseURL: server.URL}
+	posts := &FetchPosts{BaseURL: server.URL}
+	profile := &BuildProfile{User: user, Posts: posts}
 
-		// Downstream step. profileInput is the typed input we'll fill from
-		// the two upstreams' outputs.
-		buildProfile = flow.FuncI("BuildProfile", func(ctx context.Context, in profileInput) error {
-			sort.Strings(in.Posts) // map iteration is unordered; stable output for the godoc check.
-			fmt.Printf("%s has %d posts: %v\n", in.Name, len(in.Posts), in.Posts)
-			return nil
-		})
-	)
-
+	// Wire the graph. profile depends on user AND posts; the workflow runs
+	// the two upstreams in parallel and only then runs profile.
 	w := new(flow.Workflow)
 	w.Add(
-		// Wire the dependency and supply the Input callback in one shot.
-		// Input runs at runtime, after all upstreams have terminated, so
-		// fetchUser.Output and fetchPosts.Output are ready to read.
-		flow.Step(buildProfile).
-			DependsOn(fetchUser, fetchPosts).
-			Input(func(ctx context.Context, f *flow.Function[profileInput, struct{}]) error {
-				f.Input = profileInput{Name: fetchUser.Output, Posts: fetchPosts.Output}
-				return nil
-			}),
+		flow.Step(profile).DependsOn(user, posts),
 	)
 
 	if err := w.Do(context.Background()); err != nil {
@@ -86,23 +71,63 @@ func ExampleWorkflow_quickstart() {
 	// Alice has 2 posts: [hello world]
 }
 
-// profileInput is the typed Input for buildProfile. Lifting it to a named
-// type keeps the Step / Input / Function generics readable.
-type profileInput struct {
-	Name  string
-	Posts []string
+// FetchUser is a Step. The struct holds its configuration (BaseURL) and
+// publishes its result (Name) — both as plain exported fields. There is
+// nothing magic about it: any type with a Do(context.Context) error
+// method satisfies flow.Steper.
+type FetchUser struct {
+	BaseURL string // input: configured at construction time
+	Name    string // output: filled in by Do
+}
+
+func (f *FetchUser) Do(ctx context.Context) error {
+	var body map[string]string
+	if err := getJSON(ctx, f.BaseURL+"/user", &body); err != nil {
+		return err
+	}
+	f.Name = body["name"]
+	return nil
+}
+
+// FetchPosts is another Step. Same shape — a struct with config-in,
+// result-out, and a Do method.
+type FetchPosts struct {
+	BaseURL string
+	Posts   []string
+}
+
+func (f *FetchPosts) Do(ctx context.Context) error {
+	return getJSON(ctx, f.BaseURL+"/posts", &f.Posts)
+}
+
+// BuildProfile is the downstream Step. It holds pointers to its upstreams
+// directly, so when its Do runs (after both upstreams have terminated) it
+// just reads .Name and .Posts. No callbacks, no generics — that's the
+// recommended way to flow data between steps when the dependency is known
+// at construction time.
+type BuildProfile struct {
+	User  *FetchUser
+	Posts *FetchPosts
+}
+
+func (b *BuildProfile) Do(ctx context.Context) error {
+	posts := append([]string(nil), b.Posts.Posts...)
+	sort.Strings(posts) // map iteration is unordered upstream; pin the output for the godoc check.
+	fmt.Printf("%s has %d posts: %v\n", b.User.Name, len(posts), posts)
+	return nil
 }
 
 // getJSON is a small test helper. Real code would handle errors properly;
 // this is a quickstart, not an HTTP tutorial.
-func getJSON[T any](ctx context.Context, url string) T {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func getJSON(ctx context.Context, url string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer resp.Body.Close()
-	var out T
-	_ = json.NewDecoder(resp.Body).Decode(&out)
-	return out
+	return json.NewDecoder(resp.Body).Decode(out)
 }

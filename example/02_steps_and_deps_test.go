@@ -10,9 +10,20 @@ import (
 // # Steps & Dependencies: how to wire a Workflow
 //
 // **What you'll learn**
-//   - Define a Step inline with `flow.Func` — no need to declare a type.
-//   - Three ways to express a dependency graph: `DependsOn`, `Pipe`, and `BatchPipe`.
+//   - Three ways to express a dependency graph: `DependsOn`, `Pipe`, and
+//     `BatchPipe`.
 //   - Give a Step a friendly display name with `flow.Name`.
+//
+// **A note on Step types**
+//
+// In 01_quickstart we built one struct per Step — that is the recommended
+// way to write production Steps. In this file we declare a tiny `stage`
+// struct once and reuse instances of it: the focus here is on the WIRING,
+// not on the Step bodies. Anything with a `Do(context.Context) error`
+// method is a valid Step, including a struct as small as this:
+//
+//	type stage struct{ name string }
+//	func (s *stage) Do(ctx context.Context) error { ... }
 //
 // **Mental model**
 //
@@ -31,14 +42,15 @@ import (
 // build and lint both need clone; test needs both build and lint;
 // publish needs test.
 
-// stage is a tiny helper for these examples: a Step that just records its
-// own name when it runs, so the example output proves the order. Real
-// Steps would do real work.
-func stage(name string) *flow.Function[struct{}, struct{}] {
-	return flow.Func(name, func(context.Context) error {
-		fmt.Println(name)
-		return nil
-	})
+// stage is a tiny shared Step type for the wiring examples in this file.
+// Real Steps would carry richer state and do real work; see 01_quickstart
+// for the recommended one-struct-per-Step style.
+type stage struct{ name string }
+
+func (s *stage) String() string { return s.name }
+func (s *stage) Do(ctx context.Context) error {
+	fmt.Println(s.name)
+	return nil
 }
 
 // ExampleWorkflow_dependsOn shows the most explicit style: every edge is
@@ -46,11 +58,11 @@ func stage(name string) *flow.Function[struct{}, struct{}] {
 // shape of graph.
 func ExampleWorkflow_dependsOn() {
 	var (
-		clone   = stage("clone")
-		build   = stage("build")
-		lint    = stage("lint")
-		test    = stage("test")
-		publish = stage("publish")
+		clone   = &stage{"clone"}
+		build   = &stage{"build"}
+		lint    = &stage{"lint"}
+		test    = &stage{"test"}
+		publish = &stage{"publish"}
 	)
 
 	w := new(flow.Workflow)
@@ -74,10 +86,10 @@ func ExampleWorkflow_dependsOn() {
 // graph is a straight line; it reads top-to-bottom like a script.
 func ExampleWorkflow_pipe() {
 	var (
-		clone   = stage("clone")
-		build   = stage("build")
-		test    = stage("test")
-		publish = stage("publish")
+		clone   = &stage{"clone"}
+		build   = &stage{"build"}
+		test    = &stage{"test"}
+		publish = &stage{"publish"}
 	)
 
 	w := new(flow.Workflow)
@@ -102,11 +114,11 @@ func ExampleWorkflow_pipe() {
 // type out.
 func ExampleWorkflow_batchPipe() {
 	var (
-		clone   = stage("clone")
-		build   = stage("build")
-		lint    = stage("lint")
-		test    = stage("test")
-		publish = stage("publish")
+		clone   = &stage{"clone"}
+		build   = &stage{"build"}
+		lint    = &stage{"lint"}
+		test    = &stage{"test"}
+		publish = &stage{"publish"}
 	)
 
 	w := new(flow.Workflow)
@@ -136,8 +148,7 @@ func ExampleWorkflow_batchPipe() {
 // Useful when:
 //   - your Step is an anonymous struct or third-party type with no good name;
 //   - you want to disambiguate two instances of the same struct type;
-//   - your scenario is auto-generated and you want to inject runtime context
-//     into the name (use NameFunc / NameStringer for dynamic names).
+//   - your name depends on runtime data (use NameFunc / NameStringer).
 func ExampleName() {
 	// A bare struct without a String() method prints like *flow_test.compile.
 	type compile struct{ flow.NoOpStep }

@@ -14,14 +14,14 @@ stay in sync with the library.
 
 | File                            | What you'll learn |
 |---------------------------------|---|
-| [01_quickstart](01_quickstart_test.go)             | A 3-minute end-to-end tour: parallel fetch + merge into a profile. |
-| [02_steps_and_deps](02_steps_and_deps_test.go)     | `Step` / `Steps` / `DependsOn` / `Pipe` / `BatchPipe` / `Func` / `Name`. |
+| [01_quickstart](01_quickstart_test.go)             | Any struct with a `Do` method is a Step. End-to-end 3-minute tour: parallel fetch + merge into a profile, with data flowing through struct pointers. |
+| [02_steps_and_deps](02_steps_and_deps_test.go)     | `Step` / `Steps` / `DependsOn` / `Pipe` / `BatchPipe` / `Name`. |
 
 ### Move data through the graph
 
 | File                            | What you'll learn |
 |---------------------------------|---|
-| [03_data_flow](03_data_flow_test.go)               | Typed `Input` / `Output` between Steps. `Func` / `FuncIO` / `FuncI` / `FuncO`. |
+| [03_data_flow](03_data_flow_test.go)               | Two ways to flow data: through struct fields (preferred) or via `Input` / `Output` callbacks. |
 | [04_callbacks](04_callbacks_test.go)               | `BeforeStep` / `AfterStep` and how they relate to `Input`. |
 
 ### Decide what runs (and what doesn't)
@@ -49,8 +49,13 @@ stay in sync with the library.
 
 ## Conventions used in these examples
 
-- **`flow.Func` / `FuncIO` / `FuncI` / `FuncO`** for inline Steps. Real code
-  often defines its own `Steper` types; these helpers keep examples short.
+- **Production Steps are your own structs.** Anything with a
+  `Do(context.Context) error` method satisfies `flow.Steper`. The first
+  four files (01–04) all use plain structs to make this concrete.
+- **`flow.Func` / `FuncIO` / `FuncI` / `FuncO`** show up from 05 onward
+  for inline scaffolding when the focus of an example is something other
+  than the Step body itself (a wiring shape, a Condition, a retry policy,
+  etc.). They are convenience helpers — not the primary way to define a Step.
 - **Sorted output** when a Step inspects map iteration (which is unordered)
   so the `// Output:` block stays stable.
 - **`zeroTimer` / `clock.Mock`** in `07_retry_and_timeout` so retry / timeout
