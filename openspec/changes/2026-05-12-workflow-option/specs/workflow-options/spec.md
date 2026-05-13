@@ -257,6 +257,10 @@ The snapshot is a shallow copy. This is correct because:
 The internal `reset()` SHALL NOT clear `w.Option` (that is the snapshot
 restore's job, and reset runs at the top of `Do()` before scheduling).
 
+The public `Workflow.Reset()` SHALL NOT clear `w.Option` either, because
+the snapshot/restore mechanism in `Do()` already prevents accumulation;
+`Reset()` exists solely to reset per-step status (see the `Reset` requirement).
+
 #### Scenario: Repeated Do() runs do not accumulate inherited contributions
 - **GIVEN** a parent with `Option.Mutators = [A]` and a child with `Option.Mutators = [B]`
 - **WHEN** `parent.Do()` is invoked N times
@@ -266,6 +270,44 @@ restore's job, and reset runs at the top of `Do()` before scheduling).
 #### Scenario: Snapshot/restore covers all exit paths
 - **WHEN** `Do()` returns successfully, returns an error, or panics (when not recovered)
 - **THEN** `w.Option` is restored to its pre-`Do()` state via `defer`
+
+---
+
+### Requirement: Reset rewinds per-step status without touching the step set
+
+`Workflow.Reset()` SHALL set every Step's status from any terminal state
+(`Succeeded`, `Failed`, `Skipped`, `Canceled`) back to `Pending`, allowing
+`Do()` to be invoked again on the same Workflow. `Reset()` SHALL reject
+with `ErrWorkflowIsRunning` if a `Do()` call is currently in flight.
+
+`Reset()` SHALL NOT modify `w.steps` (the set of Steps registered via
+`Add`). This is a contract: a Workflow built once via `Add` can be
+`Do()`-ed any number of times via `Reset/Do` cycles, with the same DAG
+each time. To start from an empty set of Steps, allocate a new `Workflow`.
+
+`Reset()` SHALL NOT modify `w.Option`. Cross-run accumulation of
+parent-inherited contributions is prevented by the snapshot/restore in
+`Do()` (see the preceding requirement), not by `Reset()`. Calling `Reset()`
+between runs is therefore optional from an Option-isolation standpoint;
+its purpose is purely to rewind per-step status for re-execution.
+
+#### Scenario: Reset rewinds status but preserves the DAG
+- **GIVEN** a Workflow with steps `[a, b, c]` that has been `Do()`-ed once
+- **WHEN** `w.Reset()` is called and then `w.Do()` is called again
+- **THEN** all three steps execute a second time
+- **AND** `w.steps` still contains `[a, b, c]`
+
+#### Scenario: Reset rejected while a Do is in flight
+- **WHEN** `Reset()` is called while `Do()` is executing on the same Workflow
+- **THEN** `Reset()` returns `ErrWorkflowIsRunning` without modifying state
+
+#### Scenario: Reset is not required to prevent Option accumulation
+- **GIVEN** a parent with `Option.Mutators = [A]` and a child with `Option.Mutators = [B]`
+- **WHEN** `parent.Do()` is invoked N times in succession WITHOUT calling
+  `parent.Reset()` between runs (the parent has no terminal-status steps
+  to reset because each Do() resets internally via the unexported `reset()`)
+- **THEN** each invocation results in the child's effective `Mutators`
+  being `[A, B]` during the run, with no accumulation
 
 ---
 

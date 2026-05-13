@@ -87,6 +87,74 @@ opaque to the outer workflow.
 - **THEN** parent `flow.As[T](outer)` does not find inner steps and parent Option
   does not propagate to them
 
+#### Scenario: Composite step embedding flow.Workflow can be Do()-ed multiple times
+- **GIVEN** `type X struct { flow.Workflow }` whose constructor calls `x.Add(...)` once at construction time
+- **WHEN** the parent runs N times (with `parent.Reset()` between runs)
+- **THEN** each run executes the inner DAG once with no accumulation, because
+  `Workflow.Add` is idempotent on the step pointer key (the same step pointer
+  added twice merges its `StepConfig` into the existing entry rather than
+  creating a duplicate scheduling unit)
+
+#### Scenario: Composite step MUST NOT call Add inside Do unguarded
+- **GIVEN** `type X struct { flow.Workflow }` whose `Do(ctx)` calls `x.Add(...)`
+  unconditionally on every invocation (no `sync.Once`, no fresh-Workflow
+  inline construction)
+- **WHEN** the parent invokes `x.Do()` more than once on the same `X` instance
+  (across separate parent runs OR via the retry loop within a single parent run)
+- **THEN** the behavior is **undefined**. The framework MAY exhibit any of:
+  - per-step `BeforeStep`/`AfterStep` callbacks accumulated across runs
+    (each callback firing N times on the N-th invocation), because
+    `StepConfig.Merge` appends callback chains and does not deduplicate
+  - duplicate Step entries of the same logical type in `x.steps` if
+    `Add` is called with newly-allocated step pointers each `Do()`
+  - parent introspection (`flow.As`, `Has`) returning multiple matches when
+    only one was expected
+  - Mutator dispatch firing against stale step instances retained from
+    previous invocations
+- **REASON** `Workflow.steps` and `StepConfig` are designed for build-once /
+  execute-many. The pointer-key idempotence of `Add` prevents duplicate
+  scheduling on identical pointers but does not deduplicate appended
+  `Before`/`After` callback chains. The framework SHALL NOT add a runtime
+  guard for this misuse: the parent's `isRunning` lock is held at the
+  outer scope, not inside `x`'s scope, and `x.isRunning` is acquired and
+  released across each retry attempt — neither offers a stable signal for
+  distinguishing legitimate `sync.Once`-guarded lazy initialisation from
+  unguarded re-`Add` per invocation.
+- **REQUIRED PATTERNS** instead — choose exactly one:
+  1. **Build at construction time** — the constructor (e.g., `NewX(...)`)
+     calls `x.Add(...)` before returning. Recommended when the inner DAG
+     is known at construction.
+  2. **Construct inline inside Do() with a fresh *flow.Workflow** — do NOT
+     embed `flow.Workflow` in `X`; instead, allocate `w := &flow.Workflow{}`
+     inside `x.Do`, populate via `w.Add(...)`, and call `w.Do(ctx)`. The
+     containing step MUST implement `WorkflowOptionReceiver` to forward
+     parent Option (see the next scenario). Recommended when the inner
+     DAG depends on runtime state in `ctx`.
+  3. **Lazy build guarded by sync.Once** — embed `flow.Workflow` and call
+     `x.Add(...)` from inside `x.once.Do(...)` so the build happens
+     exactly once across all invocations. Acceptable when the user
+     explicitly wants a single-construction, multi-execution lifecycle
+     on the same `X`.
+
+#### Scenario: Local sub-workflow inside Do is opaque to parent
+- **WHEN** a step constructs a `flow.Workflow{}` inside `Do` without embedding it
+  in the step's struct and without exposing it via `Unwrap`
+- **THEN** parent `flow.As[T](outer)` does not find inner steps and parent Option
+  does not propagate to them
+
+#### Scenario: Inline sub-workflow inherits parent Option only via explicit InheritOption
+- **GIVEN** `type Y struct { inheritedOpt flow.WorkflowOption }` with
+  `func (y *Y) InheritOption(p flow.WorkflowOption) { y.inheritedOpt = p }`
+  and a `Do(ctx)` that constructs `w := &flow.Workflow{Option: y.inheritedOpt}`
+  then calls `w.Add(...)` and `w.Do(ctx)`
+- **WHEN** the parent runs and propagates Option via `findOptionReceiver`
+- **THEN** `findOptionReceiver` discovers `Y` (because `Y` directly implements
+  `WorkflowOptionReceiver`); `y.InheritOption` records the parent's Option;
+  the inline `*flow.Workflow` constructed inside `y.Do` then inherits it
+- **WITHOUT** the explicit `InheritOption` method on `Y`, the parent's Option
+  does NOT reach the inline sub-workflow (the inline workflow is opaque to
+  the parent per the preceding scenario)
+
 ---
 
 ## ADDED Requirements

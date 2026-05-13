@@ -85,6 +85,16 @@
 - [ ] 9.2 Add `WorkflowOption` and `WorkflowOptionReceiver` godoc with merge rules and snapshot/restore note
 - [ ] 9.3 Update README sub-workflow section if any to recommend embedding `flow.Workflow` directly; note `SubWorkflow` deprecation
 - [ ] 9.4 Add CHANGELOG entry summarizing the breaking change, migration steps, and the scalar-inheritance behavior change
+- [ ] 9.5 Rewrite `(*Workflow).Reset()` godoc: drop the obsolete `inheritedStep` / `inheritedAttempt` paragraph; state the new contract — Reset rewinds per-step status only, never modifies `w.steps` or `w.Option`; note that calling Reset between Do() runs is optional from an Option-isolation standpoint (the snapshot/restore in Do() already prevents accumulation)
+- [ ] 9.6 In the godoc for `flow.Workflow` (or a dedicated example), call out the two sub-workflow patterns and their tradeoffs:
+   - Embed `flow.Workflow` and call `Add` at construction time (recommended; supports introspection and parent Option inheritance)
+   - Construct `&flow.Workflow{}` inline inside `Do()` (opaque to parent unless the host step also implements `WorkflowOptionReceiver` to forward parent Option)
+   - Lazy build guarded by `sync.Once` (acceptable for single-construction, multi-execution lifecycle on the same composite step)
+- [ ] 9.7 Add a strong warning to `(*Workflow).Add` godoc: calling `Add` from inside the same Workflow's `Do()` (or any method transitively reachable from `Do()`) is **forbidden** unless guarded by `sync.Once`. State the failure modes (callback accumulation, duplicate steps, multi-match introspection, stale Mutator dispatch) explicitly. Reference the `composite-steps` "Composite step MUST NOT call Add inside Do unguarded" scenario.
+
+## 11. Future Work (Out of Scope)
+
+- [ ] 11.1 (future) Static analysis check (`go vet` analyzer or standalone linter) that flags `flow.Workflow.Add` called transitively from a `Do()` method without a `sync.Once` guard. The framework SHALL NOT add a runtime panic for this misuse — neither the parent's `isRunning` lock nor `x.isRunning` (acquired/released across retry attempts) offers a stable signal for distinguishing legitimate `sync.Once`-guarded lazy init from unguarded re-`Add`. A separate lint tool is the right layer.
 
 ## 10. Verify
 
