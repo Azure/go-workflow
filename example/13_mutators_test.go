@@ -16,7 +16,7 @@ import (
 //     `flow.Builder` to register `Input` / `BeforeStep` / `AfterStep` /
 //     `Retry` / `Timeout` / ..., or both.
 //   - Parent-Workflow Mutators reach into sub-Workflows automatically — the
-//     same MutatorReceiver mechanism described in 10_observability for
+//     same WorkflowOptionReceiver mechanism described in 10_observability for
 //     interceptors.
 //
 // **Where they fit**
@@ -68,14 +68,16 @@ func (n *Notify) Do(ctx context.Context) error {
 // changes are applied before any Input / BeforeStep / Do runs.
 func ExampleMutator_fieldDefaults() {
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			// Anywhere a *Notify shows up, default Channel if it's empty.
-			flow.Mutate[*Notify](func(_ context.Context, n *Notify) flow.Builder {
-				if n.Channel == "" {
-					n.Channel = "#release"
-				}
-				return nil // pure field mutation; no Builder needed
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				// Anywhere a *Notify shows up, default Channel if it's empty.
+				flow.Mutate[*Notify](func(_ context.Context, n *Notify) flow.Builder {
+					if n.Channel == "" {
+						n.Channel = "#release"
+					}
+					return nil // pure field mutation; no Builder needed
+				}),
+			},
 		},
 	}
 	w.Add(
@@ -103,18 +105,20 @@ func ExampleMutator_fieldDefaults() {
 // AfterStep, etc.
 func ExampleMutator_contributeConfig() {
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*Notify](func(_ context.Context, n *Notify) flow.Builder {
-				if n.Channel == "" {
-					n.Channel = "#release"
-				}
-				// Same builder methods you use at Add() time — BeforeStep,
-				// AfterStep, Input, Retry, Timeout, ... — all work here.
-				return flow.Step(n).BeforeStep(func(ctx context.Context, s flow.Steper) (context.Context, error) {
-					s.(*Notify).Title = "[prod] " + s.(*Notify).Title
-					return ctx, nil
-				})
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*Notify](func(_ context.Context, n *Notify) flow.Builder {
+					if n.Channel == "" {
+						n.Channel = "#release"
+					}
+					// Same builder methods you use at Add() time — BeforeStep,
+					// AfterStep, Input, Retry, Timeout, ... — all work here.
+					return flow.Step(n).BeforeStep(func(ctx context.Context, s flow.Steper) (context.Context, error) {
+						s.(*Notify).Title = "[prod] " + s.(*Notify).Title
+						return ctx, nil
+					})
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(&Notify{Title: "promo live", Body: "v2"}))
@@ -131,14 +135,16 @@ func ExampleMutator_ctxValue() {
 	type envKey struct{}
 
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*Notify](func(ctx context.Context, n *Notify) flow.Builder {
-				if env, ok := ctx.Value(envKey{}).(string); ok && n.Channel == "" {
-					// e.g. #release-prod vs #release-dev
-					n.Channel = "#release-" + env
-				}
-				return nil
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*Notify](func(ctx context.Context, n *Notify) flow.Builder {
+					if env, ok := ctx.Value(envKey{}).(string); ok && n.Channel == "" {
+						// e.g. #release-prod vs #release-dev
+						n.Channel = "#release-" + env
+					}
+					return nil
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(&Notify{Title: "deploy started", Body: "v1.2.3"}))
@@ -154,11 +160,11 @@ func ExampleMutator_ctxValue() {
 // sub-Workflow, and even when the sub-Workflow adds them lazily at run
 // time.
 //
-// The propagation mechanism is the same `MutatorReceiver` interface used
-// by interceptors in 10_observability: any Step that contains a
-// sub-Workflow (a `*Workflow` used as a Step, or a struct embedding
-// `flow.SubWorkflow`) automatically receives the parent's Mutators before
-// the inner Workflow starts scheduling.
+// The propagation mechanism is the same `WorkflowOptionReceiver` interface
+// used by interceptors in 10_observability: any Step that contains a
+// sub-Workflow (a `*Workflow` used as a Step, or a struct embedding the
+// deprecated `flow.SubWorkflow`) automatically receives the parent's Option
+// (Mutators included) before the inner Workflow starts scheduling.
 func ExampleMutator_subWorkflow() {
 	// A "release stage" sub-workflow that posts a start and an end notice.
 	stage := new(flow.Workflow).Add(
@@ -169,13 +175,15 @@ func ExampleMutator_subWorkflow() {
 	)
 
 	outer := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*Notify](func(_ context.Context, n *Notify) flow.Builder {
-				if n.Channel == "" {
-					n.Channel = "#release"
-				}
-				return nil
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*Notify](func(_ context.Context, n *Notify) flow.Builder {
+					if n.Channel == "" {
+						n.Channel = "#release"
+					}
+					return nil
+				}),
+			},
 		},
 	}
 	outer.Add(
@@ -206,19 +214,21 @@ func ExampleMutator_subWorkflow() {
 // later Mutators can rely on earlier Mutators having already run.
 func ExampleMutator_multipleInOrder() {
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*Notify](func(_ context.Context, n *Notify) flow.Builder {
-				return flow.Step(n).Input(func(_ context.Context, n *Notify) error {
-					n.Body += " [m1]"
-					return nil
-				})
-			}),
-			flow.Mutate[*Notify](func(_ context.Context, n *Notify) flow.Builder {
-				return flow.Step(n).Input(func(_ context.Context, n *Notify) error {
-					n.Body += " [m2]"
-					return nil
-				})
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*Notify](func(_ context.Context, n *Notify) flow.Builder {
+					return flow.Step(n).Input(func(_ context.Context, n *Notify) error {
+						n.Body += " [m1]"
+						return nil
+					})
+				}),
+				flow.Mutate[*Notify](func(_ context.Context, n *Notify) flow.Builder {
+					return flow.Step(n).Input(func(_ context.Context, n *Notify) error {
+						n.Body += " [m2]"
+						return nil
+					})
+				}),
+			},
 		},
 	}
 	w.Add(

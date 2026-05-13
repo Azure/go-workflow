@@ -44,7 +44,7 @@ func main() {
 
 - **Tiny interface.** A step is anything with `Do(context.Context) error`. No codegen, no DSL.
 - **Dependencies as code.** `Step(x).DependsOn(y)`, `Pipe(...)`, `BatchPipe(...)`, `If/Switch`.
-- **Concurrent by default.** Each ready step runs in its own goroutine; cap with `MaxConcurrency`.
+- **Concurrent by default.** Each ready step runs in its own goroutine; cap with `Option.MaxConcurrency`.
 - **Per-step controls.** Retry with backoff, timeout, conditions, typed `Input`/`Output`, before/after hooks.
 - **Composable.** A `Workflow` is itself a `Step`, so workflows nest — interceptors and options
   flow into children automatically.
@@ -88,18 +88,41 @@ calling it again merges new config into existing steps.
 
 ## Workflow knobs
 
-Set fields on `flow.Workflow` before `Do`:
+Workflow-level configuration lives in `flow.Workflow.Option` (type `WorkflowOption`).
+Scalar fields are pointer-typed so unset / explicit-zero are distinguishable;
+slice fields stay slices. When a Workflow is used as a sub-workflow, the
+parent's Option propagates into the child via `WorkflowOptionReceiver` —
+nil scalars take the parent's value, slices are parent-prepended. Set
+`Option.DontInherit = true` on a child to opt out.
 
-| Field                  | Effect                                                                       |
-|------------------------|------------------------------------------------------------------------------|
-| `MaxConcurrency`       | Max running steps at once. `0` = unlimited.                                  |
-| `DontPanic`            | Recover panics into `ErrPanic` instead of crashing.                          |
-| `SkipAsError`          | Treat `Skipped` as workflow failure (default: skipped is OK).                |
-| `DefaultOption`        | Base `*StepOption` applied (then overridable) to every step.                 |
-| `StepInterceptors`     | Wrap full step lifetime (across retries).                                    |
-| `AttemptInterceptors`  | Wrap each individual attempt (`Before → Do → After`).                        |
-| `IsolateInterceptors`  | When nested as a child step, don't inherit parent interceptors.              |
-| `Clock`                | Inject a clock for deterministic tests.                                      |
+```go
+mc := 4
+dontPanic := true
+w := &flow.Workflow{Option: flow.WorkflowOption{
+    MaxConcurrency: &mc,
+    DontPanic:      &dontPanic,
+}}
+```
+
+| Field                          | Effect                                                                       |
+|--------------------------------|------------------------------------------------------------------------------|
+| `Option.MaxConcurrency`        | Max running steps at once. `nil` or `0` = unlimited.                         |
+| `Option.DontPanic`             | Recover panics into `ErrPanic` instead of crashing.                          |
+| `Option.SkipAsError`           | Treat `Skipped` as workflow failure (default: skipped is OK).                |
+| `Option.StepDefaults`          | Base `*StepOption` applied (then overridable) to every step.                 |
+| `Option.StepInterceptors`      | Wrap full step lifetime (across retries).                                    |
+| `Option.AttemptInterceptors`   | Wrap each individual attempt (`Before → Do → After`).                        |
+| `Option.Mutators`              | Cross-cutting per-type Step contributions (see `flow.Mutate`).               |
+| `Option.DontInherit`           | When nested as a child step, don't inherit any of the parent's Option.       |
+| `Option.Clock`                 | Inject a clock for deterministic tests.                                      |
+
+### Sub-workflows
+
+Embed `flow.Workflow` directly in your own struct and call `Add` at
+construction time — this is the recommended pattern. The embedded
+`Workflow` satisfies `WorkflowOptionReceiver`, so the parent's Option
+flows in automatically. The legacy `flow.SubWorkflow` type is deprecated
+and will be removed in the next major version.
 
 ## Learn more
 

@@ -54,7 +54,7 @@ func TestErrWorkflowOutputOrdering(t *testing.T) {
 	stepA := newSerialStep("A-second", fmt.Errorf("A failed"))
 	stepB := newSerialStep("B-third", fmt.Errorf("B failed"))
 
-	w := &flow.Workflow{Clock: mockClock}
+	w := &flow.Workflow{Option: flow.WorkflowOption{Clock: mockClock}}
 	w.Add(
 		flow.Step(stepC),
 		flow.Step(stepA).DependsOn(stepC).When(flow.Always),
@@ -100,7 +100,7 @@ func TestErrWorkflowTieBreakByName(t *testing.T) {
 	stepZ := newSerialStep("Z-step", fmt.Errorf("Z failed"))
 	stepA := newSerialStep("A-step", fmt.Errorf("A failed"))
 
-	w := &flow.Workflow{Clock: mockClock}
+	w := &flow.Workflow{Option: flow.WorkflowOption{Clock: mockClock}}
 	w.Add(flow.Step(stepZ), flow.Step(stepA))
 
 	done := make(chan error, 1)

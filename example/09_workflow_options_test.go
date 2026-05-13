@@ -12,19 +12,22 @@ import (
 // # Workflow options: tuning execution
 //
 // **What you'll learn**
-//   - `MaxConcurrency` caps how many Steps run at the same time.
-//   - `DontPanic` recovers panics inside Step bodies and converts them to
-//     errors instead of crashing the program.
+//   - `Option.MaxConcurrency` caps how many Steps run at the same time.
+//   - `Option.DontPanic` recovers panics inside Step bodies and converts
+//     them to errors instead of crashing the program.
+//   - All workflow-level options live under the named `Option` field
+//     (type `WorkflowOption`). Scalar fields are pointer-typed so unset /
+//     explicit-zero are distinguishable.
 //
-// **Other options (see godoc on `Workflow`)**
-//   - `Clock`         — inject a deterministic clock for testing.
-//   - `DefaultOption` — apply a `StepOption` (timeout, retry, …) to every
-//                       Step. Per-Step options still win.
-//   - `SkipAsError`   — treat `Skipped` Steps as workflow errors.
+// **Other options (see godoc on `WorkflowOption`)**
+//   - `Option.Clock`         — inject a deterministic clock for testing.
+//   - `Option.StepDefaults`  — apply a `StepOption` (timeout, retry, …) to
+//                              every Step. Per-Step options still win.
+//   - `Option.SkipAsError`   — treat `Skipped` Steps as workflow errors.
 
 // ExampleWorkflow_MaxConcurrency caps parallelism. Steps that are eligible
 // to run beyond the cap wait for a slot to free up.
-func ExampleWorkflow_MaxConcurrency() {
+func ExampleWorkflowOption_MaxConcurrency() {
 	const cap = 2
 
 	var live atomic.Int32
@@ -50,7 +53,8 @@ func ExampleWorkflow_MaxConcurrency() {
 		})
 	}
 
-	w := &flow.Workflow{MaxConcurrency: cap}
+	mc := cap
+	w := &flow.Workflow{Option: flow.WorkflowOption{MaxConcurrency: &mc}}
 	w.Add(flow.Steps(work("a"), work("b"), work("c"), work("d"), work("e")))
 
 	go func() {
@@ -68,8 +72,9 @@ func ExampleWorkflow_MaxConcurrency() {
 
 // ExampleWorkflow_DontPanic enables panic recovery. A panicking Step is
 // reported as a normal `Failed` Step instead of crashing the program.
-func ExampleWorkflow_DontPanic() {
-	w := &flow.Workflow{DontPanic: true}
+func ExampleWorkflowOption_DontPanic() {
+	dontPanic := true
+	w := &flow.Workflow{Option: flow.WorkflowOption{DontPanic: &dontPanic}}
 	w.Add(
 		flow.Step(flow.Func("oops", func(context.Context) error {
 			panic("boom")
@@ -82,4 +87,32 @@ func ExampleWorkflow_DontPanic() {
 	fmt.Println("ErrWorkflow?", errors.As(err, &ew))
 	// Output:
 	// ErrWorkflow? true
+}
+
+// ExampleWorkflowOption_inheritance shows how scalar Option fields
+// propagate from a parent Workflow into a sub-Workflow that left them
+// unset (nil pointer). Once you set DontPanic on the parent, every nested
+// child workflow recovers panics too — no need to restate the option on
+// every sub-workflow.
+//
+// To opt out of inheritance entirely, set Option.DontInherit = true on
+// the child. To override just one field, set that field's pointer on the
+// child (an explicit `&zero` pointer is distinguishable from "unset").
+func ExampleWorkflowOption_inheritance() {
+	// Inner workflow: leaves DontPanic unset.
+	inner := new(flow.Workflow)
+	inner.Add(flow.Step(flow.Func("boom", func(ctx context.Context) error {
+		panic("inner panic")
+	})))
+
+	// Outer workflow sets DontPanic at the top level. The inner sub-workflow
+	// inherits it via WorkflowOptionReceiver.InheritOption.
+	dontPanic := true
+	outer := &flow.Workflow{Option: flow.WorkflowOption{DontPanic: &dontPanic}}
+	outer.Add(flow.Step(inner))
+
+	err := outer.Do(context.Background())
+	fmt.Println("recovered as error:", err != nil)
+	// Output:
+	// recovered as error: true
 }

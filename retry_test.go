@@ -47,7 +47,7 @@ func TestRetry(t *testing.T) {
 	newMock := func() *Mock {
 		var (
 			mockClock = clock.NewMock()
-			w         = &flow.Workflow{Clock: mockClock}
+			w         = &flow.Workflow{Option: flow.WorkflowOption{Clock: mockClock}}
 			mockStep  = &MockStep{Started: make(chan struct{})}
 		)
 		w.Add(flow.Step(mockStep).Retry(func(ro *flow.RetryOption) {
@@ -155,7 +155,7 @@ func TestRetry(t *testing.T) {
 		// For this test we need a fresh workflow using Retry(nil) instead.
 		var (
 			mockClock = clock.NewMock()
-			w         = &flow.Workflow{Clock: mockClock}
+			w         = &flow.Workflow{Option: flow.WorkflowOption{Clock: mockClock}}
 			mockStep  = &MockStep{Started: make(chan struct{})}
 		)
 		w.Add(flow.Step(mockStep).Retry(nil))

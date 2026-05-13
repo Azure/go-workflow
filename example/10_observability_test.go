@@ -15,7 +15,8 @@ import (
 //   - Use `AttemptInterceptor` to observe each individual attempt — perfect
 //     for per-try metrics or transforming an attempt's error.
 //   - Parent → child workflows inherit interceptors automatically; opt out
-//     with `IsolateInterceptors`.
+//     with `Option.DontInherit` (which now opts out of the entire
+//     `WorkflowOption`, not just interceptors).
 //
 // **Two layers, deliberately separated**
 //
@@ -55,7 +56,7 @@ func ExampleStepInterceptor() {
 		bar = flow.Func("Bar", func(ctx context.Context) error { fmt.Println("Bar"); return nil })
 	)
 	workflow := &flow.Workflow{
-		StepInterceptors: []flow.StepInterceptor{logger},
+		Option: flow.WorkflowOption{StepInterceptors: []flow.StepInterceptor{logger}},
 	}
 	workflow.Add(
 		flow.Step(foo).DependsOn(bar),
@@ -90,8 +91,10 @@ func ExampleAttemptInterceptor() {
 
 	passAfter2 := &flow.NamedStep{Name: "PassAfter2", Steper: &passAfter{n: 2}}
 	workflow := &flow.Workflow{
-		StepInterceptors:    []flow.StepInterceptor{stepLog},
-		AttemptInterceptors: []flow.AttemptInterceptor{attemptLog},
+		Option: flow.WorkflowOption{
+			StepInterceptors:    []flow.StepInterceptor{stepLog},
+			AttemptInterceptors: []flow.AttemptInterceptor{attemptLog},
+		},
 	}
 	workflow.Add(
 		flow.Step(passAfter2).
@@ -113,19 +116,20 @@ func ExampleAttemptInterceptor() {
 	// [step ] end   PassAfter2 (err=<nil>)
 }
 
-// ExampleInterceptorReceiver shows that when a Workflow is used as a Step
-// inside another Workflow, the outer Workflow's interceptors automatically
-// wrap every Step in the inner Workflow.
+// ExampleWorkflowOptionReceiver shows that when a Workflow is used as a
+// Step inside another Workflow, the outer Workflow's interceptors
+// automatically wrap every Step in the inner Workflow.
 //
-// The mechanism is the InterceptorReceiver interface: any Step that contains
-// a sub-Workflow (Workflow itself, SubWorkflow) implements
-// PrependInterceptors, and the parent walks the Step tree (via Unwrap) to
-// find a receiver. So you can wrap a sub-Workflow in flow.Name (or any other
-// Steper wrapper) without losing inheritance.
+// The mechanism is the WorkflowOptionReceiver interface: any Step that
+// contains a sub-Workflow (Workflow itself, the deprecated SubWorkflow)
+// implements InheritOption, and the parent walks the Step tree (via Unwrap)
+// to find a receiver. So you can wrap a sub-Workflow in flow.Name (or any
+// other Steper wrapper) without losing inheritance.
 //
 // To opt out of inheritance and run an inner Workflow with only its own
-// interceptors, set IsolateInterceptors: true on the inner.
-func ExampleInterceptorReceiver() {
+// interceptors (and other Option fields), set Option.DontInherit: true on
+// the inner.
+func ExampleWorkflowOptionReceiver() {
 	outerLogger := flow.StepInterceptorFunc(func(ctx context.Context, step flow.Steper, next func(context.Context) error) error {
 		fmt.Printf("[outer] %s\n", step)
 		return next(ctx)
@@ -141,17 +145,17 @@ func ExampleInterceptorReceiver() {
 	)
 
 	// isolated has the same shape but opts out of inheritance.
-	isolated := &flow.Workflow{IsolateInterceptors: true}
+	isolated := &flow.Workflow{Option: flow.WorkflowOption{DontInherit: true}}
 	isolated.Add(
 		flow.Step(flow.Func("isolated-X", func(ctx context.Context) error { fmt.Println("isolated-X"); return nil })),
 	)
 
 	outer := &flow.Workflow{
-		StepInterceptors: []flow.StepInterceptor{outerLogger},
+		Option: flow.WorkflowOption{StepInterceptors: []flow.StepInterceptor{outerLogger}},
 	}
 	// Naming the sub-workflows is purely cosmetic — it just makes the log
 	// readable. flow.Name wraps each sub-workflow in a NamedStep, and the
-	// outer interceptor finds the InterceptorReceiver by walking through
+	// outer interceptor finds the WorkflowOptionReceiver by walking through
 	// the wrapper via Unwrap.
 	outer.Add(
 		flow.Name(inner, "inner"),

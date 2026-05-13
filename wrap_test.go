@@ -172,7 +172,7 @@ func TestSubWorkflow_InterceptorPropagation(t *testing.T) {
 	sub := &mySubStep{}
 	sub.Add(Step(innerStep))
 
-	w := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	w := &Workflow{Option: WorkflowOption{StepInterceptors: []StepInterceptor{ic}}}
 	w.Add(Step(sub))
 
 	assert.NoError(t, w.Do(context.Background()))
@@ -211,9 +211,9 @@ func TestSubWorkflow_ChildInterceptorPreserved(t *testing.T) {
 	type mySubStep struct{ SubWorkflow }
 	sub := &mySubStep{}
 	sub.Add(Step(innerStep))
-	sub.w.StepInterceptors = []StepInterceptor{childIC}
+	sub.w.Option.StepInterceptors = []StepInterceptor{childIC}
 
-	w := &Workflow{StepInterceptors: []StepInterceptor{parentIC}}
+	w := &Workflow{Option: WorkflowOption{StepInterceptors: []StepInterceptor{parentIC}}}
 	w.Add(Step(sub))
 
 	assert.NoError(t, w.Do(context.Background()))
@@ -248,7 +248,7 @@ func TestSubWorkflow_InterceptorNotDuplicatedOnRetry(t *testing.T) {
 		o.Backoff = &backoff.ZeroBackOff{}
 	}))
 
-	w := &Workflow{StepInterceptors: []StepInterceptor{sink}}
+	w := &Workflow{Option: WorkflowOption{StepInterceptors: []StepInterceptor{sink}}}
 	w.Add(Step(sub))
 	assert.NoError(t, w.Do(context.Background()))
 
@@ -273,7 +273,7 @@ func TestWorkflow_AsStep_InheritsInterceptors(t *testing.T) {
 	child := &Workflow{}
 	child.Add(Step(innerStep))
 
-	parent := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	parent := &Workflow{Option: WorkflowOption{StepInterceptors: []StepInterceptor{ic}}}
 	parent.Add(Step(child))
 	assert.NoError(t, parent.Do(context.Background()))
 
@@ -284,15 +284,15 @@ func TestWorkflow_AsStep_InheritsInterceptors(t *testing.T) {
 			found = true
 		}
 	}
-	assert.True(t, found, "parent interceptor should see inner step via Workflow.PrependInterceptors")
+	assert.True(t, found, "parent interceptor should see inner step via WorkflowOptionReceiver.InheritOption")
 }
 
-// TestSubWorkflow_PrependInterceptorsIdempotentAcrossDo ensures that running the
+// TestSubWorkflow_InterceptorIdempotentAcrossDo ensures that running the
 // same parent (with a sub-workflow child) multiple times does NOT accumulate
-// prepended interceptors on the child. The parent's interceptor should fire
+// inherited interceptors on the child. The parent's interceptor should fire
 // exactly twice per run (outer sub step + inner step), regardless of how many
 // times Do() is called.
-func TestSubWorkflow_PrependInterceptorsIdempotentAcrossDo(t *testing.T) {
+func TestSubWorkflow_InterceptorIdempotentAcrossDo(t *testing.T) {
 	t.Parallel()
 
 	var count atomic.Int32
@@ -306,7 +306,7 @@ func TestSubWorkflow_PrependInterceptorsIdempotentAcrossDo(t *testing.T) {
 	sub := &mySubStep{}
 	sub.Add(Step(innerStep))
 
-	parent := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	parent := &Workflow{Option: WorkflowOption{StepInterceptors: []StepInterceptor{ic}}}
 	parent.Add(Step(sub))
 
 	const runs = 3
@@ -320,7 +320,7 @@ func TestSubWorkflow_PrependInterceptorsIdempotentAcrossDo(t *testing.T) {
 	}
 }
 
-func TestSubWorkflow_IsolateInterceptors(t *testing.T) {
+func TestSubWorkflow_DontInherit(t *testing.T) {
 	t.Parallel()
 
 	var parentCount, childCount atomic.Int32
@@ -337,10 +337,10 @@ func TestSubWorkflow_IsolateInterceptors(t *testing.T) {
 	type mySubStep struct{ SubWorkflow }
 	sub := &mySubStep{}
 	sub.Add(Step(innerStep))
-	sub.w.StepInterceptors = []StepInterceptor{childIC}
-	sub.w.IsolateInterceptors = true
+	sub.w.Option.StepInterceptors = []StepInterceptor{childIC}
+	sub.w.Option.DontInherit = true
 
-	w := &Workflow{StepInterceptors: []StepInterceptor{parentIC}}
+	w := &Workflow{Option: WorkflowOption{StepInterceptors: []StepInterceptor{parentIC}}}
 	w.Add(Step(sub))
 	assert.NoError(t, w.Do(context.Background()))
 
@@ -352,9 +352,9 @@ func TestSubWorkflow_IsolateInterceptors(t *testing.T) {
 
 // TestWorkflow_AsStep_InheritsThroughNamedStep ensures that wrapping a child
 // *Workflow in a Steper-only wrapper (NamedStep embeds the Steper interface,
-// so PrependInterceptors is NOT promoted) does not break parent-interceptor
+// so InheritOption is NOT promoted) does not break parent-Option
 // inheritance: the parent walks the Step tree via Unwrap to find the
-// InterceptorReceiver, so wrappers are transparent.
+// WorkflowOptionReceiver, so wrappers are transparent.
 func TestWorkflow_AsStep_InheritsThroughNamedStep(t *testing.T) {
 	t.Parallel()
 
@@ -373,10 +373,10 @@ func TestWorkflow_AsStep_InheritsThroughNamedStep(t *testing.T) {
 
 	// Wrap child in NamedStep — this is the wrapper produced by flow.Name().
 	// NamedStep embeds the Steper interface, so it does NOT promote
-	// PrependInterceptors. Inheritance must therefore go through Unwrap.
+	// InheritOption. Inheritance must therefore go through Unwrap.
 	named := &NamedStep{Name: "child", Steper: child}
 
-	parent := &Workflow{StepInterceptors: []StepInterceptor{ic}}
+	parent := &Workflow{Option: WorkflowOption{StepInterceptors: []StepInterceptor{ic}}}
 	parent.Add(Step(named))
 	assert.NoError(t, parent.Do(context.Background()))
 

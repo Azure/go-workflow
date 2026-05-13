@@ -1,65 +1,6 @@
-# workflow-options Specification
+# workflow-options — Spec Delta
 
-## Purpose
-
-This capability covers `flow.Workflow`'s top-level configuration surface,
-grouped under a single named field `Workflow.Option WorkflowOption`. It
-defines:
-
-- The `WorkflowOption` struct and its scalar pointer / slice fields.
-- The `WorkflowOptionReceiver` interface used to propagate `WorkflowOption`
-  from a parent workflow into a sub-workflow root step.
-- The merge rules for parent → child Option inheritance (scalars, slices,
-  `DontInherit` opt-out).
-- The accumulation-prevention contract: each `InheritOption` invocation
-  returns a `restore func()` that the parent defers, so writes performed
-  during one parent `Do()` run do not bleed into subsequent runs.
-- The role of `Workflow.Reset()`, which rewinds per-step status only.
-
-## Requirements
-
-### Requirement: WorkflowOption groups workflow-level configuration
-
-`flow.Workflow` SHALL expose all configuration fields under a single named
-field `Option WorkflowOption`. The previous nine top-level configuration
-fields (`MaxConcurrency`, `DontPanic`, `SkipAsError`, `Clock`,
-`DefaultOption`, `Mutators`, `StepInterceptors`, `AttemptInterceptors`,
-`IsolateInterceptors`) SHALL NOT exist as direct fields on `Workflow`.
-
-`WorkflowOption` SHALL declare:
-
-```go
-type WorkflowOption struct {
-    MaxConcurrency    *int
-    DontPanic         *bool
-    SkipAsError       *bool
-    Clock             clock.Clock
-    StepDefaults      *StepOption
-
-    Mutators            []Mutator
-    StepInterceptors    []StepInterceptor
-    AttemptInterceptors []AttemptInterceptor
-
-    DontInherit bool
-}
-```
-
-Scalar configuration fields are pointer-typed so that "unset" (nil pointer)
-and "explicit zero value" are distinguishable. This distinction is required
-for parent → child Option inheritance: a nil pointer on the child means
-"inherit from parent"; a non-nil pointer means "child wins".
-
-#### Scenario: Workflow exposes Option field
-- **WHEN** a user constructs `&flow.Workflow{Option: flow.WorkflowOption{...}}`
-- **THEN** the Workflow accepts the configuration and applies it
-
-#### Scenario: Explicit zero is distinguishable from unset
-- **GIVEN** a parent with `Option.MaxConcurrency = &four` (where `four = 4`)
-- **AND** a child with `Option.MaxConcurrency = &zero` (where `zero = 0`)
-- **WHEN** parent runs the child as a sub-workflow
-- **THEN** the child observes `MaxConcurrency = 0` (unlimited), NOT inherited 4
-
----
+## MODIFIED Requirements
 
 ### Requirement: MaxConcurrency limits simultaneous running Steps
 
@@ -169,6 +110,51 @@ without real delays.
 
 ---
 
+## ADDED Requirements
+
+### Requirement: WorkflowOption groups workflow-level configuration
+
+`flow.Workflow` SHALL expose all configuration fields under a single named
+field `Option WorkflowOption`. The previous nine top-level configuration
+fields (`MaxConcurrency`, `DontPanic`, `SkipAsError`, `Clock`,
+`DefaultOption`, `Mutators`, `StepInterceptors`, `AttemptInterceptors`,
+`IsolateInterceptors`) SHALL NOT exist as direct fields on `Workflow`.
+
+`WorkflowOption` SHALL declare:
+
+```go
+type WorkflowOption struct {
+    MaxConcurrency    *int
+    DontPanic         *bool
+    SkipAsError       *bool
+    Clock             clock.Clock
+    StepDefaults      *StepOption
+
+    Mutators            []Mutator
+    StepInterceptors    []StepInterceptor
+    AttemptInterceptors []AttemptInterceptor
+
+    DontInherit bool
+}
+```
+
+Scalar configuration fields are pointer-typed so that "unset" (nil pointer)
+and "explicit zero value" are distinguishable. This distinction is required
+for parent → child Option inheritance: a nil pointer on the child means
+"inherit from parent"; a non-nil pointer means "child wins".
+
+#### Scenario: Workflow exposes Option field
+- **WHEN** a user constructs `&flow.Workflow{Option: flow.WorkflowOption{...}}`
+- **THEN** the Workflow accepts the configuration and applies it
+
+#### Scenario: Explicit zero is distinguishable from unset
+- **GIVEN** a parent with `Option.MaxConcurrency = &four` (where `four = 4`)
+- **AND** a child with `Option.MaxConcurrency = &zero` (where `zero = 0`)
+- **WHEN** parent runs the child as a sub-workflow
+- **THEN** the child observes `MaxConcurrency = 0` (unlimited), NOT inherited 4
+
+---
+
 ### Requirement: WorkflowOptionReceiver propagates Option to sub-workflows
 
 `flow.Workflow` SHALL implement `WorkflowOptionReceiver`:
@@ -176,29 +162,27 @@ without real delays.
 ```go
 type WorkflowOptionReceiver interface {
     // InheritOption merges the parent's WorkflowOption into the receiver
-    // (scalars: child wins when non-nil; slices: parent prepended).
-    // It returns a restore func that the parent MUST defer to rewind
-    // the receiver's Option to its pre-inheritance state, so writes
-    // performed during one parent Do() run do not accumulate across
-    // subsequent runs.
+    // and returns a restore func that the parent MUST defer to rewind the
+    // receiver's Option to its pre-inheritance state.
     InheritOption(parent WorkflowOption) (restore func())
 }
 ```
 
 The parent Workflow SHALL invoke `restore := child.InheritOption(parent.Option)`
 exactly once per sub-workflow root step, in the parent's `Do()` prologue
-(after `init()`, before the scheduling tick begins), and SHALL `defer restore()`
-so the receiver's Option is rewound on every exit path. The parent SHALL
-locate the receiver by walking each root step's `Unwrap()` chain via
-`findOptionReceiver`, returning the first `WorkflowOptionReceiver` found in
-pre-order. This means a sub-workflow MAY be wrapped in any Steper-only
-wrapper (notably `flow.Name` / `NamedStep`) without losing inheritance.
+(after `init()`, before the scheduling tick begins), and SHALL `defer
+restore()` so the receiver's Option is rewound on every exit path. The
+parent SHALL locate the receiver by walking each root step's `Unwrap()`
+chain via `findOptionReceiver`, returning the first `WorkflowOptionReceiver`
+found in pre-order. This means a sub-workflow MAY be wrapped in any
+Steper-only wrapper (notably `flow.Name` / `NamedStep`) without losing
+inheritance.
 
 `Workflow.InheritOption` SHALL apply the following merge rules:
 
-1. If `w.Option.DontInherit` is `true`, `InheritOption` SHALL be a no-op
-   for the merge step but SHALL still return a (possibly trivial) restore
-   func so the parent's `defer restore()` is always safe.
+1. If `w.Option.DontInherit` is `true`, the merge SHALL be a no-op; a
+   (possibly trivial) restore func SHALL still be returned so the parent's
+   `defer restore()` is uniformly safe.
 2. For each scalar pointer field (`MaxConcurrency`, `DontPanic`,
    `SkipAsError`) and each interface/pointer field (`Clock`,
    `StepDefaults`): if the child's field is nil, set it to the parent's
@@ -242,11 +226,9 @@ The parent's user-supplied `WorkflowOption` SHALL NOT be mutated by
 ### Requirement: DontInherit opts out of all parent Option inheritance
 
 When a sub-workflow's `Option.DontInherit` is `true`, the parent's
-`InheritOption(parent.Option)` call SHALL be a merge no-op. The
-sub-workflow runs with exactly its own configured Option, with no scalars
-filled in from the parent and no slices prepended. `InheritOption` still
-returns a (possibly trivial) restore func so the parent's `defer restore()`
-remains safe and uniform.
+`InheritOption(parent.Option)` call SHALL be a no-op. The sub-workflow runs
+with exactly its own configured Option, with no scalars filled in from the
+parent and no slices prepended.
 
 This replaces the previous `IsolateInterceptors` flag and widens its
 semantics from interceptor-only to whole-Option opt-out. The naming aligns
@@ -272,9 +254,9 @@ The `restore func()` returned by `InheritOption` SHALL rewind the receiver's
 called `InheritOption` on, ensuring that on every exit path of the parent's
 `Do()` (success, error, or panic) the children's Option fields are reset.
 
-This guarantees that `InheritOption` writes performed by a parent during one
-`Do()` run do not accumulate into subsequent runs of the same parent or of
-the same child reused under a different parent.
+This guarantees that `InheritOption` writes performed by a parent during
+one `Do()` run do not accumulate into subsequent runs of the same parent
+or of the same child reused under a different parent.
 
 The snapshot captured inside `InheritOption` is a shallow copy. This is
 correct because:
@@ -287,11 +269,12 @@ correct because:
   pre-inheritance backing array, which is what restore reinstates.
 
 The internal `reset()` SHALL NOT clear `w.Option` (that is the restore
-func's job, deferred at the parent scope).
+func's job, deferred at the parent scope, and reset runs at the top of
+`Do()` before scheduling).
 
 The public `Workflow.Reset()` SHALL NOT clear `w.Option` either, because
-the restore mechanism already prevents accumulation; `Reset()` exists
-solely to reset per-step status (see the `Reset` requirement).
+the restore mechanism in the parent's `Do()` already prevents accumulation;
+`Reset()` exists solely to reset per-step status (see the `Reset` requirement).
 
 #### Scenario: Repeated Do() runs do not accumulate inherited contributions
 - **GIVEN** a parent with `Option.Mutators = [A]` and a child with `Option.Mutators = [B]`
@@ -340,3 +323,35 @@ standpoint; its purpose is purely to rewind per-step status for re-execution.
   to reset because each Do() resets internally via the unexported `reset()`)
 - **THEN** each invocation results in the child's effective `Mutators`
   being `[A, B]` during the run, with no accumulation
+
+---
+
+## REMOVED Requirements
+
+### Requirement: ~~Workflow exposes Mutators / StepInterceptors / AttemptInterceptors as top-level fields~~
+
+**Reason:** Replaced by `Workflow.Option.Mutators`, `Workflow.Option.StepInterceptors`,
+`Workflow.Option.AttemptInterceptors` under the new `WorkflowOption` grouping.
+
+### Requirement: ~~MutatorReceiver interface~~
+
+**Reason:** Replaced by `WorkflowOptionReceiver.InheritOption`, which carries
+`Mutators` as one component of the inherited `WorkflowOption`.
+
+### Requirement: ~~InterceptorReceiver interface~~
+
+**Reason:** Replaced by `WorkflowOptionReceiver.InheritOption`, which carries
+`StepInterceptors` and `AttemptInterceptors` as components of the inherited
+`WorkflowOption`.
+
+### Requirement: ~~IsolateInterceptors~~
+
+**Reason:** Replaced by `Option.DontInherit`, which generalises from
+interceptor-only opt-out to whole-`WorkflowOption` opt-out.
+
+### Requirement: ~~inheritedStep / inheritedAttempt side fields~~
+
+**Reason:** The accumulation-prevention invariant is now satisfied by the
+`restore func()` returned from `InheritOption` and deferred by the parent;
+the side fields and their special-cased `reset()` behavior are no longer
+needed.
