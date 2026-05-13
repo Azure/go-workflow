@@ -64,6 +64,13 @@ are in `docs/superpowers/specs/2026-05-12-workflow-option-design.md`.
   `SubWorkflow.InheritOption` delegating to the inner `Workflow` so
   inheritance still works during the window. `SubWorkflow.Reset` was already
   deprecated; remains deprecated.
+- **Deprecate (remove next major):** `flow.StepBuilder` (the type). Its
+  only method `BuildStep` was already deprecated in the Mutator change; the
+  type itself is now marked deprecated at the godoc level too so users who
+  embed `flow.Workflow` see the warning. Behavior is unchanged this release;
+  the type, the method, the `BuildStep()` user hook, and the implicit
+  invocation in `Workflow.Add` all remain until the next major version, when
+  they are removed together.
 - No helper for pointer-to-value (`flow.Bool`, `flow.Int`) — callers use
   `&v`, Go 1.26 `new(value)`, or their own one-line generic.
 - Update `example/13_mutators_test.go` and any other examples that reference

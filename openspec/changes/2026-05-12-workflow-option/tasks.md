@@ -36,6 +36,7 @@
 - [ ] 5.1 Add `// Deprecated: Embed flow.Workflow directly. SubWorkflow will be removed in the next major version of go-workflow.` to the `SubWorkflow` type godoc
 - [ ] 5.2 Add `(*SubWorkflow).InheritOption(parent WorkflowOption)` delegating to `s.w.InheritOption(parent)` so `SubWorkflow`-embedding steps continue to participate in propagation during the deprecation window
 - [ ] 5.3 Verify `SubWorkflow.Reset` retains its existing deprecation notice (no change needed if already correct)
+- [ ] 5.4 Add `// Deprecated:` notice at the `StepBuilder` *type* godoc level (the method `StepBuilder.BuildStep` is already deprecated). The notice SHALL state that the type, the `BuildStep()` user hook, and `SubWorkflow` will all be removed together in the next major version. Behavior is unchanged this release — `Workflow` still embeds `StepBuilder`, `Workflow.Add` still calls `w.BuildStep(step)`, user `BuildStep()` hooks still fire once.
 
 ## 6. Spec Updates
 

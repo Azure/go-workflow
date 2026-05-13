@@ -769,12 +769,47 @@ Expected: build errors from `SubWorkflow.PrependMutators` / `SubWorkflow.Prepend
 
 ---
 
-## Task 5: Deprecate SubWorkflow
+## Task 5: Deprecate SubWorkflow (and re-tag StepBuilder)
 
 **Files:**
-- Modify: `workflow.go`
+- Modify: `workflow.go`, `build_step.go`
 
-- [ ] **Step 5.1: Replace the entire `SubWorkflow` block in `workflow.go`**
+- [ ] **Step 5.1: Re-tag `StepBuilder` as Deprecated in its godoc**
+
+In `build_step.go`, the existing godoc only deprecates the `BuildStep` *method*. With this change we publicly mark the `StepBuilder` *type* itself as deprecated so users who embed it directly (none known, but the type is exported) are warned. The behavior is unchanged — `Workflow` still embeds `StepBuilder`, the `BuildStep()` user hook still fires once per step via `Workflow.Add` → `w.BuildStep(step)`.
+
+Replace the existing type-level doc (above `type StepBuilder struct{ built Set[Steper] }`) with:
+
+```go
+// StepBuilder is the per-Workflow memo that ensures every Step's optional
+// BuildStep() hook fires at most once.
+//
+// A Step type can implement BuildStep() to assemble its internal sub-steps
+// lazily — typically the first time it is added to a Workflow:
+//
+//	type StepImpl struct{}
+//	func (s *StepImpl) Unwrap() []flow.Steper { return /* internal steps */ }
+//	func (s *StepImpl) Do(ctx context.Context) error { /* ... */ }
+//	func (s *StepImpl) BuildStep()                  { /* assemble children */ }
+//
+//	workflow.Add(
+//	    flow.Step(new(StepImpl)), // BuildStep() fires here, exactly once.
+//	)
+//
+// The StepBuilder is embedded in Workflow itself, so Workflow.Add transparently
+// invokes BuildStep on every newly seen step.
+//
+// Deprecated: StepBuilder and the BuildStep() user hook will be removed in
+// the next major version of go-workflow, together with [SubWorkflow] and
+// [SubWorkflow.Reset]. Use [Mutate] for cross-cutting modification, and
+// construct sub-workflows inside Do() (or at the embedding type's
+// construction time) instead.
+type StepBuilder struct{ built Set[Steper] }
+```
+
+The existing `// Deprecated:` paragraph on the `BuildStep(s Steper)` *method* stays as-is; this step just adds the same notice at the *type* level so embedders see it.
+
+- [ ] **Step 5.2: Replace the entire `SubWorkflow` block in `workflow.go`**
 
 Find lines ~891-931 (the existing `// SubWorkflow makes any user struct …` doc plus the struct, methods, and `PrependMutators` / `PrependInterceptors` helpers).
 
@@ -821,7 +856,7 @@ func (s *SubWorkflow) InheritOption(parent WorkflowOption) {
 
 Note: `PrependMutators` and `PrependInterceptors` methods are gone. The interfaces they satisfied no longer exist.
 
-- [ ] **Step 5.2: Try to build (expected: source compiles; tests/examples may not)**
+- [ ] **Step 5.3: Try to build (expected: source compiles; tests/examples may not)**
 
 ```bash
 go build ./...
@@ -1446,6 +1481,12 @@ Append to `CHANGELOG.md` (create if missing):
 
 - `flow.SubWorkflow` is deprecated; embed `flow.Workflow` directly.
   SubWorkflow will be removed in the next major version of go-workflow.
+- `flow.StepBuilder` (the type) is now also marked deprecated at the type
+  level (the method was already deprecated). The type, the `BuildStep()`
+  user hook, and the implicit invocation in `Workflow.Add` will all be
+  removed in the next major version of go-workflow, together with
+  `SubWorkflow` and `SubWorkflow.Reset`. Behavior is unchanged in this
+  release.
 
 ### Behavior changes
 
