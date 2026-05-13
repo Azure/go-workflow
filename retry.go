@@ -84,7 +84,7 @@ func (w *Workflow) retry(opt *RetryOption) func(
 		}
 		backOff = backoff.WithContext(backOff, ctx)
 		if !notAfter.IsZero() {
-			backOff = &backOffStopIfTimeout{BackOff: backOff, NotAfter: notAfter, Now: w.Clock.Now}
+			backOff = &backOffStopIfTimeout{BackOff: backOff, NotAfter: notAfter, Now: w.clock().Now}
 		}
 		if opt.Attempts > 0 {
 			// WithMaxRetries counts RETRIES, not total attempts — Attempts=N
@@ -98,7 +98,7 @@ func (w *Workflow) retry(opt *RetryOption) func(
 			backOff = b
 		}
 		e := RetryEvent{Attempt: 0}
-		start := w.Clock.Now()
+		start := w.clock().Now()
 		return backoff.RetryNotifyWithTimer(
 			func() error {
 				defer func() {
@@ -108,11 +108,11 @@ func (w *Workflow) retry(opt *RetryOption) func(
 				ctxPerTry := ctx
 				if opt.TimeoutPerTry > 0 {
 					var cancel context.CancelFunc
-					ctxPerTry, cancel = w.Clock.WithTimeout(ctx, opt.TimeoutPerTry)
+					ctxPerTry, cancel = w.clock().WithTimeout(ctx, opt.TimeoutPerTry)
 					defer cancel()
 				}
 				err := do(ctxPerTry)
-				e.Since = w.Clock.Since(start)
+				e.Since = w.clock().Since(start)
 				e.Error = err
 				return err
 			},

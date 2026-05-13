@@ -64,10 +64,16 @@ type WorkflowOption struct {
 // each root step's Unwrap chain and calls InheritOption ONCE before any
 // scheduling begins, so the child's Do() observes the merged Option.
 //
+// InheritOption mutates the receiver's Option in place. To prevent
+// cross-Do() accumulation (the child being re-run later observing the
+// previous parent's contributions), implementations MUST return a non-nil
+// `restore` function that the parent invokes on every Do() exit path to
+// rewind the receiver's Option to its pre-InheritOption shape.
+//
 // *Workflow itself implements this interface; users get inheritance for
 // free by embedding flow.Workflow in their own Step type.
 type WorkflowOptionReceiver interface {
-	InheritOption(parent WorkflowOption)
+	InheritOption(parent WorkflowOption) (restore func())
 }
 
 // prependSlice returns a fresh slice equal to parent ++ child. It MUST NOT

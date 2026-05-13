@@ -88,7 +88,8 @@ func TestWorkflowErr(t *testing.T) {
 func TestSkip(t *testing.T) {
 	t.Parallel()
 	t.Run("should skip step if return ErrSkip", func(t *testing.T) {
-		w := &Workflow{SkipAsError: true}
+		skipAsError := true
+		w := &Workflow{Option: WorkflowOption{SkipAsError: &skipAsError}}
 		skipMe := Func("SkipMe", func(ctx context.Context) error {
 			return Skip(fmt.Errorf("skip me"))
 		})
@@ -220,7 +221,7 @@ func TestConcurrentExecution(t *testing.T) {
 func TestStepResultFinishedAtPopulated(t *testing.T) {
 	mockClock := clock.NewMock()
 	step := Func("test-step", func(ctx context.Context) error { return nil })
-	w := &Workflow{Clock: mockClock}
+	w := &Workflow{Option: WorkflowOption{Clock: mockClock}}
 	w.Add(Step(step))
 
 	err := w.Do(context.Background())

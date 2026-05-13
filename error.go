@@ -26,7 +26,7 @@ func Skip(err error) ErrSkip { return ErrSkip{err} }
 //   - ErrSucceed   → Succeeded
 //   - ErrCancel    → Canceled
 //   - ErrSkip      → Skipped
-//   - ErrPanic     → Failed (only ever produced when Workflow.DontPanic is true)
+//   - ErrPanic     → Failed (only ever produced when Workflow.Option.DontPanic is true)
 //   - ErrBeforeStep→ Failed (the failure happened in a Before/Input callback,
 //     not in Do itself)
 type ErrSucceed struct{ error }

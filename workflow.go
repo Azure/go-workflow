@@ -38,57 +38,94 @@ import (
 //	step's Condition then decides whether it actually runs (Running) or is
 //	settled inline as Skipped / Canceled.
 //
-// See StepStatus / Condition for the status state machine.
+// All workflow-level configuration lives in [WorkflowOption], exposed via
+// Workflow.Option. See [WorkflowOption] for the available fields and the
+// parent → child inheritance rules used when a Workflow is run as a step
+// inside another Workflow.
+//
+// # Building sub-workflows
+//
+// A Workflow can itself be used as a Step inside another Workflow. Three
+// patterns, in order of preference:
+//
+//  1. **Embed flow.Workflow at construction time (recommended).**
+//     Build the sub-workflow's DAG once, before passing it as a Step. This
+//     makes the inner Steps visible to introspection (Has / As / HasStep)
+//     and lets the parent's [WorkflowOption] inherit cleanly via
+//     [WorkflowOptionReceiver]:
+//
+//	type MyComposite struct{ flow.Workflow }
+//	func New() *MyComposite {
+//	    c := &MyComposite{}
+//	    c.Add(flow.Step(/* inner steps */))
+//	    return c
+//	}
+//
+//  2. **Build inside Do() with a sync.Once guard.**
+//     If the sub-workflow needs context only available at run time, build
+//     it lazily on first Do(). Guard the Add() call with sync.Once so
+//     re-execution (retries, multiple Do()s) does not re-Add the same Step:
+//
+//	type MyLazy struct{ flow.Workflow; once sync.Once }
+//	func (m *MyLazy) Do(ctx context.Context) error {
+//	    m.once.Do(func() { m.Add(/* inner steps */) })
+//	    return m.Workflow.Do(ctx)
+//	}
+//
+//  3. **Construct &flow.Workflow{} inline inside Do() (last resort).**
+//     A throwaway sub-workflow is opaque to the parent: it does not
+//     participate in [WorkflowOptionReceiver] inheritance unless the host
+//     step itself implements [WorkflowOptionReceiver] and forwards the
+//     parent's Option.
+//
+// **DO NOT** call [Workflow.Add] from inside Do() (or any method
+// transitively reachable from Do()) without a sync.Once guard. Doing so
+// produces undefined behavior: callbacks accumulate across re-executions,
+// duplicate Steps multiply, introspection helpers report multiple matches
+// for what should be a single Step, and Mutator dispatch becomes stale.
+// See the warning on [Workflow.Add].
 //
 // Per-step configuration: use Step / Steps / Pipe (see step.go).
 // Composite steps:        use Has / As / HasStep (see wrap.go).
 type Workflow struct {
-	// Workflow-level scheduling and panic policy.
-
-	MaxConcurrency int         // 0 means unlimited; otherwise caps simultaneously-running steps.
-	DontPanic      bool        // if true, panics are recovered and surfaced as ErrPanic.
-	SkipAsError    bool        // if true, Skipped terminal status counts as a workflow failure.
-	Clock          clock.Clock // injected clock for retries / timeouts (deterministic in tests).
-	DefaultOption  *StepOption // applied as the FIRST option for every Step (per-step Option calls override it).
-
-	// Mutators are evaluated against every step in this workflow before that
-	// step's first attempt. See [Mutator] / [Mutate].
-	Mutators []Mutator
-
-	// Workflow-level interceptors. The base slices are never mutated by
-	// inheritance (see PrependInterceptors / effective*Interceptors below),
-	// so multiple Do() runs stay deterministic.
-	StepInterceptors    []StepInterceptor    // wrap each step's full lifetime (across retries).
-	AttemptInterceptors []AttemptInterceptor // wrap each individual attempt (Before → Do → After).
-	IsolateInterceptors bool                 // when true and this Workflow runs as a child step, do NOT inherit parent interceptors.
+	// Option groups all workflow-level configuration (concurrency cap,
+	// panic policy, skip-as-error, clock, default step options, mutators,
+	// interceptors, and inheritance opt-out). See [WorkflowOption].
+	Option WorkflowOption
 
 	StepBuilder // embeds the BuildStep memo so Workflow.Add can call BuildStep on new steps once.
 
 	steps map[Steper]*State // root step → its State (status + StepConfig).
 
-	// inheritedStep / inheritedAttempt hold the interceptors a parent workflow
-	// (or a SubWorkflow-bearing parent step) has prepended for the current run.
-	// Lifecycle:
-	//
-	//   1. Parent writes them BEFORE invoking child.Do() (in executeWithRetry).
-	//   2. child.Do() reads them while building its effective interceptor chain.
-	//   3. child.Do() clears them in a defer covering ALL exit paths
-	//      (success, preflight error, panic) so the next run starts fresh.
-	//
-	// They are intentionally NOT cleared by the internal reset() (reset() runs at
-	// the very top of Do() and would wipe the parent's just-written prefix). The
-	// public Reset() does clear them, since users call Reset() between runs and
-	// expect a fully-fresh state.
-	//
-	// They are never folded into StepInterceptors / AttemptInterceptors so the
-	// user-supplied base stays untouched and repeated runs do not accumulate.
-	inheritedStep    []StepInterceptor
-	inheritedAttempt []AttemptInterceptor
-
 	statusChange *sync.Cond     // signals to the tick loop when a worker terminates.
-	leaseBucket  chan struct{}  // bounded-channel "permit pool" enforcing MaxConcurrency; nil means unlimited.
+	leaseBucket  chan struct{}  // bounded-channel "permit pool" enforcing Option.MaxConcurrency; nil means unlimited.
 	waitGroup    sync.WaitGroup // tracks worker goroutines so Do() can wait for them on exit.
 	isRunning    sync.Mutex     // single-runner guard: TryLock fails fast if Do/Reset is re-entered.
+}
+
+// Scalar accessors: handle nil-pointer dereference and runtime defaults.
+// All in-code reads of these scalars MUST go through these accessors.
+
+func (w *Workflow) maxConcurrency() int {
+	if w.Option.MaxConcurrency == nil {
+		return 0
+	}
+	return *w.Option.MaxConcurrency
+}
+
+func (w *Workflow) dontPanic() bool {
+	return w.Option.DontPanic != nil && *w.Option.DontPanic
+}
+
+func (w *Workflow) skipAsError() bool {
+	return w.Option.SkipAsError != nil && *w.Option.SkipAsError
+}
+
+func (w *Workflow) clock() clock.Clock {
+	if w.Option.Clock == nil {
+		return clock.New()
+	}
+	return w.Option.Clock
 }
 
 // Add wires Builders (Step / Steps / Pipe / BatchPipe / If / Switch / …) into
@@ -96,8 +133,24 @@ type Workflow struct {
 // Add() calls has its config merged (upstreams unioned, callbacks/options
 // concatenated). Returns the Workflow for chaining.
 //
-// If DefaultOption is set, it is prepended to every step's Option list as a
-// SEED — so per-step Option calls (Retry, Timeout, When, …) still win.
+// If Option.StepDefaults is set, it is prepended to every step's Option
+// list as a SEED — so per-step Option calls (Retry, Timeout, When, …) still
+// win.
+//
+// **WARNING — re-entry is forbidden.** Calling Add from inside the same
+// Workflow's Do (or any method transitively reachable from Do) is
+// FORBIDDEN unless guarded by a sync.Once that ensures Add fires at most
+// once across the lifetime of the host step. Unguarded re-entry produces
+// undefined behavior, including (a) callbacks accumulating across
+// re-executions (BeforeStep / AfterStep / Input fire N times after N
+// runs), (b) duplicate Steps registered under the same identity,
+// (c) introspection helpers (Has / As / HasStep) reporting multiple
+// matches for what should be one Step, and (d) Mutator dispatch becoming
+// stale because per-step state was already marked applied. The framework
+// does NOT detect this misuse at runtime: a host step's isRunning lock is
+// released between retry attempts, so there is no stable signal to
+// distinguish legitimate sync.Once-guarded lazy init from accidental
+// re-Add. See [Workflow] godoc for the recommended construction patterns.
 func (w *Workflow) Add(was ...Builder) *Workflow {
 	if w.steps == nil {
 		w.steps = make(map[Steper]*State)
@@ -105,9 +158,9 @@ func (w *Workflow) Add(was ...Builder) *Workflow {
 	for _, wa := range was {
 		if wa != nil {
 			for step, config := range wa.AddToWorkflow() {
-				if w.DefaultOption != nil && config != nil {
+				if w.Option.StepDefaults != nil && config != nil {
 					config.Option = slices.Insert(config.Option, 0, func(o *StepOption) {
-						*o = *w.DefaultOption
+						*o = *w.Option.StepDefaults
 					})
 				}
 				w.addStep(step, config)
@@ -115,17 +168,6 @@ func (w *Workflow) Add(was ...Builder) *Workflow {
 		}
 	}
 	return w
-}
-
-// PrependMutators inserts mw at the front of w.Mutators, preserving the
-// invariant that propagated parent Mutators run before locally-registered
-// child Mutators. Safe to call multiple times; the once-per-step flag on
-// State prevents double application.
-func (w *Workflow) PrependMutators(mw []Mutator) {
-	if len(mw) == 0 {
-		return
-	}
-	w.Mutators = append(append([]Mutator{}, mw...), w.Mutators...)
 }
 
 // addStep registers `step` as a root in this workflow if it isn't already
@@ -176,19 +218,19 @@ func (w *Workflow) addStep(step Steper, config *StepConfig) {
 	}
 }
 
-// applyMutators runs each Mutator in w.Mutators against step. For every match,
+// applyMutators runs each Mutator in w.Option.Mutators against step. For every match,
 // the returned Builder's config keyed on the matched layer is merged into the
 // state of step (the wrapper key in this workflow). Called once per step,
 // just before its first attempt.
 func (w *Workflow) applyMutators(ctx context.Context, step Steper, state *State) {
-	if len(w.Mutators) == 0 {
+	if len(w.Option.Mutators) == 0 {
 		return
 	}
 	do := func(fn func() error) error { return fn() }
-	if w.DontPanic {
+	if w.dontPanic() {
 		do = catchPanicAsError
 	}
-	for _, m := range w.Mutators {
+	for _, m := range w.Option.Mutators {
 		err := do(func() error {
 			matched, target, b := m.applyTo(ctx, step)
 			if !matched || b == nil {
@@ -342,97 +384,102 @@ func (w *Workflow) IsTerminated() bool {
 	return true
 }
 
-// Reset prepares the Workflow for a fresh run from outside (the user's POV).
-// It rejects with ErrWorkflowIsRunning if a Do call is currently in flight.
+// Reset rewinds every Step's status back to Pending so the Workflow can be
+// Do()-ed again. Reset rejects with ErrWorkflowIsRunning if a Do call is
+// currently in flight.
 //
-// Difference vs the internal reset(): Reset() ALSO clears the inherited
-// interceptor slices set by a parent during a previous run. The internal
-// reset() must NOT clear them — see the inheritedStep / inheritedAttempt
-// lifecycle docs above.
+// Reset does NOT modify w.steps (the set of Steps registered via Add) — a
+// Workflow built once can be Do()-ed any number of times via Reset/Do
+// cycles, with the same DAG each time. To start from an empty set of Steps,
+// allocate a new Workflow.
+//
+// Reset does NOT modify w.Option either. Cross-run accumulation of
+// parent-inherited contributions is prevented by the snapshot/restore in
+// Do(), not by Reset. Calling Reset between runs is therefore optional from
+// an Option-isolation standpoint; its purpose is purely to rewind per-step
+// status for re-execution.
 func (w *Workflow) Reset() error {
 	if !w.isRunning.TryLock() {
 		return ErrWorkflowIsRunning
 	}
 	defer w.isRunning.Unlock()
 	w.reset()
-	w.inheritedStep = nil
-	w.inheritedAttempt = nil
 	return nil
 }
 
 // reset is the per-Do internal reset: clear all step results back to Pending,
-// install a fresh statusChange Cond, ensure Clock is set, and re-allocate the
-// concurrency lease bucket sized for MaxConcurrency.
+// install a fresh statusChange Cond, and re-allocate the concurrency lease
+// bucket sized for Option.MaxConcurrency.
 //
-// Crucially, this does NOT touch inheritedStep / inheritedAttempt — those were
-// just written by the parent before invoking Do() and must survive into the
-// run.
+// reset does NOT touch w.Option: parent → child Option inheritance is
+// preserved by the snapshot/restore in Do() (see Workflow.Do).
 func (w *Workflow) reset() {
 	for _, state := range w.steps {
 		state.SetStepResult(StepResult{Status: Pending})
 	}
-	if w.Clock == nil {
-		w.Clock = clock.New()
-	}
-	w.statusChange = sync.NewCond(new(sync.Mutex))
-	if w.MaxConcurrency > 0 {
-		// Buffered channel as a sized permit pool: a Step takes a slot via
-		// `w.leaseBucket <- struct{}{}` to begin running, and frees it via
-		// `<-w.leaseBucket` when it terminates.
-		w.leaseBucket = make(chan struct{}, w.MaxConcurrency)
+	w.statusChange = sync.NewCond(&sync.Mutex{})
+	if mc := w.maxConcurrency(); mc > 0 {
+		w.leaseBucket = make(chan struct{}, mc)
+	} else {
+		w.leaseBucket = nil
 	}
 }
 
-// PrependInterceptors implements InterceptorReceiver on Workflow itself, so a
-// Workflow used directly as a step (or via SubWorkflow) can inherit
-// interceptors from its parent for the duration of one run. With
-// IsolateInterceptors == true the call is a no-op (the workflow uses only
-// its own configured interceptors).
+// InheritOption implements [WorkflowOptionReceiver]. A parent Workflow calls
+// this method on each sub-workflow root step's first receiver (located via
+// findOptionReceiver) ONCE in the parent's Do() prologue.
 //
-// The inherited slices are stored separately from StepInterceptors /
-// AttemptInterceptors so the user-supplied base is never mutated and repeated
-// runs do not accumulate inherited entries.
-func (w *Workflow) PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor) {
-	if w.IsolateInterceptors {
-		return
+// Merge rules:
+//   - if w.Option.DontInherit is true, this is a no-op (restore is still
+//     non-nil but does nothing);
+//   - for each scalar pointer (MaxConcurrency, DontPanic, SkipAsError) and
+//     interface/pointer (Clock, StepDefaults) field: if the child's field is
+//     nil, the parent's value is copied in; non-nil child fields are
+//     preserved;
+//   - for each slice (Mutators, StepInterceptors, AttemptInterceptors): a
+//     fresh slice equal to parent ++ child replaces the child's field.
+//
+// The returned restore function rewinds w.Option to its pre-InheritOption
+// shape; the parent MUST defer it on every Do() exit path so the child does
+// not retain inherited state across runs. restore is always non-nil and is
+// safe to call multiple times (idempotent).
+func (w *Workflow) InheritOption(parent WorkflowOption) (restore func()) {
+	prev := w.Option
+	if w.Option.DontInherit {
+		return func() { w.Option = prev }
 	}
-	if len(step) > 0 {
-		merged := make([]StepInterceptor, 0, len(step)+len(w.inheritedStep))
-		merged = append(merged, step...)
-		merged = append(merged, w.inheritedStep...)
-		w.inheritedStep = merged
+	if w.Option.MaxConcurrency == nil {
+		w.Option.MaxConcurrency = parent.MaxConcurrency
 	}
-	if len(attempt) > 0 {
-		mergedA := make([]AttemptInterceptor, 0, len(attempt)+len(w.inheritedAttempt))
-		mergedA = append(mergedA, attempt...)
-		mergedA = append(mergedA, w.inheritedAttempt...)
-		w.inheritedAttempt = mergedA
+	if w.Option.DontPanic == nil {
+		w.Option.DontPanic = parent.DontPanic
 	}
+	if w.Option.SkipAsError == nil {
+		w.Option.SkipAsError = parent.SkipAsError
+	}
+	if w.Option.Clock == nil {
+		w.Option.Clock = parent.Clock
+	}
+	if w.Option.StepDefaults == nil {
+		w.Option.StepDefaults = parent.StepDefaults
+	}
+	w.Option.Mutators = prependSlice(parent.Mutators, w.Option.Mutators)
+	w.Option.StepInterceptors = prependSlice(parent.StepInterceptors, w.Option.StepInterceptors)
+	w.Option.AttemptInterceptors = prependSlice(parent.AttemptInterceptors, w.Option.AttemptInterceptors)
+	return func() { w.Option = prev }
 }
 
-// effectiveStepInterceptors returns the chain to invoke for THIS run: the
-// inherited prefix (from a parent, if any) followed by this workflow's own
-// configured base. The result is computed each call and is never written
-// back to either field.
+// effectiveStepInterceptors returns the chain to invoke for THIS run. With
+// parent → child Option inheritance now performed eagerly in Do()'s prologue
+// (writing into w.Option.StepInterceptors directly), the effective chain IS
+// simply w.Option.StepInterceptors.
 func (w *Workflow) effectiveStepInterceptors() []StepInterceptor {
-	if len(w.inheritedStep) == 0 {
-		return w.StepInterceptors
-	}
-	out := make([]StepInterceptor, 0, len(w.inheritedStep)+len(w.StepInterceptors))
-	out = append(out, w.inheritedStep...)
-	out = append(out, w.StepInterceptors...)
-	return out
+	return w.Option.StepInterceptors
 }
 
 // effectiveAttemptInterceptors mirrors effectiveStepInterceptors for AttemptInterceptors.
 func (w *Workflow) effectiveAttemptInterceptors() []AttemptInterceptor {
-	if len(w.inheritedAttempt) == 0 {
-		return w.AttemptInterceptors
-	}
-	out := make([]AttemptInterceptor, 0, len(w.inheritedAttempt)+len(w.AttemptInterceptors))
-	out = append(out, w.inheritedAttempt...)
-	out = append(out, w.AttemptInterceptors...)
-	return out
+	return w.Option.AttemptInterceptors
 }
 
 // Do runs the Workflow synchronously: it spawns a goroutine for every
@@ -454,14 +501,16 @@ func (w *Workflow) Do(ctx context.Context) error {
 	}
 	defer w.isRunning.Unlock()
 
-	// Clear inherited interceptors set by a parent during this run on EVERY
-	// exit path, so a subsequent run (under any parent, or standalone) starts
-	// fresh and PrependInterceptors does not accumulate. Defer ensures even
-	// early exits (Empty, preflight failure, panic) reset state.
-	defer func() {
-		w.inheritedStep = nil
-		w.inheritedAttempt = nil
-	}()
+	// Snapshot Option so any InheritOption writes performed below (and
+	// transitively by nested workflows during their own Do() prologue) are
+	// reverted at the end of THIS Do() call. The snapshot is a shallow copy;
+	// this is correct because:
+	//   - InheritOption only overwrites nil pointer fields with the parent's
+	//     pointer values (not mutating the parent's targets), and
+	//   - prependSlice always allocates a fresh slice, so neither the
+	//     snapshot's slice header nor the parent's slice is mutated.
+	optSnapshot := w.Option
+	defer func() { w.Option = optSnapshot }()
 
 	// Nothing to do.
 	if w.Empty() {
@@ -474,6 +523,29 @@ func (w *Workflow) Do(ctx context.Context) error {
 	if err := w.preflight(); err != nil {
 		return err
 	}
+
+	// Propagate w.Option into every sub-workflow root step exactly once,
+	// BEFORE the tick loop dispatches anything. Receivers are located via
+	// pre-order Unwrap walk so a sub-workflow may be wrapped in a Steper-only
+	// wrapper (e.g. NamedStep) without losing inheritance.
+	//
+	// Each receiver's InheritOption returns a `restore` func that we MUST
+	// invoke on every Do() exit path so the child's Option is rewound to
+	// its pre-InheritOption shape. Without this, repeated Do() runs of the
+	// same parent would accumulate parent contributions on the child.
+	var childRestores []func()
+	for step := range w.steps {
+		if recv := findOptionReceiver(step); recv != nil {
+			if r := recv.InheritOption(w.Option); r != nil {
+				childRestores = append(childRestores, r)
+			}
+		}
+	}
+	defer func() {
+		for _, r := range childRestores {
+			r()
+		}
+	}()
 
 	// Tick loop: each time a step terminates it Signal()s the cond, we wake
 	// up and tick() again. Inline-settled steps may unblock more steps within
@@ -495,10 +567,10 @@ func (w *Workflow) Do(ctx context.Context) error {
 	for step, state := range w.steps {
 		err[step] = state.GetStepResult()
 	}
-	if w.SkipAsError && err.AllSucceeded() {
+	if w.skipAsError() && err.AllSucceeded() {
 		return nil
 	}
-	if !w.SkipAsError && err.AllSucceededOrSkipped() {
+	if !w.skipAsError() && err.AllSucceededOrSkipped() {
 		return nil
 	}
 	return err
@@ -631,16 +703,10 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			// Option/Before/After contributions from Mutators are visible to
 			// the rest of this iteration. The flag is flipped BEFORE the merge
 			// runs so that a panicking mutator (caught by applyMutators's
-			// recover when DontPanic is set) does not cause re-entry on the
+			// recover when Option.DontPanic is set) does not cause re-entry on the
 			// next tick.
 			if !state.MutatorsApplied() {
 				state.SetMutatorsApplied()
-				// Propagate this workflow's Mutators into nested workflows so
-				// they can apply against inner steps when those steps are
-				// scheduled by the inner workflow.
-				if recv, ok := step.(MutatorReceiver); ok && len(w.Mutators) > 0 {
-					recv.PrependMutators(w.Mutators)
-				}
 				w.applyMutators(ctx, step, state)
 				// If applyMutators caught a panic (DontPanic), the state already
 				// holds an error. Settle the step inline as Failed so it never
@@ -649,7 +715,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 					state.SetStepResult(StepResult{
 						Status:     Failed,
 						Err:        err,
-						FinishedAt: w.Clock.Now(),
+						FinishedAt: w.clock().Now(),
 					})
 					progressed = true
 					continue
@@ -665,7 +731,7 @@ func (w *Workflow) tick(ctx context.Context) bool {
 			if nextStatus := cond(ctx, ups); nextStatus.IsTerminated() {
 				state.SetStepResult(StepResult{
 					Status:     nextStatus,
-					FinishedAt: w.Clock.Now(),
+					FinishedAt: w.clock().Now(),
 				})
 				progressed = true
 				continue
@@ -708,7 +774,7 @@ func (ex *stepExecution) run(ctx context.Context) {
 	// Condition (terminal results were settled inline) and set the status to
 	// Running, so we can dive straight in.
 	//
-	// When DontPanic is true, EVERY interceptor invocation is wrapped in
+	// When Option.DontPanic is true, EVERY interceptor invocation is wrapped in
 	// catchPanicAsError so a panicking user interceptor cannot crash the
 	// process or leave the lease unreleased / status unsignalled.
 	stepNext := func(ctx context.Context) error { return ex.executeWithRetry(ctx) }
@@ -721,7 +787,7 @@ func (ex *stepExecution) run(ctx context.Context) {
 		ic := stepICs[i]
 		nextLocal := stepNext
 		stepNext = func(ctx context.Context) error {
-			if ex.w.DontPanic {
+			if ex.w.dontPanic() {
 				return catchPanicAsError(func() error {
 					return ic.InterceptStep(ctx, ex.step, nextLocal)
 				})
@@ -748,7 +814,7 @@ func (ex *stepExecution) run(ctx context.Context) {
 	ex.state.SetStepResult(StepResult{
 		Status:     status,
 		Err:        err,
-		FinishedAt: ex.w.Clock.Now(),
+		FinishedAt: ex.w.clock().Now(),
 	})
 
 	// Release the lease BEFORE signalling, so when the tick loop wakes up it
@@ -765,17 +831,13 @@ func (ex *stepExecution) run(ctx context.Context) {
 func (ex *stepExecution) executeWithRetry(ctx context.Context) error {
 	option := ex.state.Option()
 
-	if recv := findInterceptorReceiver(ex.step); recv != nil {
-		recv.PrependInterceptors(ex.w.effectiveStepInterceptors(), ex.w.effectiveAttemptInterceptors())
-	}
-
 	attemptChain := ex.buildAttemptChain()
 
 	var notAfter time.Time
 	if option != nil && option.Timeout != nil {
-		notAfter = ex.w.Clock.Now().Add(*option.Timeout)
+		notAfter = ex.w.clock().Now().Add(*option.Timeout)
 		var cancel func()
-		ctx, cancel = ex.w.Clock.WithDeadline(ctx, notAfter)
+		ctx, cancel = ex.w.clock().WithDeadline(ctx, notAfter)
 		defer cancel()
 	}
 
@@ -797,7 +859,7 @@ func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 		ic := attemptICs[i]
 		nextLocal := chain
 		chain = func(ctx context.Context) error {
-			if ex.w.DontPanic {
+			if ex.w.dontPanic() {
 				return catchPanicAsError(func() error {
 					return ic.InterceptAttempt(ctx, ex.step, ex.attempt, nextLocal)
 				})
@@ -814,14 +876,14 @@ func (ex *stepExecution) buildAttemptChain() func(context.Context) error {
 
 // runAttempt executes one attempt: Before callbacks → Do → After callbacks.
 //
-// The `do` wrapper is either a direct invocation, or — when DontPanic is true
+// The `do` wrapper is either a direct invocation, or — when Option.DontPanic is true
 // — catchPanicAsError, which converts a panic to an ErrPanic-tagged error.
 // The Before chain may swap the context that is threaded into Do (and the
 // After chain). After callbacks always run, even if Before or Do failed; they
 // receive the latest error and can transform it.
 func (ex *stepExecution) runAttempt(ctx context.Context) error {
 	do := func(fn func() error) error { return fn() }
-	if ex.w.DontPanic {
+	if ex.w.dontPanic() {
 		do = catchPanicAsError
 	}
 
@@ -841,7 +903,7 @@ func (ex *stepExecution) runAttempt(ctx context.Context) error {
 
 // lease takes one slot from the concurrency permit pool. Returns true if the
 // caller may now run, or false if the pool is full (the tick loop will retry
-// on the next signal). When MaxConcurrency is unset (leaseBucket == nil), the
+// on the next signal). When Option.MaxConcurrency is unset (leaseBucket == nil), the
 // answer is always true.
 func (w *Workflow) lease() bool {
 	if w.leaseBucket == nil {
@@ -856,7 +918,7 @@ func (w *Workflow) lease() bool {
 }
 
 // unlease returns one slot to the concurrency permit pool, or is a no-op if
-// MaxConcurrency is unset.
+// Option.MaxConcurrency is unset.
 func (w *Workflow) unlease() {
 	if w.leaseBucket != nil {
 		<-w.leaseBucket
@@ -889,18 +951,27 @@ func catchPanicAsError(f func() error) error {
 }
 
 // SubWorkflow makes any user struct behave as a Step that contains a
-// Workflow. Embed it in your own struct to get Add/Do/Reset and the
-// InterceptorReceiver delegation for free:
+// Workflow.
+//
+// Deprecated: Embed [Workflow] directly in your own struct instead.
+// SubWorkflow will be removed in the next major version of go-workflow.
+// The recommended pattern is:
 //
 //	type MyStep struct {
-//	    flow.SubWorkflow
+//	    flow.Workflow
 //	}
 //
-//	func (s *MyStep) BuildStep() {
+//	func NewMyStep() *MyStep {
+//	    s := &MyStep{}
 //	    s.Add(
 //	        flow.Step(/* stepX */),
 //	    )
+//	    return s
 //	}
+//
+// A Workflow embedded this way also satisfies [WorkflowOptionReceiver], so
+// parent → child Option inheritance continues to work without any extra
+// boilerplate.
 type SubWorkflow struct{ w Workflow }
 
 func (s *SubWorkflow) Unwrap() Steper                    { return &s.w }
@@ -916,16 +987,9 @@ func (s *SubWorkflow) Do(ctx context.Context) error      { return s.w.Do(ctx) }
 // major version of go-workflow.
 func (s *SubWorkflow) Reset() { s.w = Workflow{} }
 
-// PrependMutators forwards mw to the inner workflow. Implements [MutatorReceiver]
-// so parent workflows can propagate Mutators into a sub-workflow before its
-// scheduling pass begins.
-func (s *SubWorkflow) PrependMutators(mw []Mutator) {
-	s.w.PrependMutators(mw)
-}
-
-// PrependInterceptors satisfies InterceptorReceiver by delegating to the
-// embedded Workflow — so a parent workflow's interceptors flow into the
-// SubWorkflow's inner Workflow exactly as if it were used directly.
-func (s *SubWorkflow) PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor) {
-	s.w.PrependInterceptors(step, attempt)
+// InheritOption delegates to the inner Workflow's InheritOption so a parent
+// workflow's Option propagates into the SubWorkflow's inner Workflow during
+// the deprecation window. Implements [WorkflowOptionReceiver].
+func (s *SubWorkflow) InheritOption(parent WorkflowOption) (restore func()) {
+	return s.w.InheritOption(parent)
 }

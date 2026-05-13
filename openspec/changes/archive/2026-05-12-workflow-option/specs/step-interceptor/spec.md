@@ -52,16 +52,16 @@ walking `Unwrap()` via `findOptionReceiver` (the same protocol used by
 This means a sub-workflow MAY be wrapped in any Steper-only wrapper
 (notably `flow.Name` / `NamedStep`) without losing inheritance.
 
-The parent SHALL invoke `recv.InheritOption(parent.Option)` exactly once
-per root sub-workflow step, before the parent's tick begins. Inheritance
-is **per-run scoped**:
+The parent SHALL invoke `restore := recv.InheritOption(parent.Option)`
+exactly once per root sub-workflow step before the parent's tick begins,
+and SHALL `defer restore()`. Inheritance is **per-run scoped**:
 
 - The parent's user-supplied `Option.StepInterceptors` /
   `Option.AttemptInterceptors` slices SHALL NOT be mutated by
   `InheritOption`; the implementation prepends to a fresh slice.
-- The child's `Option` SHALL be snapshotted at the start of its own `Do()`
-  and restored via `defer` at exit, so prepended parent contributions do
-  not accumulate across repeated `Do()` runs.
+- Each `InheritOption` call snapshots the receiver's `Option` and returns
+  a `restore func()` that the parent defers, so prepended parent
+  contributions do not accumulate across repeated `Do()` runs.
 
 The previous `InterceptorReceiver` interface, `PrependInterceptors` method,
 and `inheritedStep` / `inheritedAttempt` side fields SHALL NOT exist.
@@ -137,6 +137,7 @@ interceptor-only opt-out to whole-`WorkflowOption` opt-out.
 
 ### Requirement: ~~inheritedStep / inheritedAttempt side fields~~
 
-**Reason:** The accumulation-prevention invariant is now satisfied by
-snapshot-and-restore of `w.Option` in `Do()`; the side fields and their
-special-cased `reset()` behavior are no longer needed.
+**Reason:** The accumulation-prevention invariant is now satisfied by the
+`restore func()` returned from `InheritOption` and deferred by the parent;
+the side fields and their special-cased `reset()` behavior are no longer
+needed.

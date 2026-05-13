@@ -33,8 +33,9 @@ construct a Mutator that:
 Selection is by concrete type along the unwrap chain only. There is no interface
 matching and no name matching. The unwrap traversal mirrors `flow.As[T]`: it follows
 `Unwrap() Steper` and `Unwrap() []Steper`, but does NOT cross workflow boundaries (a
-nested workflow's inner steps are reached via the propagation mechanism in
-`MutatorReceiver propagation interface`, not via in-place unwrap from the parent).
+nested workflow's inner steps are reached via the propagation mechanism in the
+`Mutator propagation to nested workflows` requirement, not via in-place unwrap from
+the parent).
 
 The `ctx` passed to `fn` is the **workflow-scoped context** — i.e. the `ctx` that was
 passed into `Workflow.Do(ctx)`. It is suitable for accessing values that are stable for
@@ -90,8 +91,8 @@ through composition.
 The runtime SHALL dispatch and merge Mutators using the following rule, hereafter
 "**dispatch by the owning workflow**":
 
-1. Each `*Workflow` (parent or inner) SHALL evaluate its own `Workflow.Mutators` slice
-   against every step in its own `state` map, at that step's first scheduling.
+1. Each `*Workflow` (parent or inner) SHALL evaluate its own `Workflow.Option.Mutators`
+   slice against every step in its own `state` map, at that step's first scheduling.
 2. For each step `wrapper` in `w.state`, the runtime SHALL walk `wrapper`'s `Unwrap()`
    chain. For each layer `L` in the chain (including `wrapper` itself, in pre-order),
    the runtime SHALL ask each Mutator whether `L.(T)` matches. The first matching layer
@@ -101,12 +102,13 @@ The runtime SHALL dispatch and merge Mutators using the following rule, hereafte
    `wrapper` as a root**, regardless of which layer in the unwrap chain the Mutator
    matched. This matches the `Config merge destination follows StateOf` rule in
    `step-configuration`.
-4. Parent Mutators SHALL reach inner-workflow steps only via the `MutatorReceiver`
-   propagation interface (parent prepends its Mutators into the inner workflow's
-   `Mutators` slice). The parent SHALL NOT directly walk into a child workflow's
-   `state` map to apply Mutators; that is the inner workflow's responsibility once it
-   begins scheduling. This keeps once-per-step state, merge destinations, and lazily
-   added inner steps consistent across all nesting depths.
+4. Parent Mutators SHALL reach inner-workflow steps only via the
+   `WorkflowOptionReceiver.InheritOption` propagation mechanism defined in the
+   `workflow-options` capability (parent prepends its `Option.Mutators` into the inner
+   workflow's `Option.Mutators` slice). The parent SHALL NOT directly walk into a child
+   workflow's `state` map to apply Mutators; that is the inner workflow's responsibility
+   once it begins scheduling. This keeps once-per-step state, merge destinations, and
+   lazily added inner steps consistent across all nesting depths.
 
 This rule resolves three previously-ambiguous points:
 
@@ -118,13 +120,14 @@ This rule resolves three previously-ambiguous points:
   Mutator was registered.
 - **Nested workflows are reached by propagation, not by parent walking** — a parent
   Mutator targeting `*X` where `*X` lives inside an inner workflow IS observed by
-  `*X`, but the dispatch is performed by the inner workflow after `PrependMutators`,
-  not by the parent reaching across the workflow boundary.
+  `*X`, but the dispatch is performed by the inner workflow after `InheritOption`
+  prepends the parent's contributions, not by the parent reaching across the workflow
+  boundary.
 
 #### Scenario: Mutator matches via Unwrap and merges into wrapper's state
 - **GIVEN** a workflow `w` where `w.state` contains `wrapper = flow.Name("x", inner)`
   whose `Unwrap()` returns `inner` of type `*Inner`
-- **AND** `w.Mutators = [flow.Mutate[*Inner](func(ctx, x *Inner) Builder { return flow.Step(x).Input(fn) })]`
+- **AND** `w.Option.Mutators = [flow.Mutate[*Inner](func(ctx, x *Inner) Builder { return flow.Step(x).Input(fn) })]`
 - **WHEN** `wrapper` reaches its first scheduling
 - **THEN** the Mutator's user function receives the `*Inner` pointer `inner`
 - **AND** `fn` is appended to `w.state[wrapper].Config.Before` (NOT to a state entry
@@ -133,46 +136,49 @@ This rule resolves three previously-ambiguous points:
 #### Scenario: Parent Mutator targeting inner type does not directly mutate inner state
 - **GIVEN** `parent` contains `inner` (a `*Workflow` used as a step) which contains
   `x` of type `*X`
-- **AND** `parent.Mutators = [flow.Mutate[*X](fn)]`
+- **AND** `parent.Option.Mutators = [flow.Mutate[*X](fn)]`
 - **WHEN** `parent.Do(ctx)` runs
-- **THEN** `parent` SHALL call `inner.PrependMutators(parent.Mutators)` before invoking
-  `inner` as a step
+- **THEN** `parent` SHALL invoke `inner.InheritOption(parent.Option)` once before
+  scheduling, propagating the parent's `Option.Mutators` into `inner.Option.Mutators`
 - **AND** the Mutator runs once against `x` inside `inner`'s scheduling pass; the
   Builder is merged into `inner.state[x].Config`, NOT into any state entry on `parent`
 
 #### Scenario: Wrapper inside inner workflow is reached via propagation
 - **GIVEN** `parent → inner → flow.Name("x", x)` where `x` is `*X`
-- **AND** `parent.Mutators = [flow.Mutate[*X](fn)]`
+- **AND** `parent.Option.Mutators = [flow.Mutate[*X](fn)]`
 - **WHEN** the wrapper reaches first scheduling inside `inner`
-- **THEN** the Mutator (propagated by `PrependMutators`) unwraps the wrapper, matches
+- **THEN** the Mutator (propagated by `InheritOption`) unwraps the wrapper, matches
   `x`, and merges its Builder into `inner.state[wrapper].Config`
 
 ---
 
-### Requirement: Workflow.Mutators field
+### Requirement: Workflow.Option.Mutators field
 
-`flow.Workflow` SHALL expose a `Mutators []Mutator` field. Mutators in this slice are
-evaluated against every step before the step's first attempt. Slice order is preserved:
-element 0 runs first, element n-1 runs last, among the Mutators whose target type matches
-the step.
+`flow.Workflow` SHALL expose a `Mutators []Mutator` field under
+`Workflow.Option` (the new `WorkflowOption` grouping introduced by the
+`workflow-options` capability). Mutators in this slice are evaluated in
+slice order against each step in the Workflow's state map: element 0 runs
+first, element n-1 runs last, among the Mutators whose target type matches
+that step.
 
-A workflow with `Mutators == nil` or an empty slice SHALL behave identically to one
-without the Mutator mechanism — no overhead, no panic.
+A workflow with `Option.Mutators == nil` or an empty slice SHALL behave
+identically to one without any Mutators at all.
+
+The previous top-level `Workflow.Mutators` field SHALL NOT exist.
 
 #### Scenario: Slice order is preserved among matching Mutators
-- **WHEN** two Mutators `[m1, m2]` both registered for `*Foo` are present, and `m1`
-  returns a Builder with `Input` callback A, `m2` returns a Builder with `Input`
-  callback B
-- **THEN** before the first attempt of any `*Foo`, callback A runs before callback B
-  (because the merge appends in order)
+- **WHEN** two Mutators `[m1, m2]` both registered for `*Foo` are present under
+  `Option.Mutators`, and `m1` and `m2` each return a Builder with a `BeforeStep`
+  callback
+- **THEN** the merged step's `Before` chain runs `m1`'s callback before `m2`'s
 
 #### Scenario: Multiple Mutators for the same type all run
-- **WHEN** two Mutators `m1`, `m2` are both registered for `*Foo`
+- **WHEN** two Mutators `m1`, `m2` are both registered for `*Foo` under `Option.Mutators`
 - **THEN** both run, in slice order, before the first attempt of every `*Foo` step;
   their contributions are merged
 
 #### Scenario: Nil Mutators field is a no-op
-- **WHEN** `Workflow.Mutators` is nil
+- **WHEN** `Workflow.Option.Mutators` is nil
 - **THEN** the workflow runs identically to a workflow without the Mutator field
 
 ---
@@ -189,9 +195,9 @@ step's existing lists via the standard `StepConfig.Merge` rule (see
 `step-configuration`'s `Idempotent Add with config merging` requirement). Consequently:
 
 - **Before chain execution order:** plan-declared `Input` / `BeforeStep` run first;
-  Mutator-contributed callbacks run after, in `Workflow.Mutators` slice order.
+  Mutator-contributed callbacks run after, in `Workflow.Option.Mutators` slice order.
 - **After chain execution order:** plan-declared `Output` / `AfterStep` run first;
-  Mutator-contributed callbacks run after, in `Workflow.Mutators` slice order.
+  Mutator-contributed callbacks run after, in `Workflow.Option.Mutators` slice order.
 - **Multiple Mutators on the same step:** their callbacks all append after plan's;
   among Mutators, slice order is preserved.
 
@@ -204,9 +210,10 @@ cannot pre-empt plan callbacks; if pre-empting is needed (rare), register the be
 as a plan-time `Input` instead.
 
 Sub-workflow propagation interacts with this ordering as follows: parent Mutators are
-prepended into the inner workflow's `Mutators` slice (see `MutatorReceiver propagation`
-requirement) so that, inside the inner workflow, parent Mutators run before child
-Mutators. Both still run after the inner step's plan-declared callbacks.
+prepended into the inner workflow's `Option.Mutators` slice (see
+`Mutator propagation to nested workflows` requirement) so that, inside the inner
+workflow, parent Mutators run before child Mutators. Both still run after the inner
+step's plan-declared callbacks.
 
 #### Scenario: Plan Input runs before Mutator Input
 - **GIVEN** a step `s` added via `flow.Step(s).Input(planFn)`
@@ -217,7 +224,7 @@ Mutators. Both still run after the inner step's plan-declared callbacks.
 
 #### Scenario: Multiple Mutator Inputs run in slice order, after plan
 - **GIVEN** a step `s` added via `flow.Step(s).Input(planFn)`
-- **AND** `Workflow.Mutators = [m1, m2]` where both target `*S` and contribute Inputs
+- **AND** `Workflow.Option.Mutators = [m1, m2]` where both target `*S` and contribute Inputs
   `mfn1`, `mfn2` respectively
 - **WHEN** the step executes its first attempt
 - **THEN** the Before chain runs `planFn`, then `mfn1`, then `mfn2`, then `Do`
@@ -306,74 +313,60 @@ constructs a Builder that mentions other steps.
 
 ---
 
-### Requirement: MutatorReceiver propagation interface
+### Requirement: Mutator propagation to nested workflows
 
-`flow.MutatorReceiver` SHALL be defined as an optional interface that composite steps and
-sub-workflows implement to receive Mutators from their parent workflow:
+A nested workflow (whether `*Workflow` used directly as a step or a user
+struct embedding `flow.Workflow`) SHALL receive its parent's Mutators via
+the `WorkflowOptionReceiver.InheritOption` mechanism defined in the
+`workflow-options` capability.
 
-```go
-type MutatorReceiver interface {
-    PrependMutators(mw []Mutator)
-}
-```
+Specifically, the parent SHALL invoke `restore := child.InheritOption(parent.Option)`
+once in its `Do()` prologue and `defer restore()`. The implementation of
+`InheritOption` MUST prepend the parent's `Option.Mutators` to the child's
+`Option.Mutators` slice (parent contributions run first within the child),
+allocating a fresh slice rather than mutating the parent's or child's input.
 
-Before the runtime invokes a step that hosts a sub-workflow (composite step or
-`*Workflow` used as a step), the runtime SHALL check whether the step implements
-`MutatorReceiver` and, if so, call `step.PrependMutators(parent.Mutators)` so that parent
-Mutators reach inner steps.
+The parent SHALL NOT directly walk into a child workflow's `state` map to
+apply Mutators; that remains the inner workflow's responsibility once it
+begins its own scheduling pass with the merged `Option.Mutators` slice.
 
-The contract for implementers is to **prepend** parent Mutators to their own Mutators
-list, preserving the invariant that parent Mutators run before child Mutators.
+The propagation is invoked once per inner-workflow execution. Inner steps
+that are added lazily (e.g. inside the composite step's `Do`) are still
+reached, because Mutator evaluation in the inner workflow is itself
+once-per-step at first scheduling.
 
-The propagation is invoked once per inner-workflow execution. Inner steps that are added
-lazily (e.g. inside the composite step's `Do`) are still reached, because Mutator
-evaluation in the inner workflow is itself once-per-step at first scheduling.
-
-#### Scenario: Parent Mutator reaches step inside SubWorkflow
-- **WHEN** the parent workflow has `flow.Mutate[*Foo]` registered and a step embeds
-  `flow.SubWorkflow` with a `*Foo` inside
-- **THEN** the parent Mutator runs against the inner `*Foo` instance once, before its
-  first attempt
+The previous `MutatorReceiver` interface and `PrependMutators` method SHALL
+NOT exist.
 
 #### Scenario: Parent Mutator reaches step inside nested *Workflow
-- **WHEN** the parent workflow has `flow.Mutate[*Foo]` registered and a `*Workflow` is
-  added as a step containing a `*Foo`
-- **THEN** the parent Mutator runs against the inner `*Foo`
+- **GIVEN** `parent.Option.Mutators = [flow.Mutate[*Foo](fn)]`
+- **AND** a child `*Workflow` containing a `*Foo` step
+- **WHEN** parent runs, with child added as a step
+- **THEN** parent invokes `child.InheritOption(parent.Option)` once before scheduling
+- **AND** the inner workflow's first-schedule pass evaluates the propagated Mutator against `*Foo`
+
+#### Scenario: Parent Mutator reaches inner *Foo when child is wrapped
+- **GIVEN** `parent.Option.Mutators = [flow.Mutate[*Foo](fn)]`
+- **AND** a child `*Workflow` containing a `*Foo` step, added to parent via `flow.Name(child, "name")`
+- **WHEN** parent runs
+- **THEN** the parent's Mutator reaches the inner `*Foo` via `findOptionReceiver`'s `Unwrap` walk
 
 #### Scenario: Lazily added inner steps are reached
-- **WHEN** a composite step embeds `SubWorkflow`, calls `s.Add(new(Foo))` inside its
-  `Do`, and the parent has `flow.Mutate[*Foo]` registered
+- **WHEN** a composite step embeds `flow.Workflow`, calls `s.Add(new(Foo))` inside its
+  `Do`, and the parent has `flow.Mutate[*Foo]` registered under `Option.Mutators`
 - **THEN** the lazily added `*Foo` is seen by the parent Mutator at its first scheduling
   inside the inner workflow
 
+#### Scenario: Multi-level Mutator propagation preserves order
+- **GIVEN** grandparent `Option.Mutators = [A]`, parent `Option.Mutators = [B]`, child `Option.Mutators = [C]`
+- **WHEN** grandparent runs the parent which runs the child
+- **THEN** the child's effective Mutators (during its own scheduling) is `[A, B, C]`
+
 #### Scenario: Child Mutator runs after parent
-- **WHEN** the parent registers Mutator `pm` and a `SubWorkflow`-embedded child registers
-  Mutator `cm`, both targeting `*Foo`
+- **WHEN** the parent registers Mutator `pm` and a child `*Workflow` registers
+  Mutator `cm` (both via `Option.Mutators`), both targeting `*Foo`
 - **THEN** for any `*Foo` inside the child, `pm` runs before `cm`; their `Before` chain
   contributions are appended in that order
-
----
-
-### Requirement: SubWorkflow and *Workflow implement MutatorReceiver
-
-`flow.SubWorkflow` SHALL implement `MutatorReceiver` by prepending the supplied Mutators
-to its inner workflow's `Mutators` slice.
-
-`*flow.Workflow` (when used directly as a step in another workflow) SHALL implement
-`MutatorReceiver` by prepending the supplied Mutators to its own `Mutators` slice.
-
-Both implementations MUST be safe to call multiple times; calling `PrependMutators` twice
-with the same list MUST NOT cause double-execution of the Mutators on the same step
-(deduplication is provided by the once-per-step invariant — once a step's Mutators have
-been applied, re-prepending the slice has no further effect on that step).
-
-#### Scenario: SubWorkflow.PrependMutators prepends in order
-- **WHEN** `parent.Mutators = [m1, m2]` and a SubWorkflow's inner has `[m3]`
-- **THEN** after `PrependMutators` is called, the inner has `[m1, m2, m3]`
-
-#### Scenario: *Workflow used as step inherits Mutators
-- **WHEN** a `*Workflow` is added as a step in another workflow with Mutators `[m1]`
-- **THEN** during execution, `[m1]` is prepended to the inner workflow's Mutators
 
 ---
 

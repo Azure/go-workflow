@@ -79,7 +79,8 @@ func TestMutate_outerWrapperWinsWhenItIsTheTarget(t *testing.T) {
 
 func TestMutate_doesNotCrossWorkflowBoundary(t *testing.T) {
 	// A *Workflow sits between the outer step and the inner *mutFoo.
-	// applyTo must NOT descend into it; that's what PrependMutators is for.
+	// applyTo must NOT descend into it; the parent's Mutators reach the
+	// inner workflow via WorkflowOptionReceiver.InheritOption instead.
 	innerFoo := &mutFoo{}
 	innerWf := new(Workflow).Add(Step(innerFoo))
 

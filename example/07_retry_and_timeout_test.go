@@ -59,7 +59,7 @@ func ExampleAddStep_Retry() {
 // We use a mock clock so the example is fast and deterministic.
 func ExampleAddStep_Retry_perTryTimeout() {
 	mock := clock.NewMock()
-	w := &flow.Workflow{Clock: mock}
+	w := &flow.Workflow{Option: flow.WorkflowOption{Clock: mock}}
 
 	startedAttempt := make(chan struct{}, 16)
 	hangForever := flow.Func("hang", func(ctx context.Context) error {

@@ -75,26 +75,36 @@ serialize behind a low concurrency limit.
 
 ### Requirement: Workflow registration of interceptors
 
-`Workflow` SHALL expose two slice fields for global interceptor registration:
+`Workflow` SHALL expose two slice fields for global interceptor registration
+under `Workflow.Option` (the `WorkflowOption` grouping defined by the
+`workflow-options` capability):
 
 ```go
-type Workflow struct {
+type WorkflowOption struct {
+    // ... other fields ...
     StepInterceptors    []StepInterceptor    // [0] outermost, [len-1] innermost
     AttemptInterceptors []AttemptInterceptor // [0] outermost, [len-1] innermost
-    IsolateInterceptors bool                 // if true, do not inherit from a parent workflow
+    DontInherit         bool                 // if true, do not inherit from a parent workflow
+    // ... other fields ...
 }
 ```
 
-Nil/empty slices mean no interceptors. Existing workflows without interceptors SHALL behave
-identically to before this feature was added (zero-value safe, no allocations on the hot
-path).
+Nil/empty slices mean no interceptors. Existing workflows without
+interceptors SHALL behave identically to before this feature was added
+(zero-value safe, no allocations on the hot path).
+
+The previous top-level `Workflow.StepInterceptors` /
+`Workflow.AttemptInterceptors` / `Workflow.IsolateInterceptors` fields
+SHALL NOT exist. `IsolateInterceptors` is replaced by `Option.DontInherit`,
+whose semantics extend from interceptor-only to whole-`WorkflowOption`
+opt-out.
 
 #### Scenario: Outer-to-inner ordering
-- **WHEN** `StepInterceptors = [A, B]` are registered
+- **WHEN** `Option.StepInterceptors = [A, B]` are registered
 - **THEN** the execution order is `A:before → B:before → step → B:after → A:after`
 
 #### Scenario: No interceptors means no behavioural change
-- **WHEN** a Workflow is constructed without `StepInterceptors` or `AttemptInterceptors`
+- **WHEN** a Workflow is constructed without `Option.StepInterceptors` or `Option.AttemptInterceptors`
 - **THEN** all existing semantics (retries, conditions, BeforeStep/AfterStep) are unchanged
 
 ---
@@ -125,83 +135,91 @@ StepInterceptor[0] → ... → StepInterceptor[N-1]
 
 ### Requirement: Interceptor propagation to nested workflows
 
-`Workflow` SHALL implement the `InterceptorReceiver` interface so that when a `*Workflow`
-(or a step embedding `SubWorkflow`) is used as a Step inside another Workflow, the parent's
-interceptors are prepended to the child's interceptor stack.
+`Workflow` SHALL implement `WorkflowOptionReceiver` (defined in the
+`workflow-options` capability spec) so that when a `*Workflow` (or a user
+struct embedding `flow.Workflow`) is used as a Step inside another
+Workflow, the parent's interceptors are prepended to the child's
+interceptor slices via the parent's prologue-pass `InheritOption` call.
 
-```go
-type InterceptorReceiver interface {
-    PrependInterceptors(step []StepInterceptor, attempt []AttemptInterceptor)
-}
-```
+The parent's `Do()` prologue locates the receiver for each root step by
+walking `Unwrap()` via `findOptionReceiver` (the same protocol used by
+`As[T]` / `Has[T]`) and selecting the first receiver found in pre-order.
+This means a sub-workflow MAY be wrapped in any Steper-only wrapper
+(notably `flow.Name` / `NamedStep`) without losing inheritance.
 
-`stepExecution` locates the `InterceptorReceiver` for a step by walking the Step tree via
-`Unwrap` (the same protocol used by `As[T]` / `Has[T]`) and selecting the first receiver
-found in pre-order. This means a sub-workflow MAY be wrapped in any Steper-only wrapper
-(notably `flow.Name` / `NamedStep`, whose embedded `Steper` interface does not promote
-`PrependInterceptors`) without losing inheritance.
+The parent SHALL invoke `restore := recv.InheritOption(parent.Option)`
+exactly once per root sub-workflow step before the parent's tick begins,
+and SHALL `defer restore()`. Inheritance is **per-run scoped**:
 
-`stepExecution` calls `PrependInterceptors` exactly once per step, in `executeWithRetry`
-before the retry loop begins. Inheritance is **per-run scoped**:
+- The parent's user-supplied `Option.StepInterceptors` /
+  `Option.AttemptInterceptors` slices SHALL NOT be mutated by
+  `InheritOption`; the implementation prepends to a fresh slice.
+- Each `InheritOption` call snapshots the receiver's `Option` and returns
+  a `restore func()` that the parent defers, so prepended parent
+  contributions do not accumulate across repeated `Do()` runs.
 
-- The user-supplied `StepInterceptors` / `AttemptInterceptors` slices SHALL NOT be mutated.
-- The inherited prefix SHALL be stored on private `inheritedStep` / `inheritedAttempt`
-  fields and combined with the base only when constructing the run-time chain.
-- The inherited fields SHALL be cleared via `defer` at the start of every `Do()` so all
-  exit paths (success, preflight error, panic) reset the per-run state.
-- The public `Reset()` method SHALL also clear the inherited fields. The internal
-  `reset()` (called by `Do()` itself) SHALL NOT, since clearing there would wipe the
-  prefix the parent just wrote and break inheritance.
-
-`SubWorkflow.PrependInterceptors` SHALL delegate to the embedded `Workflow.PrependInterceptors`.
+The previous `InterceptorReceiver` interface, `PrependInterceptors` method,
+and `inheritedStep` / `inheritedAttempt` side fields SHALL NOT exist.
 
 #### Scenario: Nested *Workflow inherits parent interceptors
-- **GIVEN** a parent Workflow with a `StepInterceptor` X, and a child `*Workflow` containing
+- **GIVEN** a parent Workflow with `Option.StepInterceptors = [X]`, and a child `*Workflow` containing
   step `S` added as a step in the parent
 - **WHEN** the parent runs
 - **THEN** X is invoked for both the child workflow step and the inner step S
 
-#### Scenario: SubWorkflow inherits parent interceptors
-- **GIVEN** a parent Workflow with a `StepInterceptor` X, and a step embedding `SubWorkflow`
+#### Scenario: Embedded Workflow inherits parent interceptors
+- **GIVEN** a parent Workflow with `Option.StepInterceptors = [X]`, and a step embedding `flow.Workflow`
   containing step `S`
 - **WHEN** the parent runs
 - **THEN** X is invoked for both the outer step and the inner step S
 
 #### Scenario: Inheritance survives Steper-only wrappers (NamedStep / flow.Name)
-- **GIVEN** a parent Workflow with a `StepInterceptor` X, and a child `*Workflow`
-  containing step `S` that is added to the parent via `flow.Name(child, "name")` (which
-  wraps the child in a `NamedStep` whose embedded `Steper` interface does not promote
-  `PrependInterceptors`)
+- **GIVEN** a parent Workflow with `Option.StepInterceptors = [X]`, and a child `*Workflow`
+  containing step `S` that is added to the parent via `flow.Name(child, "name")`
 - **WHEN** the parent runs
 - **THEN** X is invoked for both the wrapping `NamedStep` and the inner step S
-- **AND** inheritance works because `stepExecution` looks up `InterceptorReceiver` via
+- **AND** inheritance works because the parent looks up `WorkflowOptionReceiver` via
   `Unwrap`, not via a direct type assertion on the registered Step
 
-#### Scenario: PrependInterceptors does not duplicate across retries
-- **WHEN** a sub-workflow step is retried N times
-- **THEN** parent interceptors are prepended exactly once, not N times
+#### Scenario: InheritOption does not duplicate across retries
+- **WHEN** a sub-workflow step is retried N times within one parent run
+- **THEN** parent interceptors are prepended to the child's slice exactly once, not N times
 
-#### Scenario: PrependInterceptors does not accumulate across repeated Do() runs
+#### Scenario: InheritOption does not accumulate across repeated Do() runs
 - **GIVEN** a parent containing a child sub-workflow
 - **WHEN** the parent's `Do()` is invoked N times in succession
 - **THEN** each invocation results in the parent's interceptors firing exactly once per
   step (no compounding across runs)
+- **AND** the child's `Option.StepInterceptors` field after each run is its original
+  pre-inheritance value
 
 ---
 
-### Requirement: Opting out of inheritance via IsolateInterceptors
+### Requirement: Opting out of inheritance via DontInherit
 
-A nested `Workflow` MAY set `IsolateInterceptors = true` to opt out of inheriting
-interceptors from its parent. When true, `Workflow.PrependInterceptors` SHALL be a no-op
-and the workflow runs only with its own registered interceptors.
+A nested `Workflow` MAY set `Option.DontInherit = true` to opt out of
+inheriting any of the parent's `WorkflowOption`, including interceptors.
+When true, the merge step performed by `InheritOption` SHALL be a no-op
+and the workflow runs only with its own configured `Option`. A (possibly
+trivial) restore func is still returned so the parent's `defer restore()`
+remains uniform.
 
-This is intended for self-contained sub-workflows that define their own observability
-pipeline (e.g., their own tracer or event sink) that must not be wrapped by parent
-interceptors.
+This is intended for self-contained sub-workflows that define their own
+observability pipeline (e.g., their own tracer or event sink) that must not
+be wrapped by parent interceptors, or that more generally want isolation
+from the parent's whole `WorkflowOption`.
+
+The previous `IsolateInterceptors` flag SHALL NOT exist; its semantics are
+subsumed and widened by `Option.DontInherit`.
+
+#### Scenario: DontInherit blocks interceptor inheritance
+- **GIVEN** parent `Option.StepInterceptors = [X]`, child `Option.DontInherit = true, StepInterceptors = [Y]`
+- **WHEN** parent runs the child
+- **THEN** the child runs with only `[Y]` as its effective StepInterceptors
 
 #### Scenario: Isolated child does not see parent interceptors
-- **GIVEN** a parent Workflow with `StepInterceptor` X and a child Workflow with
-  `IsolateInterceptors = true` and its own `StepInterceptor` Y, containing inner step S
+- **GIVEN** a parent Workflow with `Option.StepInterceptors = [X]` and a child Workflow with
+  `Option.DontInherit = true` and its own `Option.StepInterceptors = [Y]`, containing inner step S
 - **WHEN** the parent runs the child as a step
 - **THEN** X is invoked exactly once (for the child workflow step itself)
 - **AND** Y is invoked for inner step S
@@ -231,27 +249,27 @@ regardless of interceptor behaviour.
 
 ### Requirement: DontPanic protects interceptor panics
 
-When `Workflow.DontPanic` is `true`, panics raised inside user-provided `StepInterceptor`
-or `AttemptInterceptor` implementations SHALL be caught and converted to errors using the
-same `catchPanicAsError` mechanism already applied to `Before` / `Do` / `After`. This
-prevents:
+When `Workflow.Option.DontPanic` is non-nil and dereferences to `true`, panics raised
+inside user-provided `StepInterceptor` or `AttemptInterceptor` implementations SHALL be
+caught and converted to errors using the same `catchPanicAsError` mechanism already
+applied to `Before` / `Do` / `After`. This prevents:
 
 - Process crashes from a faulty user interceptor.
 - `MaxConcurrency` lease leaks (an unrecovered panic skips the deferred `unlease`).
 - Loss of `signalStatusChange`, which would otherwise hang the main `Do()` loop.
 
-When `DontPanic` is `false` (the default), interceptor panics propagate as in normal Go
-semantics.
+When `Option.DontPanic` is nil or dereferences to `false` (the default), interceptor
+panics propagate as in normal Go semantics.
 
 #### Scenario: Panicking StepInterceptor under DontPanic
-- **GIVEN** a Workflow with `DontPanic = true` and a `StepInterceptor` that panics
+- **GIVEN** a Workflow with `Option.DontPanic = &true` and a `StepInterceptor` that panics
 - **WHEN** the Workflow runs
 - **THEN** `Do()` returns an error within a bounded time
 - **AND** the step's `StepResult.Err` carries the panic value
 - **AND** the workflow does not hang waiting for a status signal
 
 #### Scenario: Panicking AttemptInterceptor under DontPanic
-- **GIVEN** a Workflow with `DontPanic = true` and an `AttemptInterceptor` that panics
+- **GIVEN** a Workflow with `Option.DontPanic = &true` and an `AttemptInterceptor` that panics
 - **WHEN** the Workflow runs
 - **THEN** `Do()` returns an error within a bounded time
 - **AND** the step's `StepResult.Err` carries the panic value

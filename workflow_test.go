@@ -258,7 +258,8 @@ func TestSubWorkflow(t *testing.T) {
 func TestMaxConcurrencyDeadlock(t *testing.T) {
 	t.Parallel()
 	a, b, c := NoOp("a"), NoOp("b"), NoOp("c")
-	w := &Workflow{MaxConcurrency: 1}
+	mc := 1
+	w := &Workflow{Option: WorkflowOption{MaxConcurrency: &mc}}
 	w.Add(
 		Step(a),
 		Step(b).DependsOn(a),
@@ -287,7 +288,8 @@ func TestMaxConcurrencyDeadlockStress(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			a, b, c := NoOp("a"), NoOp("b"), NoOp("c")
-			w := &Workflow{MaxConcurrency: 1}
+			mc := 1
+			w := &Workflow{Option: WorkflowOption{MaxConcurrency: &mc}}
 			w.Add(
 				Step(a),
 				Step(b).DependsOn(a),
@@ -311,12 +313,12 @@ func TestStepExecution_BasicSuccess(t *testing.T) {
 	var stepped []Steper
 	step := NoOp("a")
 	w := &Workflow{
-		StepInterceptors: []StepInterceptor{
+		Option: WorkflowOption{StepInterceptors: []StepInterceptor{
 			StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
 				stepped = append(stepped, s)
 				return next(ctx)
 			}),
-		},
+		}},
 	}
 	w.Add(Step(step))
 	assert.NoError(t, w.Do(context.Background()))
@@ -335,7 +337,7 @@ func TestStepExecution_StepInterceptorOrder(t *testing.T) {
 		})
 	}
 	w := &Workflow{
-		StepInterceptors: []StepInterceptor{makeIC("A"), makeIC("B")},
+		Option: WorkflowOption{StepInterceptors: []StepInterceptor{makeIC("A"), makeIC("B")}},
 	}
 	w.Add(Step(NoOp("s")))
 	assert.NoError(t, w.Do(context.Background()))
@@ -365,7 +367,7 @@ func TestStepExecution_StepInterceptorChain_NoVariableCapture(t *testing.T) {
 		return nil
 	})
 	w := &Workflow{
-		StepInterceptors: []StepInterceptor{makeIC("A"), makeIC("B"), makeIC("C"), makeIC("D")},
+		Option: WorkflowOption{StepInterceptors: []StepInterceptor{makeIC("A"), makeIC("B"), makeIC("C"), makeIC("D")}},
 	}
 	w.Add(Step(step))
 	assert.NoError(t, w.Do(context.Background()))
@@ -400,7 +402,7 @@ func TestStepExecution_AttemptInterceptorChain_NoVariableCapture(t *testing.T) {
 		return nil
 	})
 	w := &Workflow{
-		AttemptInterceptors: []AttemptInterceptor{makeIC("X"), makeIC("Y"), makeIC("Z")},
+		Option: WorkflowOption{AttemptInterceptors: []AttemptInterceptor{makeIC("X"), makeIC("Y"), makeIC("Z")}},
 	}
 	w.Add(Step(step).Retry(func(o *RetryOption) {
 		o.Attempts = 3
@@ -426,7 +428,7 @@ func TestStepExecution_AttemptInterceptorOrder(t *testing.T) {
 		})
 	}
 	w := &Workflow{
-		AttemptInterceptors: []AttemptInterceptor{makeIC("X"), makeIC("Y")},
+		Option: WorkflowOption{AttemptInterceptors: []AttemptInterceptor{makeIC("X"), makeIC("Y")}},
 	}
 	w.Add(Step(NoOp("s")))
 	assert.NoError(t, w.Do(context.Background()))
@@ -438,12 +440,12 @@ func TestStepExecution_SkippedStep(t *testing.T) {
 	interceptorCalled := false
 	step := NoOp("a")
 	w := &Workflow{
-		StepInterceptors: []StepInterceptor{
+		Option: WorkflowOption{StepInterceptors: []StepInterceptor{
 			StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
 				interceptorCalled = true
 				return next(ctx)
 			}),
-		},
+		}},
 	}
 	w.Add(Step(step).When(func(_ context.Context, _ map[Steper]StepResult) StepStatus {
 		return Skipped
@@ -466,14 +468,14 @@ func TestStepExecution_RetryingStep(t *testing.T) {
 		return nil
 	})
 	w := &Workflow{
-		AttemptInterceptors: []AttemptInterceptor{
+		Option: WorkflowOption{AttemptInterceptors: []AttemptInterceptor{
 			AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
 				mu.Lock()
 				attempts = append(attempts, attempt)
 				mu.Unlock()
 				return next(ctx)
 			}),
-		},
+		}},
 	}
 	w.Add(Step(step).Retry(func(o *RetryOption) {
 		o.Attempts = 3
@@ -514,9 +516,12 @@ func TestSkippedStep_DoesNotConsumeLease(t *testing.T) {
 	})
 
 	a, b, c := NoOp("a"), NoOp("b"), NoOp("c")
+	mc := 1
 	w := &Workflow{
-		MaxConcurrency:      1,
-		AttemptInterceptors: []AttemptInterceptor{ic},
+		Option: WorkflowOption{
+			MaxConcurrency:      &mc,
+			AttemptInterceptors: []AttemptInterceptor{ic},
+		},
 	}
 	w.Add(
 		Step(a),
@@ -551,12 +556,15 @@ func TestSkippedStep_DoesNotConsumeLease(t *testing.T) {
 func TestInterceptorPanic_DontPanic(t *testing.T) {
 	t.Parallel()
 	step := NoOp("a")
+	dontPanic := true
 	w := &Workflow{
-		DontPanic: true,
-		StepInterceptors: []StepInterceptor{
-			StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
-				panic("boom from StepInterceptor")
-			}),
+		Option: WorkflowOption{
+			DontPanic: &dontPanic,
+			StepInterceptors: []StepInterceptor{
+				StepInterceptorFunc(func(ctx context.Context, s Steper, next func(context.Context) error) error {
+					panic("boom from StepInterceptor")
+				}),
+			},
 		},
 	}
 	w.Add(Step(step))
@@ -581,12 +589,15 @@ func TestInterceptorPanic_DontPanic(t *testing.T) {
 func TestAttemptInterceptorPanic_DontPanic(t *testing.T) {
 	t.Parallel()
 	step := NoOp("a")
+	dontPanic := true
 	w := &Workflow{
-		DontPanic: true,
-		AttemptInterceptors: []AttemptInterceptor{
-			AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
-				panic("boom from AttemptInterceptor")
-			}),
+		Option: WorkflowOption{
+			DontPanic: &dontPanic,
+			AttemptInterceptors: []AttemptInterceptor{
+				AttemptInterceptorFunc(func(ctx context.Context, s Steper, attempt uint64, next func(context.Context) error) error {
+					panic("boom from AttemptInterceptor")
+				}),
+			},
 		},
 	}
 	w.Add(Step(step))

@@ -109,7 +109,7 @@ func (s *State) Option() *StepOption {
 //
 // The do parameter is the panic-catching wrapper supplied by the caller —
 // passing each callback through `do` lets a panicking callback be turned into
-// an error when Workflow.DontPanic is true.
+// an error when Workflow.Option.DontPanic is true.
 func (s *State) Before(root context.Context, step Steper, do func(func() error) error) (context.Context, error) {
 	if s.Config == nil || len(s.Config.Before) == 0 {
 		return root, nil

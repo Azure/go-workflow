@@ -13,33 +13,36 @@ type wfFoo struct{}
 
 func (*wfFoo) Do(context.Context) error { return nil }
 
-func TestWorkflow_PrependMutators(t *testing.T) {
+func TestWorkflow_InheritOption_Mutators(t *testing.T) {
 	m1 := flow.Mutate[*wfFoo](func(ctx context.Context, f *wfFoo) flow.Builder { return nil })
 	m2 := flow.Mutate[*wfFoo](func(ctx context.Context, f *wfFoo) flow.Builder { return nil })
 
-	w := &flow.Workflow{Mutators: []flow.Mutator{m2}}
-	w.PrependMutators([]flow.Mutator{m1})
+	w := &flow.Workflow{Option: flow.WorkflowOption{Mutators: []flow.Mutator{m2}}}
+	// Simulate a parent workflow injecting m1 as a prepended Mutator via
+	// InheritOption (parent → child propagation contract).
+	w.InheritOption(flow.WorkflowOption{Mutators: []flow.Mutator{m1}})
 
-	assert.Len(t, w.Mutators, 2)
+	assert.Len(t, w.Option.Mutators, 2)
 }
 
-func TestWorkflow_PrependMutatorsNilOrEmpty(t *testing.T) {
+func TestWorkflow_InheritOption_NilOrEmptyMutators(t *testing.T) {
 	w := &flow.Workflow{}
-	w.PrependMutators(nil)
-	assert.Empty(t, w.Mutators)
-	w.PrependMutators([]flow.Mutator{})
-	assert.Empty(t, w.Mutators)
+	w.InheritOption(flow.WorkflowOption{}) // empty parent — no contribution
+	assert.Empty(t, w.Option.Mutators)
+	w.InheritOption(flow.WorkflowOption{Mutators: []flow.Mutator{}})
+	assert.Empty(t, w.Option.Mutators)
 }
 
-func TestSubWorkflow_PrependMutators(t *testing.T) {
+func TestSubWorkflow_InheritOption(t *testing.T) {
 	type sub struct{ flow.SubWorkflow }
 	s := &sub{}
 	m := flow.Mutate[*wfFoo](func(ctx context.Context, f *wfFoo) flow.Builder { return nil })
 
-	// MutatorReceiver must be implemented
-	var _ flow.MutatorReceiver = s
-	s.PrependMutators([]flow.Mutator{m})
-	// No panic / no error → behaviour verified by integration test in Task 7
+	// WorkflowOptionReceiver must be implemented (SubWorkflow delegates).
+	var _ flow.WorkflowOptionReceiver = s
+	s.InheritOption(flow.WorkflowOption{Mutators: []flow.Mutator{m}})
+	// Behaviour verified by integration tests; constructing this scenario
+	// exercises the deprecation-window delegation path.
 }
 
 type wfGreet struct {
@@ -53,14 +56,16 @@ func TestMutator_mergesInputBeforeFirstAttempt(t *testing.T) {
 	called := 0
 	g := &wfGreet{Greeting: "Hi"}
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
-				called++
-				return flow.Step(gg).Input(func(_ context.Context, gg *wfGreet) error {
-					gg.Who = "world"
-					return nil
-				})
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+					called++
+					return flow.Step(gg).Input(func(_ context.Context, gg *wfGreet) error {
+						gg.Who = "world"
+						return nil
+					})
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(g))
@@ -89,16 +94,18 @@ func TestMutator_runsExactlyOnceAcrossRetries(t *testing.T) {
 	inputCalls := 0
 	f := &wfFlaky{failTill: 2}
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfFlaky](func(ctx context.Context, ff *wfFlaky) flow.Builder {
-				mutatorCalls++
-				return flow.Step(ff).
-					Retry(func(o *flow.RetryOption) { o.Attempts = 3 }).
-					Input(func(_ context.Context, _ *wfFlaky) error {
-						inputCalls++
-						return nil
-					})
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfFlaky](func(ctx context.Context, ff *wfFlaky) flow.Builder {
+					mutatorCalls++
+					return flow.Step(ff).
+						Retry(func(o *flow.RetryOption) { o.Attempts = 3 }).
+						Input(func(_ context.Context, _ *wfFlaky) error {
+							inputCalls++
+							return nil
+						})
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(f))
@@ -112,7 +119,7 @@ func TestMutator_runsExactlyOnceAcrossRetries(t *testing.T) {
 
 func TestMutator_nilSliceIsNoOp(t *testing.T) {
 	g := &wfGreet{Greeting: "Hi", Who: "Bob"}
-	w := &flow.Workflow{} // Mutators == nil
+	w := &flow.Workflow{} // Option.Mutators == nil
 	w.Add(flow.Step(g))
 	assert.NoError(t, w.Do(context.Background()))
 	assert.Equal(t, "Bob", g.Who)
@@ -124,7 +131,9 @@ type wfComposite struct {
 }
 
 func (c *wfComposite) Do(ctx context.Context) error {
-	// Lazy build inside Do — replaces BuildStep pattern.
+	// Lazy build inside Do — replaces BuildStep pattern. NOTE: in
+	// production code this MUST be guarded by sync.Once when the host step
+	// can be re-executed; this test runs Do once so the bare Add is fine.
 	c.Add(flow.Step(&c.Inner))
 	return c.SubWorkflow.Do(ctx)
 }
@@ -132,18 +141,20 @@ func (c *wfComposite) Do(ctx context.Context) error {
 func TestMutator_reachesIntoSubWorkflow(t *testing.T) {
 	c := &wfComposite{Inner: wfGreet{Greeting: "Hello"}}
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfGreet](func(ctx context.Context, g *wfGreet) flow.Builder {
-				g.Who = "world"
-				return nil
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfGreet](func(ctx context.Context, g *wfGreet) flow.Builder {
+					g.Who = "world"
+					return nil
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(c))
 
 	err := w.Do(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, "world", c.Inner.Who, "parent Mutator must reach inner step via PrependMutators")
+	assert.Equal(t, "world", c.Inner.Who, "parent Mutator must reach inner step via WorkflowOptionReceiver.InheritOption")
 }
 
 func TestMutator_reachesIntoNestedWorkflow(t *testing.T) {
@@ -151,11 +162,13 @@ func TestMutator_reachesIntoNestedWorkflow(t *testing.T) {
 	innerW := new(flow.Workflow).Add(flow.Step(innerG))
 
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfGreet](func(ctx context.Context, g *wfGreet) flow.Builder {
-				g.Who = "world"
-				return nil
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfGreet](func(ctx context.Context, g *wfGreet) flow.Builder {
+					g.Who = "world"
+					return nil
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(innerW))
@@ -169,12 +182,14 @@ func TestMutator_reachesLazilyAddedInnerStep(t *testing.T) {
 	c := &wfComposite{Inner: wfGreet{Greeting: "Yo"}}
 	called := 0
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfGreet](func(ctx context.Context, g *wfGreet) flow.Builder {
-				called++
-				g.Who = "lazy"
-				return nil
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfGreet](func(ctx context.Context, g *wfGreet) flow.Builder {
+					called++
+					g.Who = "lazy"
+					return nil
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(c))
@@ -187,13 +202,15 @@ func TestMutator_planInputBeforeMutatorInput(t *testing.T) {
 	g := &wfGreet{Greeting: "Hi"}
 	order := []string{}
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
-				return flow.Step(gg).Input(func(_ context.Context, _ *wfGreet) error {
-					order = append(order, "mutator")
-					return nil
-				})
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+					return flow.Step(gg).Input(func(_ context.Context, _ *wfGreet) error {
+						order = append(order, "mutator")
+						return nil
+					})
+				}),
+			},
 		},
 	}
 	w.Add(
@@ -217,7 +234,7 @@ func TestMutator_multipleMutatorsRunInSliceOrder(t *testing.T) {
 			})
 		})
 	}
-	w := &flow.Workflow{Mutators: []flow.Mutator{mk("m1"), mk("m2")}}
+	w := &flow.Workflow{Option: flow.WorkflowOption{Mutators: []flow.Mutator{mk("m1"), mk("m2")}}}
 	w.Add(flow.Step(g))
 	assert.NoError(t, w.Do(context.Background()))
 	assert.Equal(t, []string{"m1", "m2"}, order)
@@ -227,11 +244,13 @@ func TestMutator_mergeAtFirstScheduling_NotAtAdd(t *testing.T) {
 	g := &wfGreet{}
 	called := 0
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
-				called++
-				return nil
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+					called++
+					return nil
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(g))
@@ -243,11 +262,13 @@ func TestMutator_mergeAtFirstScheduling_NotAtAdd(t *testing.T) {
 func TestMutator_matchesThroughNameWrapper(t *testing.T) {
 	g := &wfGreet{Greeting: "Hi"}
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
-				gg.Who = "world"
-				return nil
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+					gg.Who = "world"
+					return nil
+				}),
+			},
 		},
 	}
 	w.Add(flow.Name(g, "named-greet"))
@@ -263,13 +284,15 @@ func TestMutator_receivesWorkflowCtx(t *testing.T) {
 	g := &wfGreet{}
 	got := ""
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
-				if v, ok := ctx.Value(wfCtxKey).(string); ok {
-					got = v
-				}
-				return nil
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+					if v, ok := ctx.Value(wfCtxKey).(string); ok {
+						got = v
+					}
+					return nil
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(g))
@@ -282,17 +305,19 @@ func TestMutator_unrelatedBuilderEntryIgnored(t *testing.T) {
 	g := &wfGreet{Greeting: "Hi", Who: "Bob"}
 	other := &wfGreet{Who: "untouched"}
 	w := &flow.Workflow{
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
-				if gg == g {
-					// Mistakenly return a Builder keyed on `other` instead of `gg`.
-					return flow.Step(other).Input(func(_ context.Context, o *wfGreet) error {
-						o.Who = "stolen"
-						return nil
-					})
-				}
-				return nil
-			}),
+		Option: flow.WorkflowOption{
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+					if gg == g {
+						// Mistakenly return a Builder keyed on `other` instead of `gg`.
+						return flow.Step(other).Input(func(_ context.Context, o *wfGreet) error {
+							o.Who = "stolen"
+							return nil
+						})
+					}
+					return nil
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(g)) // only g is in the workflow
@@ -302,12 +327,15 @@ func TestMutator_unrelatedBuilderEntryIgnored(t *testing.T) {
 
 func TestMutator_panicCaughtWhenDontPanic(t *testing.T) {
 	g := &wfGreet{}
+	dontPanic := true
 	w := &flow.Workflow{
-		DontPanic: true,
-		Mutators: []flow.Mutator{
-			flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
-				panic("boom")
-			}),
+		Option: flow.WorkflowOption{
+			DontPanic: &dontPanic,
+			Mutators: []flow.Mutator{
+				flow.Mutate[*wfGreet](func(ctx context.Context, gg *wfGreet) flow.Builder {
+					panic("boom")
+				}),
+			},
 		},
 	}
 	w.Add(flow.Step(g))

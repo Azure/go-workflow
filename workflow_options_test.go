@@ -13,9 +13,10 @@ import (
 
 func TestDontPanic(t *testing.T) {
 	t.Parallel()
+	dontPanic := true
 	t.Run("panic in step", func(t *testing.T) {
 		t.Parallel()
-		workflow := &Workflow{DontPanic: true}
+		workflow := &Workflow{Option: WorkflowOption{DontPanic: &dontPanic}}
 		panicStep := Func("panic", func(ctx context.Context) error {
 			panic("panic in step")
 		})
@@ -27,7 +28,7 @@ func TestDontPanic(t *testing.T) {
 	})
 	t.Run("panic in flow", func(t *testing.T) {
 		t.Parallel()
-		workflow := &Workflow{DontPanic: true}
+		workflow := &Workflow{Option: WorkflowOption{DontPanic: &dontPanic}}
 		answer := FuncO("answer", func(ctx context.Context) (int, error) {
 			return 42, nil
 		})
@@ -47,7 +48,7 @@ func TestDontPanic(t *testing.T) {
 	})
 	t.Run("panic will have stack traces", func(t *testing.T) {
 		t.Parallel()
-		workflow := &Workflow{DontPanic: true}
+		workflow := &Workflow{Option: WorkflowOption{DontPanic: &dontPanic}}
 		panicStep := Func("panic", func(ctx context.Context) error {
 			panic("panic in step")
 		})
@@ -63,7 +64,8 @@ func TestMaxConcurrency(t *testing.T) {
 	t.Parallel()
 	t.Run("MaxConcurrency=2 allows at most 2 concurrent Steps", func(t *testing.T) {
 		t.Parallel()
-		w := &Workflow{MaxConcurrency: 2}
+		mc := 2
+		w := &Workflow{Option: WorkflowOption{MaxConcurrency: &mc}}
 		var running atomic.Int32
 		var maxSeen atomic.Int32
 		gate := make(chan struct{})
@@ -98,7 +100,8 @@ func TestMaxConcurrency(t *testing.T) {
 	t.Run("MaxConcurrency=0 imposes no limit", func(t *testing.T) {
 		t.Parallel()
 		const n = 4
-		w := &Workflow{MaxConcurrency: 0}
+		mc := 0
+		w := &Workflow{Option: WorkflowOption{MaxConcurrency: &mc}}
 		var running atomic.Int32
 		var maxSeen atomic.Int32
 		gate := make(chan struct{})
@@ -133,6 +136,7 @@ func TestMaxConcurrency(t *testing.T) {
 
 func TestSkipAsError(t *testing.T) {
 	t.Parallel()
+	skipAsError := true
 	t.Run("Skipped is acceptable by default", func(t *testing.T) {
 		step := Func("step", func(ctx context.Context) error { return Skip(nil) })
 		w := new(Workflow).Add(Step(step))
@@ -141,7 +145,7 @@ func TestSkipAsError(t *testing.T) {
 
 	t.Run("Skipped counts as error when SkipAsError=true", func(t *testing.T) {
 		step := Func("step", func(ctx context.Context) error { return Skip(nil) })
-		w := &Workflow{SkipAsError: true}
+		w := &Workflow{Option: WorkflowOption{SkipAsError: &skipAsError}}
 		w.Add(Step(step))
 		assert.Error(t, w.Do(context.Background()))
 	})
@@ -149,13 +153,16 @@ func TestSkipAsError(t *testing.T) {
 
 func TestClock(t *testing.T) {
 	t.Parallel()
-	t.Run("Nil Clock uses wall clock", func(t *testing.T) {
+	t.Run("Nil Clock uses wall clock via accessor", func(t *testing.T) {
 		step := Func("step", func(ctx context.Context) error { return nil })
 		w := &Workflow{}
 		w.Add(Step(step))
-		assert.Nil(t, w.Clock)
+		assert.Nil(t, w.Option.Clock, "Clock field starts unset")
+		assert.NotNil(t, w.clock(), "w.clock() returns a real clock when field is nil")
 		assert.NoError(t, w.Do(context.Background()))
-		assert.NotNil(t, w.Clock)
+		// New contract: w.Option.Clock is NOT written by Do() — the accessor
+		// returns a fresh clock.New() on each call when the field is unset.
+		assert.Nil(t, w.Option.Clock, "Do() must not mutate Option.Clock")
 	})
 
 	t.Run("Mock clock controls Step timeout", func(t *testing.T) {
@@ -170,7 +177,7 @@ func TestClock(t *testing.T) {
 				return nil
 			}
 		})
-		w := &Workflow{Clock: mockClock}
+		w := &Workflow{Option: WorkflowOption{Clock: mockClock}}
 		w.Add(Step(step).Timeout(time.Minute))
 
 		done := make(chan error, 1)

@@ -1,80 +1,147 @@
-## ADDED Requirements
+# workflow-options Specification
+
+## Purpose
+
+This capability covers `flow.Workflow`'s top-level configuration surface,
+grouped under a single named field `Workflow.Option WorkflowOption`. It
+defines:
+
+- The `WorkflowOption` struct and its scalar pointer / slice fields.
+- The `WorkflowOptionReceiver` interface used to propagate `WorkflowOption`
+  from a parent workflow into a sub-workflow root step.
+- The merge rules for parent → child Option inheritance (scalars, slices,
+  `DontInherit` opt-out).
+- The accumulation-prevention contract: each `InheritOption` invocation
+  returns a `restore func()` that the parent defers, so writes performed
+  during one parent `Do()` run do not bleed into subsequent runs.
+- The role of `Workflow.Reset()`, which rewinds per-step status only.
+
+## Requirements
+
+### Requirement: WorkflowOption groups workflow-level configuration
+
+`flow.Workflow` SHALL expose all configuration fields under a single named
+field `Option WorkflowOption`. The previous nine top-level configuration
+fields (`MaxConcurrency`, `DontPanic`, `SkipAsError`, `Clock`,
+`DefaultOption`, `Mutators`, `StepInterceptors`, `AttemptInterceptors`,
+`IsolateInterceptors`) SHALL NOT exist as direct fields on `Workflow`.
+
+`WorkflowOption` SHALL declare:
+
+```go
+type WorkflowOption struct {
+    MaxConcurrency    *int
+    DontPanic         *bool
+    SkipAsError       *bool
+    Clock             clock.Clock
+    StepDefaults      *StepOption
+
+    Mutators            []Mutator
+    StepInterceptors    []StepInterceptor
+    AttemptInterceptors []AttemptInterceptor
+
+    DontInherit bool
+}
+```
+
+Scalar configuration fields are pointer-typed so that "unset" (nil pointer)
+and "explicit zero value" are distinguishable. This distinction is required
+for parent → child Option inheritance: a nil pointer on the child means
+"inherit from parent"; a non-nil pointer means "child wins".
+
+#### Scenario: Workflow exposes Option field
+- **WHEN** a user constructs `&flow.Workflow{Option: flow.WorkflowOption{...}}`
+- **THEN** the Workflow accepts the configuration and applies it
+
+#### Scenario: Explicit zero is distinguishable from unset
+- **GIVEN** a parent with `Option.MaxConcurrency = &four` (where `four = 4`)
+- **AND** a child with `Option.MaxConcurrency = &zero` (where `zero = 0`)
+- **WHEN** parent runs the child as a sub-workflow
+- **THEN** the child observes `MaxConcurrency = 0` (unlimited), NOT inherited 4
+
+---
 
 ### Requirement: MaxConcurrency limits simultaneous running Steps
 
-When `Workflow.MaxConcurrency` is set to a positive integer `N`, the Workflow SHALL run
-at most `N` Steps concurrently. Additional runnable Steps wait until a running Step
-terminates before starting. A value of `0` (the default) means unlimited concurrency.
+When `Workflow.Option.MaxConcurrency` is non-nil and points to a positive integer
+`N`, the Workflow SHALL run at most `N` Steps concurrently. Additional runnable
+Steps wait until a running Step terminates before starting. A nil pointer (the
+default) or a value of `0` means unlimited concurrency.
 
 The limit is implemented via a buffered channel used as a lease bucket.
 
 #### Scenario: MaxConcurrency=2 allows exactly 2 concurrent Steps
-- **WHEN** `MaxConcurrency` is 2 and 3 independent Steps are added
+- **WHEN** `Option.MaxConcurrency` points to `2` and 3 independent Steps are added
 - **THEN** at most 2 Steps run simultaneously; the third starts only after one finishes
 
-#### Scenario: MaxConcurrency=0 imposes no limit
-- **WHEN** `MaxConcurrency` is 0 (the default)
+#### Scenario: MaxConcurrency nil imposes no limit
+- **WHEN** `Option.MaxConcurrency` is nil (the default)
 - **THEN** all runnable Steps start concurrently without any concurrency bound
 
 ---
 
 ### Requirement: DontPanic converts panics to errors
 
-When `Workflow.DontPanic` is `true`, any `panic` in a Step's `Do`, `Input`, or
-`BeforeStep`/`AfterStep` callbacks is recovered and returned as a `ErrPanic`-wrapped
-error, setting the Step to `Failed`. Stack trace information is captured and included
-in the error.
+When `Workflow.Option.DontPanic` is non-nil and dereferences to `true`, any
+`panic` in a Step's `Do`, `Input`, or `BeforeStep`/`AfterStep` callbacks is
+recovered and returned as a `ErrPanic`-wrapped error, setting the Step to
+`Failed`. Stack trace information is captured and included in the error.
 
-When `DontPanic` is `false` (the default), panics propagate normally and crash the
-process.
+When `Option.DontPanic` is nil (the default) or dereferences to `false`,
+panics propagate normally and crash the process.
 
 #### Scenario: Panic converted to Failed with DontPanic=true
-- **WHEN** `DontPanic` is `true` and a Step panics during `Do`
+- **WHEN** `Option.DontPanic` points to `true` and a Step panics during `Do`
 - **THEN** the Step status is `Failed`; the returned `ErrWorkflow` entry wraps the panic
   value as an `ErrPanic`
 
-#### Scenario: Panic propagates with DontPanic=false
-- **WHEN** `DontPanic` is `false` and a Step panics
+#### Scenario: Panic propagates with DontPanic nil
+- **WHEN** `Option.DontPanic` is nil and a Step panics
 - **THEN** the panic propagates out of the goroutine (process crash or test failure)
 
 ---
 
 ### Requirement: SkipAsError controls whether Skipped counts as failure
 
-When `Workflow.SkipAsError` is `false` (the default), Steps that are `Skipped` are
-considered acceptable outcomes. `workflow.Do` returns `nil` if all root Steps are
-`Succeeded` or `Skipped`.
+When `Workflow.Option.SkipAsError` is nil or dereferences to `false` (the
+default), Steps that are `Skipped` are considered acceptable outcomes.
+`workflow.Do` returns `nil` if all root Steps are `Succeeded` or `Skipped`.
 
-When `SkipAsError` is `true`, any `Skipped` Step causes `workflow.Do` to return an
-`ErrWorkflow` even if no Step actually failed.
+When `Option.SkipAsError` dereferences to `true`, any `Skipped` Step causes
+`workflow.Do` to return an `ErrWorkflow` even if no Step actually failed.
 
 #### Scenario: Skipped is acceptable by default
-- **WHEN** `SkipAsError` is `false` and all root Steps are either `Succeeded` or `Skipped`
+- **WHEN** `Option.SkipAsError` is nil and all root Steps are either `Succeeded` or `Skipped`
 - **THEN** `workflow.Do` returns `nil`
 
 #### Scenario: Skipped counts as error when SkipAsError=true
-- **WHEN** `SkipAsError` is `true` and at least one root Step is `Skipped`
+- **WHEN** `Option.SkipAsError` points to `true` and at least one root Step is `Skipped`
 - **THEN** `workflow.Do` returns an `ErrWorkflow` containing the skipped Step
 
 ---
 
-### Requirement: DefaultOption applies a baseline StepOption to all Steps
+### Requirement: StepDefaults applies a baseline StepOption to all Steps
 
-`Workflow.DefaultOption` is a `*StepOption` that the Workflow prepends to the Option
-slice of every Step added to it. This lets callers set a universal default for all Steps
-(e.g., a global timeout) without modifying each Step individually.
+`Workflow.Option.StepDefaults` is a `*StepOption` that the Workflow
+prepends to the Option slice of every Step added to it. This lets callers set
+a universal default for all Steps (e.g., a global timeout) without modifying
+each Step individually.
 
-Step-level options that are set after the default take precedence because the Option
-slice is evaluated left-to-right and later values overwrite earlier ones on the same
-`StepOption` struct.
+Step-level options that are set after the default take precedence because the
+Option slice is evaluated left-to-right and later values overwrite earlier
+ones on the same `StepOption` struct.
 
-#### Scenario: DefaultOption sets a global timeout
-- **WHEN** `Workflow.DefaultOption` has `Timeout` set to 10 minutes
+The renaming from `DefaultOption` to `StepDefaults` clarifies that the
+field configures step-level options, not workflow-level options
+(`WorkflowOption`).
+
+#### Scenario: StepDefaults sets a global timeout
+- **WHEN** `Option.StepDefaults` has `Timeout` set to 10 minutes
   and a Step is added without its own `Timeout`
 - **THEN** the effective timeout for that Step is 10 minutes
 
 #### Scenario: Step-level option overrides the default
-- **WHEN** `Workflow.DefaultOption` has `Timeout` of 10 minutes and a Step declares
+- **WHEN** `Option.StepDefaults` has `Timeout` of 10 minutes and a Step declares
   `.Timeout(5 * time.Minute)`
 - **THEN** the effective timeout for that Step is 5 minutes
 
@@ -82,18 +149,194 @@ slice is evaluated left-to-right and later values overwrite earlier ones on the 
 
 ### Requirement: Clock enables time injection for testing
 
-`Workflow.Clock` is a `clock.Clock` interface (from `github.com/benbjohnson/clock`).
-The Workflow uses the Clock for all time-related operations: Step-level timeouts,
-per-try timeouts in the retry loop, and backoff waits.
+`Workflow.Option.Clock` is a `clock.Clock` interface (from
+`github.com/benbjohnson/clock`). The Workflow uses the Clock for all
+time-related operations: Step-level timeouts, per-try timeouts in the retry
+loop, and backoff waits.
 
-When `Clock` is `nil`, the Workflow uses the real wall clock (`clock.New()`).
-Providing a mock clock allows unit tests to control time without real delays.
+When `Option.Clock` is `nil`, the Workflow uses the real wall clock
+(`clock.New()`). Providing a mock clock allows unit tests to control time
+without real delays.
 
 #### Scenario: Nil Clock uses wall clock
-- **WHEN** `Workflow.Clock` is not set
-- **THEN** the Workflow automatically initializes it to `clock.New()` at the start of `Do`
+- **WHEN** `Option.Clock` is not set
+- **THEN** the Workflow automatically uses `clock.New()` for all time operations
 
 #### Scenario: Mock clock controls timeout behavior in tests
-- **WHEN** a `clock.Mock` is injected as `Workflow.Clock`
+- **WHEN** a `clock.Mock` is injected as `Option.Clock`
   and the mock is advanced past a Step's `Timeout` duration
 - **THEN** the Step's context is canceled and the Step is set to `Canceled`
+
+---
+
+### Requirement: WorkflowOptionReceiver propagates Option to sub-workflows
+
+`flow.Workflow` SHALL implement `WorkflowOptionReceiver`:
+
+```go
+type WorkflowOptionReceiver interface {
+    // InheritOption merges the parent's WorkflowOption into the receiver
+    // (scalars: child wins when non-nil; slices: parent prepended).
+    // It returns a restore func that the parent MUST defer to rewind
+    // the receiver's Option to its pre-inheritance state, so writes
+    // performed during one parent Do() run do not accumulate across
+    // subsequent runs.
+    InheritOption(parent WorkflowOption) (restore func())
+}
+```
+
+The parent Workflow SHALL invoke `restore := child.InheritOption(parent.Option)`
+exactly once per sub-workflow root step, in the parent's `Do()` prologue
+(after `init()`, before the scheduling tick begins), and SHALL `defer restore()`
+so the receiver's Option is rewound on every exit path. The parent SHALL
+locate the receiver by walking each root step's `Unwrap()` chain via
+`findOptionReceiver`, returning the first `WorkflowOptionReceiver` found in
+pre-order. This means a sub-workflow MAY be wrapped in any Steper-only
+wrapper (notably `flow.Name` / `NamedStep`) without losing inheritance.
+
+`Workflow.InheritOption` SHALL apply the following merge rules:
+
+1. If `w.Option.DontInherit` is `true`, `InheritOption` SHALL be a no-op
+   for the merge step but SHALL still return a (possibly trivial) restore
+   func so the parent's `defer restore()` is always safe.
+2. For each scalar pointer field (`MaxConcurrency`, `DontPanic`,
+   `SkipAsError`) and each interface/pointer field (`Clock`,
+   `StepDefaults`): if the child's field is nil, set it to the parent's
+   value. Non-nil child fields SHALL NOT be modified.
+3. For each slice field (`Mutators`, `StepInterceptors`,
+   `AttemptInterceptors`): allocate a fresh slice equal to
+   `parent_slice ++ child_slice` and assign it to the child's field. The
+   parent's and child's input slices SHALL NOT be mutated.
+
+The parent's user-supplied `WorkflowOption` SHALL NOT be mutated by
+`InheritOption`.
+
+#### Scenario: Scalar nil inherits parent's value
+- **GIVEN** parent `Option.DontPanic = &true`, child `Option.DontPanic = nil`
+- **WHEN** parent invokes `restore := child.InheritOption(parent.Option)`
+- **THEN** child observes `DontPanic = true` for the duration of the run
+- **AND** after `restore()` runs, the child's `Option.DontPanic` is back to nil
+
+#### Scenario: Scalar non-nil child wins
+- **GIVEN** parent `Option.MaxConcurrency = &four`, child `Option.MaxConcurrency = &eight`
+- **WHEN** parent invokes `child.InheritOption(parent.Option)`
+- **THEN** child observes `MaxConcurrency = 8`
+
+#### Scenario: Slices are parent-prepended
+- **GIVEN** parent `Option.Mutators = [A]`, child `Option.Mutators = [B]`
+- **WHEN** parent invokes `child.InheritOption(parent.Option)`
+- **THEN** child's effective `Mutators` is `[A, B]` for the duration of the run
+
+#### Scenario: Multi-level nesting prepends in order
+- **GIVEN** grandparent `Option.Mutators = [A]`, parent `Option.Mutators = [B]`, child `Option.Mutators = [C]`
+- **WHEN** grandparent runs, propagating to parent then to child
+- **THEN** child's effective `Mutators` is `[A, B, C]`
+
+#### Scenario: Inheritance survives Steper-only wrappers
+- **GIVEN** a parent with a `Mutator` registered, and a child `*Workflow` added to the parent via `flow.Name(child, "name")`
+- **WHEN** the parent runs
+- **THEN** the parent's `Mutator` reaches the inner steps via `InheritOption` propagation through `Unwrap`
+
+---
+
+### Requirement: DontInherit opts out of all parent Option inheritance
+
+When a sub-workflow's `Option.DontInherit` is `true`, the parent's
+`InheritOption(parent.Option)` call SHALL be a merge no-op. The
+sub-workflow runs with exactly its own configured Option, with no scalars
+filled in from the parent and no slices prepended. `InheritOption` still
+returns a (possibly trivial) restore func so the parent's `defer restore()`
+remains safe and uniform.
+
+This replaces the previous `IsolateInterceptors` flag and widens its
+semantics from interceptor-only to whole-Option opt-out. The naming aligns
+with `DontPanic`.
+
+#### Scenario: DontInherit blocks scalar inheritance
+- **GIVEN** parent `Option.DontPanic = &true`, child `Option.DontInherit = true, DontPanic = nil`
+- **WHEN** parent invokes `child.InheritOption(parent.Option)`
+- **THEN** child observes `DontPanic = false` (nil dereferenced as default)
+
+#### Scenario: DontInherit blocks slice prepending
+- **GIVEN** parent `Option.Mutators = [A]`, child `Option.DontInherit = true, Mutators = [B]`
+- **WHEN** parent invokes `child.InheritOption(parent.Option)`
+- **THEN** child's effective `Mutators` is `[B]`, not `[A, B]`
+
+---
+
+### Requirement: InheritOption restore prevents cross-run accumulation
+
+The `restore func()` returned by `InheritOption` SHALL rewind the receiver's
+`Option` to its pre-inheritance value (a snapshot captured at the start of
+`InheritOption`). The parent SHALL `defer restore()` for every receiver it
+called `InheritOption` on, ensuring that on every exit path of the parent's
+`Do()` (success, error, or panic) the children's Option fields are reset.
+
+This guarantees that `InheritOption` writes performed by a parent during one
+`Do()` run do not accumulate into subsequent runs of the same parent or of
+the same child reused under a different parent.
+
+The snapshot captured inside `InheritOption` is a shallow copy. This is
+correct because:
+
+- Pointer overwrites on nil scalar fields point to the parent's existing
+  pointer values without mutating them; restoring the snapshot resets
+  the pointer back to nil.
+- Slice fields are always written via fresh `make`-and-append in
+  `InheritOption`; the snapshot's slice header still references the
+  pre-inheritance backing array, which is what restore reinstates.
+
+The internal `reset()` SHALL NOT clear `w.Option` (that is the restore
+func's job, deferred at the parent scope).
+
+The public `Workflow.Reset()` SHALL NOT clear `w.Option` either, because
+the restore mechanism already prevents accumulation; `Reset()` exists
+solely to reset per-step status (see the `Reset` requirement).
+
+#### Scenario: Repeated Do() runs do not accumulate inherited contributions
+- **GIVEN** a parent with `Option.Mutators = [A]` and a child with `Option.Mutators = [B]`
+- **WHEN** `parent.Do()` is invoked N times
+- **THEN** each invocation results in the child's effective `Mutators` being `[A, B]` during the run
+- **AND** the child's `Option.Mutators` field is `[B]` after each run completes
+
+#### Scenario: Restore covers all exit paths
+- **WHEN** `Do()` returns successfully, returns an error, or panics (when not recovered)
+- **THEN** every `restore()` deferred by the parent fires; each receiver's `Option` is restored to its pre-`InheritOption` state
+
+---
+
+### Requirement: Reset rewinds per-step status without touching the step set
+
+`Workflow.Reset()` SHALL set every Step's status from any terminal state
+(`Succeeded`, `Failed`, `Skipped`, `Canceled`) back to `Pending`, allowing
+`Do()` to be invoked again on the same Workflow. `Reset()` SHALL reject
+with `ErrWorkflowIsRunning` if a `Do()` call is currently in flight.
+
+`Reset()` SHALL NOT modify `w.steps` (the set of Steps registered via
+`Add`). This is a contract: a Workflow built once via `Add` can be
+`Do()`-ed any number of times via `Reset/Do` cycles, with the same DAG
+each time. To start from an empty set of Steps, allocate a new `Workflow`.
+
+`Reset()` SHALL NOT modify `w.Option`. Cross-run accumulation of
+parent-inherited contributions is prevented by the `restore func()` returned
+from `InheritOption` (see the preceding requirement), not by `Reset()`.
+Calling `Reset()` between runs is therefore optional from an Option-isolation
+standpoint; its purpose is purely to rewind per-step status for re-execution.
+
+#### Scenario: Reset rewinds status but preserves the DAG
+- **GIVEN** a Workflow with steps `[a, b, c]` that has been `Do()`-ed once
+- **WHEN** `w.Reset()` is called and then `w.Do()` is called again
+- **THEN** all three steps execute a second time
+- **AND** `w.steps` still contains `[a, b, c]`
+
+#### Scenario: Reset rejected while a Do is in flight
+- **WHEN** `Reset()` is called while `Do()` is executing on the same Workflow
+- **THEN** `Reset()` returns `ErrWorkflowIsRunning` without modifying state
+
+#### Scenario: Reset is not required to prevent Option accumulation
+- **GIVEN** a parent with `Option.Mutators = [A]` and a child with `Option.Mutators = [B]`
+- **WHEN** `parent.Do()` is invoked N times in succession WITHOUT calling
+  `parent.Reset()` between runs (the parent has no terminal-status steps
+  to reset because each Do() resets internally via the unexported `reset()`)
+- **THEN** each invocation results in the child's effective `Mutators`
+  being `[A, B]` during the run, with no accumulation

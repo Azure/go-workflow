@@ -161,22 +161,28 @@ for parent → child Option inheritance: a nil pointer on the child means
 
 ```go
 type WorkflowOptionReceiver interface {
-    InheritOption(parent WorkflowOption)
+    // InheritOption merges the parent's WorkflowOption into the receiver
+    // and returns a restore func that the parent MUST defer to rewind the
+    // receiver's Option to its pre-inheritance state.
+    InheritOption(parent WorkflowOption) (restore func())
 }
 ```
 
-The parent Workflow SHALL invoke `InheritOption(parent.Option)` exactly once
-per sub-workflow root step, in the parent's `Do()` prologue (after `init()`,
-before the scheduling tick begins). The parent SHALL locate the receiver by
-walking each root step's `Unwrap()` chain via `findOptionReceiver`, returning
-the first `WorkflowOptionReceiver` found in pre-order. This means a
-sub-workflow MAY be wrapped in any Steper-only wrapper (notably `flow.Name` /
-`NamedStep`) without losing inheritance.
+The parent Workflow SHALL invoke `restore := child.InheritOption(parent.Option)`
+exactly once per sub-workflow root step, in the parent's `Do()` prologue
+(after `init()`, before the scheduling tick begins), and SHALL `defer
+restore()` so the receiver's Option is rewound on every exit path. The
+parent SHALL locate the receiver by walking each root step's `Unwrap()`
+chain via `findOptionReceiver`, returning the first `WorkflowOptionReceiver`
+found in pre-order. This means a sub-workflow MAY be wrapped in any
+Steper-only wrapper (notably `flow.Name` / `NamedStep`) without losing
+inheritance.
 
 `Workflow.InheritOption` SHALL apply the following merge rules:
 
-1. If `w.Option.DontInherit` is `true`, return immediately without modifying
-   any field.
+1. If `w.Option.DontInherit` is `true`, the merge SHALL be a no-op; a
+   (possibly trivial) restore func SHALL still be returned so the parent's
+   `defer restore()` is uniformly safe.
 2. For each scalar pointer field (`MaxConcurrency`, `DontPanic`,
    `SkipAsError`) and each interface/pointer field (`Clock`,
    `StepDefaults`): if the child's field is nil, set it to the parent's
@@ -191,8 +197,9 @@ The parent's user-supplied `WorkflowOption` SHALL NOT be mutated by
 
 #### Scenario: Scalar nil inherits parent's value
 - **GIVEN** parent `Option.DontPanic = &true`, child `Option.DontPanic = nil`
-- **WHEN** parent invokes `child.InheritOption(parent.Option)`
+- **WHEN** parent invokes `restore := child.InheritOption(parent.Option)`
 - **THEN** child observes `DontPanic = true` for the duration of the run
+- **AND** after `restore()` runs, the child's `Option.DontPanic` is back to nil
 
 #### Scenario: Scalar non-nil child wins
 - **GIVEN** parent `Option.MaxConcurrency = &four`, child `Option.MaxConcurrency = &eight`
@@ -239,26 +246,34 @@ with `DontPanic`.
 
 ---
 
-### Requirement: Do() snapshots and restores Option to prevent accumulation
+### Requirement: InheritOption restore prevents cross-run accumulation
 
-`Workflow.Do()` SHALL snapshot `w.Option` immediately after acquiring the
-`isRunning` lock and SHALL restore `w.Option` from the snapshot via `defer`.
-This ensures that `InheritOption` writes performed by a parent during one
-`Do()` run do not accumulate into subsequent runs.
+The `restore func()` returned by `InheritOption` SHALL rewind the receiver's
+`Option` to its pre-inheritance value (a snapshot captured at the start of
+`InheritOption`). The parent SHALL `defer restore()` for every receiver it
+called `InheritOption` on, ensuring that on every exit path of the parent's
+`Do()` (success, error, or panic) the children's Option fields are reset.
 
-The snapshot is a shallow copy. This is correct because:
+This guarantees that `InheritOption` writes performed by a parent during
+one `Do()` run do not accumulate into subsequent runs of the same parent
+or of the same child reused under a different parent.
+
+The snapshot captured inside `InheritOption` is a shallow copy. This is
+correct because:
 
 - Pointer overwrites on nil scalar fields point to the parent's existing
-  pointer values without mutating them.
+  pointer values without mutating them; restoring the snapshot resets
+  the pointer back to nil.
 - Slice fields are always written via fresh `make`-and-append in
   `InheritOption`; the snapshot's slice header still references the
-  pre-inheritance backing array.
+  pre-inheritance backing array, which is what restore reinstates.
 
-The internal `reset()` SHALL NOT clear `w.Option` (that is the snapshot
-restore's job, and reset runs at the top of `Do()` before scheduling).
+The internal `reset()` SHALL NOT clear `w.Option` (that is the restore
+func's job, deferred at the parent scope, and reset runs at the top of
+`Do()` before scheduling).
 
 The public `Workflow.Reset()` SHALL NOT clear `w.Option` either, because
-the snapshot/restore mechanism in `Do()` already prevents accumulation;
+the restore mechanism in the parent's `Do()` already prevents accumulation;
 `Reset()` exists solely to reset per-step status (see the `Reset` requirement).
 
 #### Scenario: Repeated Do() runs do not accumulate inherited contributions
@@ -267,9 +282,9 @@ the snapshot/restore mechanism in `Do()` already prevents accumulation;
 - **THEN** each invocation results in the child's effective `Mutators` being `[A, B]` during the run
 - **AND** the child's `Option.Mutators` field is `[B]` after each run completes
 
-#### Scenario: Snapshot/restore covers all exit paths
+#### Scenario: Restore covers all exit paths
 - **WHEN** `Do()` returns successfully, returns an error, or panics (when not recovered)
-- **THEN** `w.Option` is restored to its pre-`Do()` state via `defer`
+- **THEN** every `restore()` deferred by the parent fires; each receiver's `Option` is restored to its pre-`InheritOption` state
 
 ---
 
@@ -286,10 +301,10 @@ with `ErrWorkflowIsRunning` if a `Do()` call is currently in flight.
 each time. To start from an empty set of Steps, allocate a new `Workflow`.
 
 `Reset()` SHALL NOT modify `w.Option`. Cross-run accumulation of
-parent-inherited contributions is prevented by the snapshot/restore in
-`Do()` (see the preceding requirement), not by `Reset()`. Calling `Reset()`
-between runs is therefore optional from an Option-isolation standpoint;
-its purpose is purely to rewind per-step status for re-execution.
+parent-inherited contributions is prevented by the `restore func()` returned
+from `InheritOption` (see the preceding requirement), not by `Reset()`.
+Calling `Reset()` between runs is therefore optional from an Option-isolation
+standpoint; its purpose is purely to rewind per-step status for re-execution.
 
 #### Scenario: Reset rewinds status but preserves the DAG
 - **GIVEN** a Workflow with steps `[a, b, c]` that has been `Do()`-ed once
@@ -336,6 +351,7 @@ interceptor-only opt-out to whole-`WorkflowOption` opt-out.
 
 ### Requirement: ~~inheritedStep / inheritedAttempt side fields~~
 
-**Reason:** The accumulation-prevention invariant is now satisfied by
-snapshot-and-restore of `w.Option` in `Do()`; the side fields and their
-special-cased `reset()` behavior are no longer needed.
+**Reason:** The accumulation-prevention invariant is now satisfied by the
+`restore func()` returned from `InheritOption` and deferred by the parent;
+the side fields and their special-cased `reset()` behavior are no longer
+needed.

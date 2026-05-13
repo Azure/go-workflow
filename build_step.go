@@ -17,6 +17,14 @@ package flow
 //
 // The StepBuilder is embedded in Workflow itself, so Workflow.Add transparently
 // invokes BuildStep on every newly seen step.
+//
+// Deprecated: StepBuilder, the [StepBuilder.BuildStep] method, the user-facing
+// `BuildStep()` hook, and [SubWorkflow] are all scheduled for removal together
+// in the next major version of go-workflow. Use [Mutate] for cross-cutting
+// modification and construct sub-workflows at the call site instead (embed
+// [Workflow] directly, or build inside Do() guarded by sync.Once). Behavior
+// is unchanged in this release; Workflow still embeds StepBuilder and
+// Workflow.Add still calls BuildStep on every newly seen Step.
 type StepBuilder struct{ built Set[Steper] }
 
 // BuildStep walks the tree of step (pre-order) and triggers BuildStep() on

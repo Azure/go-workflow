@@ -179,7 +179,8 @@ func TestBeforeAfter(t *testing.T) {
 		assert.ErrorIs(t, w.Do(context.Background()), assert.AnError)
 	})
 	t.Run("should call AfterStep even step panics", func(t *testing.T) {
-		w := &Workflow{DontPanic: true}
+		dontPanic := true
+		w := &Workflow{Option: WorkflowOption{DontPanic: &dontPanic}}
 		w.Add(
 			Step(Func("step", func(ctx context.Context) error {
 				panic("panic!")
@@ -208,7 +209,8 @@ func TestBeforeAfter(t *testing.T) {
 		assert.True(t, afterRan)
 	})
 	t.Run("modified context from BeforeStep should still be used even panic happens", func(t *testing.T) {
-		w := &Workflow{DontPanic: true}
+		dontPanic := true
+		w := &Workflow{Option: WorkflowOption{DontPanic: &dontPanic}}
 		noop := NoOp("NoOp")
 		ctx := context.Background()
 		w.Add(Step(noop).
@@ -250,18 +252,18 @@ func TestBeforeAfter(t *testing.T) {
 
 func TestDefaultOption(t *testing.T) {
 	t.Parallel()
-	t.Run("DefaultOption applies to all Steps", func(t *testing.T) {
+	t.Run("StepDefaults applies to all Steps", func(t *testing.T) {
 		w := &Workflow{
-			DefaultOption: &StepOption{Timeout: durationPtr(10 * time.Minute)},
+			Option: WorkflowOption{StepDefaults: &StepOption{Timeout: durationPtr(10 * time.Minute)}},
 		}
 		step := NoOp("step")
 		w.Add(Step(step))
 		assert.Equal(t, 10*time.Minute, *w.StateOf(step).Option().Timeout)
 	})
 
-	t.Run("Step-level option overrides DefaultOption", func(t *testing.T) {
+	t.Run("Step-level option overrides StepDefaults", func(t *testing.T) {
 		w := &Workflow{
-			DefaultOption: &StepOption{Timeout: durationPtr(10 * time.Minute)},
+			Option: WorkflowOption{StepDefaults: &StepOption{Timeout: durationPtr(10 * time.Minute)}},
 		}
 		step := NoOp("step")
 		w.Add(Step(step).Timeout(5 * time.Minute))
