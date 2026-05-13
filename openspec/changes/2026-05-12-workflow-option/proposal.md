@@ -102,7 +102,7 @@ are in `docs/superpowers/specs/2026-05-12-workflow-option-design.md`.
   `InterceptorReceiver` directly.** No known external implementations.
   Migration: implement `WorkflowOptionReceiver.InheritOption` instead.
 - **Behavior change (positive):** scalar configuration fields (`DontPanic`,
-  `MaxConcurrency`, `SkipAsError`, `Clock`, `DefaultStepOption`) now propagate
+  `MaxConcurrency`, `SkipAsError`, `Clock`, `StepDefaults`) now propagate
   from parent into sub-workflows when the child leaves them nil. Previously
   they didn't propagate at all. Existing code that sets these on the parent
   but didn't expect them on the child needs to set `Option.DontInherit` on

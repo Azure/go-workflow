@@ -43,7 +43,7 @@ type WorkflowOption struct {
     DontPanic         *bool
     SkipAsError       *bool
     Clock             clock.Clock
-    DefaultStepOption *StepOption
+    StepDefaults      *StepOption
 
     Mutators            []Mutator
     StepInterceptors    []StepInterceptor
@@ -88,7 +88,7 @@ func (w *Workflow) InheritOption(parent WorkflowOption) {
     if w.Option.DontPanic == nil         { w.Option.DontPanic = parent.DontPanic }
     if w.Option.SkipAsError == nil       { w.Option.SkipAsError = parent.SkipAsError }
     if w.Option.Clock == nil             { w.Option.Clock = parent.Clock }
-    if w.Option.DefaultStepOption == nil { w.Option.DefaultStepOption = parent.DefaultStepOption }
+    if w.Option.StepDefaults == nil   { w.Option.StepDefaults = parent.StepDefaults }
     w.Option.Mutators            = prependSlice(parent.Mutators,            w.Option.Mutators)
     w.Option.StepInterceptors    = prependSlice(parent.StepInterceptors,    w.Option.StepInterceptors)
     w.Option.AttemptInterceptors = prependSlice(parent.AttemptInterceptors, w.Option.AttemptInterceptors)

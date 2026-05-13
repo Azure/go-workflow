@@ -11,7 +11,7 @@
 - [ ] 2.1 In `workflow.go`, replace the nine top-level fields (`MaxConcurrency`, `DontPanic`, `SkipAsError`, `Clock`, `DefaultOption`, `Mutators`, `StepInterceptors`, `AttemptInterceptors`, `IsolateInterceptors`) with a single `Option WorkflowOption` field
 - [ ] 2.2 Remove `inheritedStep` / `inheritedAttempt` side fields from `Workflow`
 - [ ] 2.3 Add `(*Workflow).InheritOption(parent WorkflowOption)` implementing the merge rules (nil scalar → parent; non-nil scalar → child; slices → parent prepended; `DontInherit=true` → no-op)
-- [ ] 2.4 Add unexported scalar accessor helpers: `maxConcurrency()`, `dontPanic()`, `skipAsError()`, `clock()`. Keep `defaultStepOption()` returning `*StepOption`
+- [ ] 2.4 Add unexported scalar accessor helpers: `maxConcurrency()`, `dontPanic()`, `skipAsError()`, `clock()`. `Option.StepDefaults` is read directly (already a pointer, nil-safe at call sites).
 - [ ] 2.5 Rewrite all in-repo reads of the former fields to call the helpers (`workflow.go`, plus any other file that touches these — verify with `grep`)
 
 ## 3. Propagation Rewrite
@@ -65,7 +65,7 @@
    - Scalar explicit zero (`*int = 0`) → child wins, distinguished from inherit
    - Each of `Mutators` / `StepInterceptors` / `AttemptInterceptors` → parent prepended
    - `Clock` nil → parent's clock used
-   - `DefaultStepOption` nil → parent's value used
+   - `StepDefaults` nil → parent's value used
    - `DontInherit = true` → no field changes regardless of parent
 - [ ] 7.5 Test: multi-level nesting (grandparent → parent → child each with one Mutator) yields effective `[grandparent, parent, child]` Mutators on the child
 - [ ] 7.6 Test: `Do()` snapshot/restore — `parent.Do()` runs twice; child's effective Mutators is `[A, B]` during each run and `[B]` after each run, no accumulation

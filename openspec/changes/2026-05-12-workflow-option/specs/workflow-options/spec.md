@@ -61,9 +61,9 @@ When `Option.SkipAsError` dereferences to `true`, any `Skipped` Step causes
 
 ---
 
-### Requirement: DefaultStepOption applies a baseline StepOption to all Steps
+### Requirement: StepDefaults applies a baseline StepOption to all Steps
 
-`Workflow.Option.DefaultStepOption` is a `*StepOption` that the Workflow
+`Workflow.Option.StepDefaults` is a `*StepOption` that the Workflow
 prepends to the Option slice of every Step added to it. This lets callers set
 a universal default for all Steps (e.g., a global timeout) without modifying
 each Step individually.
@@ -72,17 +72,17 @@ Step-level options that are set after the default take precedence because the
 Option slice is evaluated left-to-right and later values overwrite earlier
 ones on the same `StepOption` struct.
 
-The renaming from `DefaultOption` to `DefaultStepOption` clarifies that the
+The renaming from `DefaultOption` to `StepDefaults` clarifies that the
 field configures step-level options, not workflow-level options
 (`WorkflowOption`).
 
-#### Scenario: DefaultStepOption sets a global timeout
-- **WHEN** `Option.DefaultStepOption` has `Timeout` set to 10 minutes
+#### Scenario: StepDefaults sets a global timeout
+- **WHEN** `Option.StepDefaults` has `Timeout` set to 10 minutes
   and a Step is added without its own `Timeout`
 - **THEN** the effective timeout for that Step is 10 minutes
 
 #### Scenario: Step-level option overrides the default
-- **WHEN** `Option.DefaultStepOption` has `Timeout` of 10 minutes and a Step declares
+- **WHEN** `Option.StepDefaults` has `Timeout` of 10 minutes and a Step declares
   `.Timeout(5 * time.Minute)`
 - **THEN** the effective timeout for that Step is 5 minutes
 
@@ -128,7 +128,7 @@ type WorkflowOption struct {
     DontPanic         *bool
     SkipAsError       *bool
     Clock             clock.Clock
-    DefaultStepOption *StepOption
+    StepDefaults      *StepOption
 
     Mutators            []Mutator
     StepInterceptors    []StepInterceptor
@@ -179,7 +179,7 @@ sub-workflow MAY be wrapped in any Steper-only wrapper (notably `flow.Name` /
    any field.
 2. For each scalar pointer field (`MaxConcurrency`, `DontPanic`,
    `SkipAsError`) and each interface/pointer field (`Clock`,
-   `DefaultStepOption`): if the child's field is nil, set it to the parent's
+   `StepDefaults`): if the child's field is nil, set it to the parent's
    value. Non-nil child fields SHALL NOT be modified.
 3. For each slice field (`Mutators`, `StepInterceptors`,
    `AttemptInterceptors`): allocate a fresh slice equal to

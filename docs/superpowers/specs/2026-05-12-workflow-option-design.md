@@ -114,7 +114,7 @@ type WorkflowOption struct {
     DontPanic         *bool
     SkipAsError       *bool
     Clock             clock.Clock // interface; nil = inherit / wall clock
-    DefaultStepOption *StepOption // already a pointer
+    StepDefaults *StepOption // already a pointer
 
     Mutators            []Mutator           // parent prepended on inherit
     StepInterceptors    []StepInterceptor   // parent prepended on inherit
@@ -162,7 +162,7 @@ func (w *Workflow) InheritOption(parent WorkflowOption) {
     if w.Option.DontPanic == nil         { w.Option.DontPanic = parent.DontPanic }
     if w.Option.SkipAsError == nil       { w.Option.SkipAsError = parent.SkipAsError }
     if w.Option.Clock == nil             { w.Option.Clock = parent.Clock }
-    if w.Option.DefaultStepOption == nil { w.Option.DefaultStepOption = parent.DefaultStepOption }
+    if w.Option.StepDefaults == nil { w.Option.StepDefaults = parent.StepDefaults }
 
     w.Option.Mutators            = prependSlice(parent.Mutators, w.Option.Mutators)
     w.Option.StepInterceptors    = prependSlice(parent.StepInterceptors, w.Option.StepInterceptors)
@@ -184,7 +184,7 @@ func (w *Workflow) maxConcurrency() int       { if w.Option.MaxConcurrency == ni
 func (w *Workflow) dontPanic() bool           { return w.Option.DontPanic != nil && *w.Option.DontPanic }
 func (w *Workflow) skipAsError() bool         { return w.Option.SkipAsError != nil && *w.Option.SkipAsError }
 func (w *Workflow) clock() clock.Clock        { if w.Option.Clock == nil { return clock.New() }; return w.Option.Clock }
-func (w *Workflow) defaultStepOption() *StepOption { return w.Option.DefaultStepOption }
+func (w *Workflow) defaultStepOption() *StepOption { return w.Option.StepDefaults }
 ```
 
 All existing `w.MaxConcurrency`, `w.DontPanic`, `w.SkipAsError`, `w.Clock`,
@@ -333,7 +333,7 @@ Table-driven matrix:
   nil/inherit
 - `Mutators` / `StepInterceptors` / `AttemptInterceptors` → parent prepended
 - `Clock` nil → inherits parent
-- `DefaultStepOption` nil → inherits parent
+- `StepDefaults` nil → inherits parent
 - `DontInherit = true` → no field changes regardless of parent
 
 Plus dedicated tests:
