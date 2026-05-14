@@ -13,8 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
+
+// exceptionEventName is the OTel SDK convention for span events emitted by
+// RecordError.
+const exceptionEventName = "exception"
 
 // retryStep counts attempts and only succeeds on the Nth try.
 type retryStep struct {
@@ -127,7 +130,7 @@ func TestStepInterceptor_FinalErrorRecorded(t *testing.T) {
 	events := s.Events()
 	var sawException bool
 	for _, ev := range events {
-		if ev.Name == "exception" {
+		if ev.Name == exceptionEventName {
 			sawException = true
 			break
 		}
@@ -149,7 +152,7 @@ func TestStepInterceptor_ContextCanceled(t *testing.T) {
 	assert.Equal(t, codes.Error, s.Status().Code)
 	var sawException bool
 	for _, ev := range s.Events() {
-		if ev.Name == "exception" {
+		if ev.Name == exceptionEventName {
 			sawException = true
 			break
 		}
@@ -168,8 +171,7 @@ func TestStepInterceptor_SkippedStepNoSpan(t *testing.T) {
 	require.NoError(t, w.Do(context.Background()))
 
 	assert.Empty(t, rec.Ended(), "Skipped steps must bypass the interceptor chain")
-	// also assert nothing was started.
-	var _ []sdktrace.ReadWriteSpan = rec.Started()
+	// neither Started() nor Ended() should fire for a Skipped step.
 	assert.Empty(t, rec.Started())
 }
 
@@ -219,4 +221,24 @@ func TestStepInterceptor_CustomAttributesAppend(t *testing.T) {
 	a, ok := findAttr(attrs, "answer")
 	require.True(t, ok, "custom int attribute missing")
 	assert.Equal(t, int64(42), a.Value.AsInt64())
+}
+
+func TestStepInterceptor_UserAttributeCannotOverrideCanonicalName(t *testing.T) {
+	t.Parallel()
+	tp, rec := newRecorderTracerProvider()
+	step := flow.NoOp("Real")
+	hijack := func(flow.Steper) []attribute.KeyValue {
+		return []attribute.KeyValue{attribute.String("workflow.step.name", "HACKED")}
+	}
+	w := newWorkflow(otelflow.NewStepInterceptor(
+		otelflow.WithTracerProvider(tp),
+		otelflow.WithStepAttributes(hijack),
+	))
+	w.Add(flow.Step(step))
+	require.NoError(t, w.Do(context.Background()))
+
+	spans := rec.Ended()
+	require.Len(t, spans, 1)
+	// Canonical attribute must win over user-supplied override.
+	assertAttr(t, spans[0].Attributes(), "workflow.step.name", flow.String(step))
 }

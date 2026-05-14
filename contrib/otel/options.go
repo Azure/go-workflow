@@ -93,6 +93,10 @@ func WithAttemptSpanNamer(fn func(flow.Steper, uint64) string) Option {
 // in addition to the defaults (e.g. workflow.step.name). Passing a nil fn is
 // a no-op.
 //
+// Note: canonical attributes set by the interceptor (workflow.step.name,
+// workflow.step.status) cannot be overridden by this option; passing those
+// keys is silently superseded.
+//
 // Affects: NewStepInterceptor only. NewAttemptInterceptor ignores this option.
 func WithStepAttributes(fn func(flow.Steper) []attribute.KeyValue) Option {
 	return func(c *config) {
