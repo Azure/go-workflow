@@ -12,22 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
-
-// newAttemptWorkflow builds a Workflow with only the given AttemptInterceptor
-// registered (no StepInterceptor) so attempt-layer tests stay isolated.
-func newAttemptWorkflow(ic flow.AttemptInterceptor) *flow.Workflow {
-	return &flow.Workflow{Option: flow.WorkflowOption{
-		AttemptInterceptors: []flow.AttemptInterceptor{ic},
-	}}
-}
 
 func TestAttemptInterceptor_OneSpanPerAttempt(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := &retryStep{Name: "S", NeedAttempts: 4} // succeeds on the 4th try
-	w := newAttemptWorkflow(otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
 	w.Add(flow.Step(step).Retry(noBackoff(5)))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -45,7 +36,7 @@ func TestAttemptInterceptor_DefaultName(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := flow.NoOp("MyStep")
-	w := newAttemptWorkflow(otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -58,7 +49,7 @@ func TestAttemptInterceptor_FailingAttemptRecorded(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := &retryStep{Name: "Flaky", NeedAttempts: 2} // fails once, then succeeds
-	w := newAttemptWorkflow(otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
 	w.Add(flow.Step(step).Retry(noBackoff(2)))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -90,22 +81,18 @@ func TestAttemptInterceptor_ChildOfCallerSpan(t *testing.T) {
 	defer outer.End()
 
 	step := flow.NoOp("S")
-	w := newAttemptWorkflow(otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(ctx))
 
-	// OUTER is still open (it ends via defer); only the attempt span should be Ended.
+	// OUTER is still open (it ends via defer); the recorder has exactly the
+	// attempt span. A regression that emits more than one span will surface here.
 	spans := rec.Ended()
-	var attempt sdktrace.ReadOnlySpan
-	for _, s := range spans {
-		if s.Name() != "OUTER" {
-			attempt = s
-			break
-		}
-	}
-	require.NotNil(t, attempt, "expected an attempt span among %d ended spans", len(spans))
+	require.Len(t, spans, 1)
+	attempt := spans[0]
 	assert.Equal(t, outer.SpanContext().SpanID(), attempt.Parent().SpanID(),
 		"attempt span must be a child of the caller-supplied OUTER span")
+	assert.Equal(t, outer.SpanContext().TraceID(), attempt.SpanContext().TraceID())
 }
 
 func TestAttemptInterceptor_CustomNamer(t *testing.T) {
@@ -115,7 +102,7 @@ func TestAttemptInterceptor_CustomNamer(t *testing.T) {
 	namer := func(s flow.Steper, n uint64) string {
 		return fmt.Sprintf("X-%s-%d", flow.String(s), n)
 	}
-	w := newAttemptWorkflow(otelflow.NewAttemptInterceptor(
+	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(
 		otelflow.WithTracerProvider(tp),
 		otelflow.WithAttemptSpanNamer(namer),
 	))
@@ -147,7 +134,7 @@ func TestAttemptInterceptor_CustomAttributes(t *testing.T) {
 			attribute.Int64("workflow.step.attempt", 999),
 		}
 	}
-	w := newAttemptWorkflow(otelflow.NewAttemptInterceptor(
+	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(
 		otelflow.WithTracerProvider(tp),
 		otelflow.WithAttemptAttributes(extras),
 	))
@@ -170,4 +157,20 @@ func TestAttemptInterceptor_CustomAttributes(t *testing.T) {
 	a, ok := findAttr(attrs, "answer")
 	require.True(t, ok, "custom int attribute missing")
 	assert.Equal(t, int64(42), a.Value.AsInt64())
+}
+
+func TestAttemptInterceptor_ContextCanceled(t *testing.T) {
+	t.Parallel()
+	tp, rec := newRecorderTracerProvider()
+	step := &alwaysFail{Name: "S", Err: context.Canceled}
+	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
+	w.Add(flow.Step(step))
+	_ = w.Do(context.Background()) // workflow itself errors
+
+	spans := rec.Ended()
+	require.NotEmpty(t, spans)
+	s := spans[0]
+	assert.Equal(t, codes.Error, s.Status().Code)
+	require.NotEmpty(t, s.Events())
+	assert.Equal(t, exceptionEventName, s.Events()[0].Name)
 }

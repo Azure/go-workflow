@@ -32,7 +32,7 @@ func NewAttemptInterceptor(opts ...Option) flow.AttemptInterceptor {
 	cfg := newConfig(opts)
 	tracer := cfg.resolveTracer()
 	return flow.AttemptInterceptorFunc(func(ctx context.Context, step flow.Steper, attempt uint64, next func(context.Context) error) error {
-		spanName := defaultAttemptSpanName(step, attempt)
+		spanName := fmt.Sprintf("%s (attempt %d)", flow.String(step), attempt)
 		if cfg.attemptSpanNamer != nil {
 			spanName = cfg.attemptSpanNamer(step, attempt)
 		}
@@ -56,10 +56,4 @@ func NewAttemptInterceptor(opts ...Option) flow.AttemptInterceptor {
 		}
 		return err
 	})
-}
-
-// defaultAttemptSpanName returns the canonical attempt span name used when no
-// WithAttemptSpanNamer override is supplied.
-func defaultAttemptSpanName(step flow.Steper, attempt uint64) string {
-	return fmt.Sprintf("%s (attempt %d)", flow.String(step), attempt)
 }

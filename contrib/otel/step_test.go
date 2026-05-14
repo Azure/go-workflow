@@ -73,17 +73,11 @@ func noBackoff(attempts uint64) func(*flow.RetryOption) {
 	}
 }
 
-func newWorkflow(ic flow.StepInterceptor) *flow.Workflow {
-	return &flow.Workflow{Option: flow.WorkflowOption{
-		StepInterceptors: []flow.StepInterceptor{ic},
-	}}
-}
-
 func TestStepInterceptor_SuccessOneSpan(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := flow.NoOp("MyStep")
-	w := newWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)), nil)
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -100,7 +94,7 @@ func TestStepInterceptor_RetriesStillOneSpan(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := &retryStep{Name: "Flaky", NeedAttempts: 3}
-	w := newWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)), nil)
 	w.Add(flow.Step(step).Retry(noBackoff(5)))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -116,7 +110,7 @@ func TestStepInterceptor_FinalErrorRecorded(t *testing.T) {
 	tp, rec := newRecorderTracerProvider()
 	boom := errors.New("boom")
 	step := &alwaysFail{Name: "Fail", Err: boom}
-	w := newWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)), nil)
 	w.Add(flow.Step(step).Retry(noBackoff(2)))
 	err := w.Do(context.Background())
 	require.Error(t, err)
@@ -142,7 +136,7 @@ func TestStepInterceptor_ContextCanceled(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := &alwaysFail{Name: "Cancel", Err: context.Canceled}
-	w := newWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)), nil)
 	w.Add(flow.Step(step))
 	_ = w.Do(context.Background())
 
@@ -164,7 +158,7 @@ func TestStepInterceptor_SkippedStepNoSpan(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	skipMe := flow.NoOp("Skipped")
-	w := newWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)), nil)
 	w.Add(flow.Step(skipMe).When(func(context.Context, map[flow.Steper]flow.StepResult) flow.StepStatus {
 		return flow.Skipped
 	}))
@@ -180,10 +174,10 @@ func TestStepInterceptor_CustomNamer(t *testing.T) {
 	tp, rec := newRecorderTracerProvider()
 	step := flow.NoOp("Original")
 	namer := func(s flow.Steper) string { return "custom:" + flow.String(s) }
-	w := newWorkflow(otelflow.NewStepInterceptor(
+	w := newTestWorkflow(otelflow.NewStepInterceptor(
 		otelflow.WithTracerProvider(tp),
 		otelflow.WithStepSpanNamer(namer),
-	))
+	), nil)
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -205,10 +199,10 @@ func TestStepInterceptor_CustomAttributesAppend(t *testing.T) {
 			attribute.Int("answer", 42),
 		}
 	}
-	w := newWorkflow(otelflow.NewStepInterceptor(
+	w := newTestWorkflow(otelflow.NewStepInterceptor(
 		otelflow.WithTracerProvider(tp),
 		otelflow.WithStepAttributes(extras),
-	))
+	), nil)
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -230,10 +224,10 @@ func TestStepInterceptor_UserAttributeCannotOverrideCanonicalName(t *testing.T) 
 	hijack := func(flow.Steper) []attribute.KeyValue {
 		return []attribute.KeyValue{attribute.String("workflow.step.name", "HACKED")}
 	}
-	w := newWorkflow(otelflow.NewStepInterceptor(
+	w := newTestWorkflow(otelflow.NewStepInterceptor(
 		otelflow.WithTracerProvider(tp),
 		otelflow.WithStepAttributes(hijack),
-	))
+	), nil)
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
 
