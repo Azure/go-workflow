@@ -124,6 +124,18 @@ construction time — this is the recommended pattern. The embedded
 flows in automatically. The legacy `flow.SubWorkflow` type is deprecated
 and will be removed in the next major version.
 
+## Passing values through `context.Context`
+
+Cross-cutting capabilities — a logger, an Azure identity, a Kubernetes
+client — belong in `ctx`, not in every step's constructor. `flow.ContextKey[T]`
+is the type-safe key helper for putting them there; `flow.Logger`
+(`ContextKey[*slog.Logger]`) is the canonical key for structured logging
+and `flow.LogStepFields` / `flow.LogAttemptField` are ready-to-use
+interceptors that tag every log line with `step=<name>` and `attempt=N`.
+
+See `example/14_context_values_test.go` and the godoc on `flow.ContextKey`
+/ `flow.Logger` / `flow.LogStepFields` for runnable examples.
+
 ## Learn more
 
 - **[`example/`](./example)** — runnable, narrated examples for every feature, in increasing
