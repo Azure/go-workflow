@@ -32,9 +32,9 @@ import (
 // **When to reach for which mechanism**
 //
 //	Need to log/trace every Step?               → Interceptor (this file).
-//	Need to react to upstream's terminal status → Condition (05_conditions).
+//	Need to react to upstream's terminal status → Condition (06_conditions).
 //	Need behaviour for one specific Step?       → BeforeStep / AfterStep
-//	                                              (04_callbacks).
+//	                                              (05_callbacks).
 //
 // **Caveats**
 //   - Steps settled inline as Skipped/Canceled by their Condition bypass

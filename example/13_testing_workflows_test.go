@@ -25,9 +25,9 @@ import (
 //	You wrote the Workflow in your test           ─► substitute Steps directly,
 //	                                                 no need for Mock.
 //	Production code built the Workflow            ─► flow.Mock to swap one Step.
-//	You want to assert on per-Step error/status   ─► see 11_debugging.
+//	You want to assert on per-Step error/status   ─► see 12_debugging.
 //	You want to assert on Begin/End ordering      ─► add a StepInterceptor in
-//	                                                 the test (10_observability).
+//	                                                 the test (11_observability).
 
 // ExampleMock shows the typical use: a production workflow assembled
 // elsewhere, with one Step substituted in the test.

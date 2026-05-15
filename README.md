@@ -133,7 +133,7 @@ is the type-safe key helper for putting them there; `flow.Logger`
 and `flow.LogStepFields` / `flow.LogAttemptField` are ready-to-use
 interceptors that tag every log line with `step=<name>` and `attempt=N`.
 
-See `example/14_context_values_test.go` and the godoc on `flow.ContextKey`
+See `example/04_context_values_test.go` and the godoc on `flow.ContextKey`
 / `flow.Logger` / `flow.LogStepFields` for runnable examples.
 
 ## Learn more

@@ -16,7 +16,7 @@ import (
 //     `flow.Builder` to register `Input` / `BeforeStep` / `AfterStep` /
 //     `Retry` / `Timeout` / ..., or both.
 //   - Parent-Workflow Mutators reach into sub-Workflows automatically — the
-//     same WorkflowOptionReceiver mechanism described in 10_observability for
+//     same WorkflowOptionReceiver mechanism described in 11_observability for
 //     interceptors.
 //
 // **Where they fit**
@@ -30,9 +30,9 @@ import (
 // **When to reach for which mechanism**
 //
 //	Need behaviour for one specific Step?            → BeforeStep / AfterStep
-//	                                                   (04_callbacks).
+//	                                                   (05_callbacks).
 //	Need behaviour for every Step in the Workflow?   → Interceptor
-//	                                                   (10_observability).
+//	                                                   (11_observability).
 //	Need behaviour for every Step of a given type,
 //	even Steps added later or inside sub-workflows?  → Mutator (this file).
 //
@@ -161,7 +161,7 @@ func ExampleMutator_ctxValue() {
 // time.
 //
 // The propagation mechanism is the same `WorkflowOptionReceiver` interface
-// used by interceptors in 10_observability: any Step that contains a
+// used by interceptors in 11_observability: any Step that contains a
 // sub-Workflow (a `*Workflow` used as a Step, or a struct embedding the
 // deprecated `flow.SubWorkflow`) automatically receives the parent's Option
 // (Mutators included) before the inner Workflow starts scheduling.
