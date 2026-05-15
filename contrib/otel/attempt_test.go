@@ -1,0 +1,176 @@
+package flowotel_test
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	flow "github.com/Azure/go-workflow"
+	"github.com/Azure/go-workflow/contrib/otel"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+)
+
+func TestAttemptInterceptor_OneSpanPerAttempt(t *testing.T) {
+	t.Parallel()
+	tp, rec := newRecorderTracerProvider()
+	step := &retryStep{Name: "S", NeedAttempts: 4} // succeeds on the 4th try
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)))
+	w.Add(flow.Step(step).Retry(noBackoff(5)))
+	require.NoError(t, w.Do(context.Background()))
+
+	spans := rec.Ended()
+	require.Len(t, spans, 4, "expected one span per attempt (0..3)")
+	for i, s := range spans {
+		a, ok := findAttr(s.Attributes(), "workflow.step.attempt")
+		require.True(t, ok, "span %d missing workflow.step.attempt", i)
+		assert.Equal(t, int64(i), a.Value.AsInt64(), "span %d attempt index mismatch", i)
+		assertAttr(t, s.Attributes(), "workflow.step.name", "S")
+	}
+}
+
+func TestAttemptInterceptor_DefaultName(t *testing.T) {
+	t.Parallel()
+	tp, rec := newRecorderTracerProvider()
+	step := flow.NoOp("MyStep")
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)))
+	w.Add(flow.Step(step))
+	require.NoError(t, w.Do(context.Background()))
+
+	spans := rec.Ended()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "MyStep (attempt 0)", spans[0].Name())
+}
+
+func TestAttemptInterceptor_FailingAttemptRecorded(t *testing.T) {
+	t.Parallel()
+	tp, rec := newRecorderTracerProvider()
+	step := &retryStep{Name: "Flaky", NeedAttempts: 2} // fails once, then succeeds
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)))
+	w.Add(flow.Step(step).Retry(noBackoff(2)))
+	require.NoError(t, w.Do(context.Background()))
+
+	spans := rec.Ended()
+	require.Len(t, spans, 2, "expected one span per attempt (failure + success)")
+
+	// First attempt span: failure with RecordError + codes.Error.
+	first := spans[0]
+	assert.Equal(t, codes.Error, first.Status().Code, "first attempt span should be Error")
+	var sawException bool
+	for _, ev := range first.Events() {
+		if ev.Name == exceptionEventName {
+			sawException = true
+			break
+		}
+	}
+	assert.True(t, sawException, "first attempt should record an exception event")
+
+	// Second attempt span: success leaves status Unset.
+	second := spans[1]
+	assert.Equal(t, codes.Unset, second.Status().Code, "successful attempt span should be Unset")
+}
+
+func TestAttemptInterceptor_ChildOfCallerSpan(t *testing.T) {
+	t.Parallel()
+	tp, rec := newRecorderTracerProvider()
+	tracer := tp.Tracer("test")
+	ctx, outer := tracer.Start(context.Background(), "OUTER")
+	defer outer.End()
+
+	step := flow.NoOp("S")
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)))
+	w.Add(flow.Step(step))
+	require.NoError(t, w.Do(ctx))
+
+	// OUTER is still open (it ends via defer); the recorder has exactly the
+	// attempt span. A regression that emits more than one span will surface here.
+	spans := rec.Ended()
+	require.Len(t, spans, 1)
+	attempt := spans[0]
+	assert.Equal(t, outer.SpanContext().SpanID(), attempt.Parent().SpanID(),
+		"attempt span must be a child of the caller-supplied OUTER span")
+	assert.Equal(t, outer.SpanContext().TraceID(), attempt.SpanContext().TraceID())
+}
+
+func TestAttemptInterceptor_CustomNamer(t *testing.T) {
+	t.Parallel()
+	tp, rec := newRecorderTracerProvider()
+	step := flow.NoOp("Original")
+	namer := func(s flow.Steper, n uint64) string {
+		return fmt.Sprintf("X-%s-%d", flow.String(s), n)
+	}
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(
+		flowotel.WithTracerProvider(tp),
+		flowotel.WithAttemptSpanNamer(namer),
+	))
+	w.Add(flow.Step(step))
+	require.NoError(t, w.Do(context.Background()))
+
+	spans := rec.Ended()
+	require.Len(t, spans, 1)
+	s := spans[0]
+	assert.Equal(t, "X-Original-0", s.Name(), "custom attempt namer should win")
+	// Canonical attributes still present despite the custom name.
+	assertAttr(t, s.Attributes(), "workflow.step.name", "Original")
+	a, ok := findAttr(s.Attributes(), "workflow.step.attempt")
+	require.True(t, ok)
+	assert.Equal(t, int64(0), a.Value.AsInt64())
+}
+
+func TestAttemptInterceptor_CustomAttributes(t *testing.T) {
+	t.Parallel()
+	tp, rec := newRecorderTracerProvider()
+	step := flow.NoOp("Hello")
+	extras := func(flow.Steper, uint64) []attribute.KeyValue {
+		return []attribute.KeyValue{
+			attribute.String("env", "test"),
+			attribute.Int("answer", 42),
+			// Regression: a malicious user attribute trying to override the
+			// canonical workflow.step.attempt key MUST be superseded by the
+			// interceptor's own value.
+			attribute.Int64("workflow.step.attempt", 999),
+		}
+	}
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(
+		flowotel.WithTracerProvider(tp),
+		flowotel.WithAttemptAttributes(extras),
+	))
+	w.Add(flow.Step(step))
+	require.NoError(t, w.Do(context.Background()))
+
+	spans := rec.Ended()
+	require.Len(t, spans, 1)
+	attrs := spans[0].Attributes()
+
+	// Defaults still present.
+	assertAttr(t, attrs, "workflow.step.name", "Hello")
+	canonical, ok := findAttr(attrs, "workflow.step.attempt")
+	require.True(t, ok)
+	assert.Equal(t, int64(0), canonical.Value.AsInt64(),
+		"canonical workflow.step.attempt must win over user-supplied override")
+
+	// User attributes appended.
+	assertAttr(t, attrs, "env", "test")
+	a, ok := findAttr(attrs, "answer")
+	require.True(t, ok, "custom int attribute missing")
+	assert.Equal(t, int64(42), a.Value.AsInt64())
+}
+
+func TestAttemptInterceptor_ContextCanceled(t *testing.T) {
+	t.Parallel()
+	tp, rec := newRecorderTracerProvider()
+	step := &alwaysFail{Name: "S", Err: context.Canceled}
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)))
+	w.Add(flow.Step(step))
+	_ = w.Do(context.Background()) // workflow itself errors
+
+	spans := rec.Ended()
+	require.NotEmpty(t, spans)
+	s := spans[0]
+	assert.Equal(t, codes.Error, s.Status().Code)
+	require.NotEmpty(t, s.Events())
+	assert.Equal(t, exceptionEventName, s.Events()[0].Name)
+}

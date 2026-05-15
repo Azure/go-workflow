@@ -132,6 +132,16 @@ and will be removed in the next major version.
   conditions, retry/timeout, composite steps, interceptors and workflow options.
 - **DeepWiki:** <https://deepwiki.com/Azure/go-workflow>
 
+## Contrib
+
+Optional, independently-versioned modules under `contrib/`:
+
+- **[`contrib/otel`](./contrib/otel)** — OpenTelemetry tracing integration
+  via the existing `StepInterceptor` / `AttemptInterceptor` extension
+  points. Released as a separate Go module
+  (`github.com/Azure/go-workflow/contrib/otel`) so its OpenTelemetry
+  dependency does not enter core's transitive graph.
+
 ## Contributing
 
 This project welcomes contributions. Most contributions require you to agree to a Contributor
