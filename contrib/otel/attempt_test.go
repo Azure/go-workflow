@@ -1,4 +1,4 @@
-package otel_test
+package flowotel_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	flow "github.com/Azure/go-workflow"
-	otelflow "github.com/Azure/go-workflow/contrib/otel"
+	"github.com/Azure/go-workflow/contrib/otel"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +18,7 @@ func TestAttemptInterceptor_OneSpanPerAttempt(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := &retryStep{Name: "S", NeedAttempts: 4} // succeeds on the 4th try
-	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)))
 	w.Add(flow.Step(step).Retry(noBackoff(5)))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -36,7 +36,7 @@ func TestAttemptInterceptor_DefaultName(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := flow.NoOp("MyStep")
-	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)))
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -49,7 +49,7 @@ func TestAttemptInterceptor_FailingAttemptRecorded(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := &retryStep{Name: "Flaky", NeedAttempts: 2} // fails once, then succeeds
-	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)))
 	w.Add(flow.Step(step).Retry(noBackoff(2)))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -81,7 +81,7 @@ func TestAttemptInterceptor_ChildOfCallerSpan(t *testing.T) {
 	defer outer.End()
 
 	step := flow.NoOp("S")
-	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)))
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(ctx))
 
@@ -102,9 +102,9 @@ func TestAttemptInterceptor_CustomNamer(t *testing.T) {
 	namer := func(s flow.Steper, n uint64) string {
 		return fmt.Sprintf("X-%s-%d", flow.String(s), n)
 	}
-	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(
-		otelflow.WithTracerProvider(tp),
-		otelflow.WithAttemptSpanNamer(namer),
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(
+		flowotel.WithTracerProvider(tp),
+		flowotel.WithAttemptSpanNamer(namer),
 	))
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
@@ -134,9 +134,9 @@ func TestAttemptInterceptor_CustomAttributes(t *testing.T) {
 			attribute.Int64("workflow.step.attempt", 999),
 		}
 	}
-	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(
-		otelflow.WithTracerProvider(tp),
-		otelflow.WithAttemptAttributes(extras),
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(
+		flowotel.WithTracerProvider(tp),
+		flowotel.WithAttemptAttributes(extras),
 	))
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
@@ -163,7 +163,7 @@ func TestAttemptInterceptor_ContextCanceled(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := &alwaysFail{Name: "S", Err: context.Canceled}
-	w := newTestWorkflow(nil, otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)))
+	w := newTestWorkflow(nil, flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)))
 	w.Add(flow.Step(step))
 	_ = w.Do(context.Background()) // workflow itself errors
 

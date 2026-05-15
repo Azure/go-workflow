@@ -7,16 +7,16 @@ two interceptor factories that plug into the existing `StepInterceptor` and
 ```go
 import (
     flow "github.com/Azure/go-workflow"
-    otelflow "github.com/Azure/go-workflow/contrib/otel"
+    "github.com/Azure/go-workflow/contrib/otel"
 )
 
 w := &flow.Workflow{
     Option: flow.WorkflowOption{
         StepInterceptors: []flow.StepInterceptor{
-            otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)),
+            flowotel.NewStepInterceptor(flowotel.WithTracerProvider(tp)),
         },
         AttemptInterceptors: []flow.AttemptInterceptor{
-            otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)),
+            flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)),
         },
     },
 }

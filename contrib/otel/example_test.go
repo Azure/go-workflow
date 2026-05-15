@@ -1,11 +1,11 @@
-package otel_test
+package flowotel_test
 
 import (
 	"context"
 	"fmt"
 
 	flow "github.com/Azure/go-workflow"
-	otelflow "github.com/Azure/go-workflow/contrib/otel"
+	"github.com/Azure/go-workflow/contrib/otel"
 
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -33,10 +33,10 @@ func Example() {
 	// 2. Register both interceptors on a Workflow.
 	w := &flow.Workflow{}
 	w.Option.StepInterceptors = []flow.StepInterceptor{
-		otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)),
+		flowotel.NewStepInterceptor(flowotel.WithTracerProvider(tp)),
 	}
 	w.Option.AttemptInterceptors = []flow.AttemptInterceptor{
-		otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)),
+		flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)),
 	}
 
 	// 3. Build a tiny 2-step pipeline: A → B. flow.Step(b).DependsOn(a)

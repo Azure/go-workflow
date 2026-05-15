@@ -9,16 +9,16 @@
 //
 //	import (
 //	    flow "github.com/Azure/go-workflow"
-//	    otelflow "github.com/Azure/go-workflow/contrib/otel"
+//	    "github.com/Azure/go-workflow/contrib/otel"
 //	)
 //
 //	w := &flow.Workflow{
 //	    Option: flow.WorkflowOption{
 //	        StepInterceptors: []flow.StepInterceptor{
-//	            otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)),
+//	            flowotel.NewStepInterceptor(flowotel.WithTracerProvider(tp)),
 //	        },
 //	        AttemptInterceptors: []flow.AttemptInterceptor{
-//	            otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)),
+//	            flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)),
 //	        },
 //	    },
 //	}
@@ -67,4 +67,4 @@
 // the same as any other error. There is no special-case suppression. Users
 // running graceful shutdowns who want different semantics can wrap the
 // returned interceptor.
-package otel
+package flowotel

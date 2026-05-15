@@ -1,4 +1,4 @@
-package otel_test
+package flowotel_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	flow "github.com/Azure/go-workflow"
-	otelflow "github.com/Azure/go-workflow/contrib/otel"
+	"github.com/Azure/go-workflow/contrib/otel"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/stretchr/testify/assert"
@@ -77,7 +77,7 @@ func TestStepInterceptor_SuccessOneSpan(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := flow.NoOp("MyStep")
-	w := newTestWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)), nil)
+	w := newTestWorkflow(flowotel.NewStepInterceptor(flowotel.WithTracerProvider(tp)), nil)
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -94,7 +94,7 @@ func TestStepInterceptor_RetriesStillOneSpan(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := &retryStep{Name: "Flaky", NeedAttempts: 3}
-	w := newTestWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)), nil)
+	w := newTestWorkflow(flowotel.NewStepInterceptor(flowotel.WithTracerProvider(tp)), nil)
 	w.Add(flow.Step(step).Retry(noBackoff(5)))
 	require.NoError(t, w.Do(context.Background()))
 
@@ -110,7 +110,7 @@ func TestStepInterceptor_FinalErrorRecorded(t *testing.T) {
 	tp, rec := newRecorderTracerProvider()
 	boom := errors.New("boom")
 	step := &alwaysFail{Name: "Fail", Err: boom}
-	w := newTestWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)), nil)
+	w := newTestWorkflow(flowotel.NewStepInterceptor(flowotel.WithTracerProvider(tp)), nil)
 	w.Add(flow.Step(step).Retry(noBackoff(2)))
 	err := w.Do(context.Background())
 	require.Error(t, err)
@@ -136,7 +136,7 @@ func TestStepInterceptor_ContextCanceled(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	step := &alwaysFail{Name: "Cancel", Err: context.Canceled}
-	w := newTestWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)), nil)
+	w := newTestWorkflow(flowotel.NewStepInterceptor(flowotel.WithTracerProvider(tp)), nil)
 	w.Add(flow.Step(step))
 	_ = w.Do(context.Background())
 
@@ -158,7 +158,7 @@ func TestStepInterceptor_SkippedStepNoSpan(t *testing.T) {
 	t.Parallel()
 	tp, rec := newRecorderTracerProvider()
 	skipMe := flow.NoOp("Skipped")
-	w := newTestWorkflow(otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)), nil)
+	w := newTestWorkflow(flowotel.NewStepInterceptor(flowotel.WithTracerProvider(tp)), nil)
 	w.Add(flow.Step(skipMe).When(func(context.Context, map[flow.Steper]flow.StepResult) flow.StepStatus {
 		return flow.Skipped
 	}))
@@ -174,9 +174,9 @@ func TestStepInterceptor_CustomNamer(t *testing.T) {
 	tp, rec := newRecorderTracerProvider()
 	step := flow.NoOp("Original")
 	namer := func(s flow.Steper) string { return "custom:" + flow.String(s) }
-	w := newTestWorkflow(otelflow.NewStepInterceptor(
-		otelflow.WithTracerProvider(tp),
-		otelflow.WithStepSpanNamer(namer),
+	w := newTestWorkflow(flowotel.NewStepInterceptor(
+		flowotel.WithTracerProvider(tp),
+		flowotel.WithStepSpanNamer(namer),
 	), nil)
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
@@ -199,9 +199,9 @@ func TestStepInterceptor_CustomAttributesAppend(t *testing.T) {
 			attribute.Int("answer", 42),
 		}
 	}
-	w := newTestWorkflow(otelflow.NewStepInterceptor(
-		otelflow.WithTracerProvider(tp),
-		otelflow.WithStepAttributes(extras),
+	w := newTestWorkflow(flowotel.NewStepInterceptor(
+		flowotel.WithTracerProvider(tp),
+		flowotel.WithStepAttributes(extras),
 	), nil)
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))
@@ -224,9 +224,9 @@ func TestStepInterceptor_UserAttributeCannotOverrideCanonicalName(t *testing.T) 
 	hijack := func(flow.Steper) []attribute.KeyValue {
 		return []attribute.KeyValue{attribute.String("workflow.step.name", "HACKED")}
 	}
-	w := newTestWorkflow(otelflow.NewStepInterceptor(
-		otelflow.WithTracerProvider(tp),
-		otelflow.WithStepAttributes(hijack),
+	w := newTestWorkflow(flowotel.NewStepInterceptor(
+		flowotel.WithTracerProvider(tp),
+		flowotel.WithStepAttributes(hijack),
 	), nil)
 	w.Add(flow.Step(step))
 	require.NoError(t, w.Do(context.Background()))

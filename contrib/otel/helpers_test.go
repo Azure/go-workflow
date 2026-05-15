@@ -1,4 +1,4 @@
-package otel_test
+package flowotel_test
 
 import (
 	flow "github.com/Azure/go-workflow"

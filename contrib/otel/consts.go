@@ -1,4 +1,4 @@
-package otel
+package flowotel
 
 // Attribute keys and status values emitted by the contrib/otel interceptors.
 const (

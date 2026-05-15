@@ -1,11 +1,11 @@
-package otel_test
+package flowotel_test
 
 import (
 	"context"
 	"testing"
 
 	flow "github.com/Azure/go-workflow"
-	otelflow "github.com/Azure/go-workflow/contrib/otel"
+	"github.com/Azure/go-workflow/contrib/otel"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,8 +31,8 @@ func TestBothLayers_AttemptIsChildOfStep(t *testing.T) {
 	tp, rec := newRecorderTracerProvider()
 	s := flow.NoOp("OnlyStep")
 	w := newTestWorkflow(
-		otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)),
-		otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)),
+		flowotel.NewStepInterceptor(flowotel.WithTracerProvider(tp)),
+		flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)),
 	)
 	w.Add(flow.Step(s))
 	require.NoError(t, w.Do(context.Background()))
@@ -62,8 +62,8 @@ func TestBothLayers_RetryAttemptCount(t *testing.T) {
 	tp, rec := newRecorderTracerProvider()
 	step := &retryStep{Name: "Flaky", NeedAttempts: 3} // succeeds on 3rd attempt
 	w := newTestWorkflow(
-		otelflow.NewStepInterceptor(otelflow.WithTracerProvider(tp)),
-		otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)),
+		flowotel.NewStepInterceptor(flowotel.WithTracerProvider(tp)),
+		flowotel.NewAttemptInterceptor(flowotel.WithTracerProvider(tp)),
 	)
 	w.Add(flow.Step(step).Retry(noBackoff(5)))
 	require.NoError(t, w.Do(context.Background()))
@@ -105,8 +105,8 @@ func TestProviderResolutionAtFactoryTime(t *testing.T) {
 
 	// Construct interceptors WITHOUT WithTracerProvider — they should snapshot
 	// the current global (tpA) once.
-	stepIC := otelflow.NewStepInterceptor()
-	attemptIC := otelflow.NewAttemptInterceptor()
+	stepIC := flowotel.NewStepInterceptor()
+	attemptIC := flowotel.NewAttemptInterceptor()
 
 	// Now swap the global to provider B.
 	tpB, recB := newRecorderTracerProvider()
