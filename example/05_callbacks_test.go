@@ -18,7 +18,7 @@ import (
 //
 // **Where they fit**
 //
-//	StepInterceptor (workflow-level, see 10_observability_test.go)
+//	StepInterceptor (workflow-level, see 11_observability_test.go)
 //	  └── retry loop (one iteration per attempt)
 //	      └── AttemptInterceptor (workflow-level)
 //	          └── BeforeStep callbacks   ← runs once PER ATTEMPT

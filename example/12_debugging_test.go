@@ -16,7 +16,7 @@ import (
 //     keyed by failed Step. Iterate to print them all, or use `errors.As`.
 //   - Use `Workflow.StateOf(step).GetStatus()` to inspect any Step's
 //     terminal status post-run.
-//   - For per-Step structured logging, prefer an interceptor (10_observability)
+//   - For per-Step structured logging, prefer an interceptor (11_observability)
 //     over `AfterStep` so the same logger applies to every Step.
 //
 // **The two questions you'll typically ask**
