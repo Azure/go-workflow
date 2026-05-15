@@ -26,6 +26,8 @@ func Example() {
 		panic(err)
 	}
 	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
+	// Shutdown errors are intentionally ignored in this example;
+	// production code should log or surface them.
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
 	// 2. Register both interceptors on a Workflow.
@@ -37,7 +39,8 @@ func Example() {
 		otelflow.NewAttemptInterceptor(otelflow.WithTracerProvider(tp)),
 	}
 
-	// 3. Build a tiny 2-step pipeline: A → B.
+	// 3. Build a tiny 2-step pipeline: A → B. flow.Step(b).DependsOn(a)
+	//    registers BOTH steps and the dependency in one call.
 	a := flow.NoOp("A")
 	b := flow.NoOp("B")
 	w.Add(flow.Step(b).DependsOn(a))

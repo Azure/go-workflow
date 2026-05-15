@@ -2,7 +2,6 @@ package otel_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	flow "github.com/Azure/go-workflow"
@@ -14,9 +13,18 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// stepName is the canonical step span name written by NewStepInterceptor.
-// Attempt span names contain " (attempt N)" so they are distinguishable.
-func isAttemptSpan(name string) bool { return strings.Contains(name, "(attempt ") }
+// isAttemptSpan identifies attempt spans by the canonical attribute that
+// NewAttemptInterceptor always writes (workflow.step.attempt). Using the
+// attribute rather than the default span name keeps the discriminator
+// robust against WithAttemptSpanNamer overrides and default-name changes.
+func isAttemptSpan(sp sdktrace.ReadOnlySpan) bool {
+	for _, kv := range sp.Attributes() {
+		if string(kv.Key) == "workflow.step.attempt" {
+			return true
+		}
+	}
+	return false
+}
 
 func TestBothLayers_AttemptIsChildOfStep(t *testing.T) {
 	t.Parallel()
@@ -34,7 +42,7 @@ func TestBothLayers_AttemptIsChildOfStep(t *testing.T) {
 
 	var stepSpan, attemptSpan sdktrace.ReadOnlySpan
 	for _, sp := range spans {
-		if isAttemptSpan(sp.Name()) {
+		if isAttemptSpan(sp) {
 			attemptSpan = sp
 		} else {
 			stepSpan = sp
@@ -67,7 +75,7 @@ func TestBothLayers_RetryAttemptCount(t *testing.T) {
 	var stepSpan sdktrace.ReadOnlySpan
 	var attemptSpans []sdktrace.ReadOnlySpan
 	for _, sp := range spans {
-		if isAttemptSpan(sp.Name()) {
+		if isAttemptSpan(sp) {
 			attemptSpans = append(attemptSpans, sp)
 		} else {
 			stepSpan = sp
@@ -86,6 +94,8 @@ func TestBothLayers_RetryAttemptCount(t *testing.T) {
 
 func TestProviderResolutionAtFactoryTime(t *testing.T) {
 	// CANNOT t.Parallel(): mutates global TracerProvider via otel.SetTracerProvider.
+	// All other tests in this package inject TracerProvider explicitly via
+	// WithTracerProvider, so flipping the global here does not affect them.
 	original := otel.GetTracerProvider()
 	t.Cleanup(func() { otel.SetTracerProvider(original) })
 
