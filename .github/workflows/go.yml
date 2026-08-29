@@ -16,10 +16,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
 
     - name: Set up Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@be3c94b385c4f180051c996d336f57a34c397495 # v3.6.1
       with:
         go-version-file: go.mod
 
@@ -32,7 +32,7 @@ jobs:
 
     - name: Check test coverage and generate badges
       if: github.ref == 'refs/heads/main'
-      uses: vladopajic/go-test-coverage@v2
+      uses: vladopajic/go-test-coverage@f94bcf0d6b9fa5fb8b783830b22648f6c17475e2 # v2.19.0
       with:
         config: ./.github/.testcoverage.yml
         git-branch: badges
@@ -40,6 +40,6 @@ jobs:
     
     - name: Check test coverage
       if: github.ref != 'refs/heads/main'
-      uses: vladopajic/go-test-coverage@v2
+      uses: vladopajic/go-test-coverage@f94bcf0d6b9fa5fb8b783830b22648f6c17475e2 # v2.19.0
       with:
         config: ./.github/.testcoverage.yml
