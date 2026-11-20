@@ -54,23 +54,23 @@ import (
 //     and lets the parent's [WorkflowOption] inherit cleanly via
 //     [WorkflowOptionReceiver]:
 //
-//     type MyComposite struct{ flow.Workflow }
-//     func New() *MyComposite {
-//     c := &MyComposite{}
-//     c.Add(flow.Step(/* inner steps */))
-//     return c
-//     }
+//	type MyComposite struct{ flow.Workflow }
+//	func New() *MyComposite {
+//	    c := &MyComposite{}
+//	    c.Add(flow.Step(/* inner steps */))
+//	    return c
+//	}
 //
 //  2. **Build inside Do() with a sync.Once guard.**
 //     If the sub-workflow needs context only available at run time, build
 //     it lazily on first Do(). Guard the Add() call with sync.Once so
 //     re-execution (retries, multiple Do()s) does not re-Add the same Step:
 //
-//     type MyLazy struct{ flow.Workflow; once sync.Once }
-//     func (m *MyLazy) Do(ctx context.Context) error {
-//     m.once.Do(func() { m.Add(/* inner steps */) })
-//     return m.Workflow.Do(ctx)
-//     }
+//	type MyLazy struct{ flow.Workflow; once sync.Once }
+//	func (m *MyLazy) Do(ctx context.Context) error {
+//	    m.once.Do(func() { m.Add(/* inner steps */) })
+//	    return m.Workflow.Do(ctx)
+//	}
 //
 //  3. **Construct &flow.Workflow{} inline inside Do() (last resort).**
 //     A throwaway sub-workflow is opaque to the parent: it does not
