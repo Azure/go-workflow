@@ -202,6 +202,74 @@ func TestWorkflowTree(t *testing.T) {
 	})
 }
 
+func TestWorkflowRootLookup(t *testing.T) {
+	leaf := NoOp("leaf")
+	inner := new(Workflow).Add(Step(leaf))
+	w := new(Workflow).Add(Name(inner, "named inner"))
+	root := w.Steps()[0]
+
+	assert.Same(t, root, w.RootOf(root))
+	assert.Same(t, w.steps[root], w.StateOf(root))
+	assert.Same(t, root, w.RootOf(inner))
+	assert.Same(t, w.steps[root], w.StateOf(inner))
+	assert.Same(t, root, w.RootOf(leaf))
+	assert.Same(t, inner.steps[leaf], w.StateOf(leaf))
+	assert.Nil(t, w.RootOf(nil))
+	assert.Nil(t, w.StateOf(nil))
+	missing := NoOp("missing")
+	assert.Nil(t, w.RootOf(missing))
+	assert.Nil(t, w.StateOf(missing))
+
+	parent := wrap(root)
+	w.Add(Step(parent))
+	assert.Same(t, parent, w.RootOf(root), "a former root must resolve to its new owner")
+	assert.Same(t, w.steps[parent], w.StateOf(root))
+	assert.Same(t, inner.steps[leaf], w.StateOf(leaf))
+}
+
+func TestWorkflowRootLookupAllocations(t *testing.T) {
+	root := NoOp("root")
+	w := new(Workflow).Add(Step(root))
+	for i := range 32 {
+		w.Add(Name(NoOp(fmt.Sprint(i)), fmt.Sprint(i)))
+	}
+	for name, lookup := range map[string]func(){
+		"RootOf":  func() { w.RootOf(root) },
+		"StateOf": func() { w.StateOf(root) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Zero(t, testing.AllocsPerRun(100, lookup), "registered-root lookup must not allocate a traversal path")
+		})
+	}
+}
+
+func BenchmarkWorkflowRootLookup(b *testing.B) {
+	for _, size := range []int{16, 128, 512} {
+		w := new(Workflow)
+		steps := make([]Steper, size)
+		for i := range steps {
+			steps[i] = NoOp(fmt.Sprint(i))
+		}
+		w.Add(Steps(steps...))
+		for i := 1; i < len(steps); i++ {
+			w.Add(Step(steps[i]).DependsOn(steps[i-1]))
+		}
+		root := steps[size/2]
+		for name, lookup := range map[string]func(){
+			"RootOf":     func() { w.RootOf(root) },
+			"StateOf":    func() { w.StateOf(root) },
+			"UpstreamOf": func() { w.UpstreamOf(root) },
+		} {
+			b.Run(fmt.Sprintf("%s/roots=%d", name, size), func(b *testing.B) {
+				b.ReportAllocs()
+				for range b.N {
+					lookup()
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkStatusChange(b *testing.B) {
 	// statusChange.Wait could be blocked when it's after all Signals fired
 	//
