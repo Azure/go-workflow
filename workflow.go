@@ -315,6 +315,9 @@ func (w *Workflow) RootOf(step Steper) Steper {
 	if w.Empty() {
 		return nil
 	}
+	if _, ok := w.steps[step]; ok {
+		return step
+	}
 	for root := range w.steps {
 		if HasStep(root, step) {
 			return root
@@ -330,6 +333,9 @@ func (w *Workflow) RootOf(step Steper) Steper {
 func (w *Workflow) StateOf(step Steper) *State {
 	if w.Empty() || step == nil {
 		return nil
+	}
+	if state, ok := w.steps[step]; ok {
+		return state
 	}
 	for root := range w.steps {
 		var find *State
